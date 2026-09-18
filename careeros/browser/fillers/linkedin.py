@@ -29,7 +29,7 @@ class LinkedInFiller:
         # Click Easy Apply button
         try:
             easy_apply = page.locator('button:has-text("Easy Apply")').first
-            if not easy_apply.is_visible(timeout=5000):
+            if not easy_apply.is_visible():
                 return False
             easy_apply.click()
             page.wait_for_timeout(1500)

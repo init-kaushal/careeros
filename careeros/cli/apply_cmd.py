@@ -59,7 +59,7 @@ def apply_cmd(
     # Load job
     try:
         job = Job.load(storage, job_id)
-    except FileNotFoundError:
+    except (FileNotFoundError, ValueError):
         rprint("[red]Job " + job_id + " not found.[/red]")
         raise typer.Exit(1)
 
@@ -120,8 +120,12 @@ def apply_cmd(
 
     # Save cover letter
     cl_storage_path = "applications/" + job_id + "/cover_letter.txt"
-    storage.atomic_write(cl_storage_path, cover_letter.encode())
-    cover_letter_path = storage.resolve(cl_storage_path)
+    try:
+        storage.atomic_write(cl_storage_path, cover_letter.encode())
+        cover_letter_path = storage.resolve(cl_storage_path)
+    except ValueError:
+        rprint("[red]Invalid job ID.[/red]")
+        raise typer.Exit(1)
 
     # Detect filler
     filler = next((f for f in FILLERS if f.can_handle(job.url)), None)

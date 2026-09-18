@@ -10,7 +10,7 @@ class GreenhouseFiller:
     platform = "Greenhouse"
 
     def can_handle(self, url: str) -> bool:
-        return "boards.greenhouse.io" in url or "greenhouse.io" in url
+        return "boards.greenhouse.io" in url or ".greenhouse.io" in url
 
     def fill(
         self,
