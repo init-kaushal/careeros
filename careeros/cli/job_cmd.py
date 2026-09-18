@@ -38,7 +38,11 @@ def add_cmd(
     workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
 ) -> None:
     storage = _get_storage(workspace)
-    ctx = open_workspace(storage)
+    try:
+        ctx = open_workspace(storage)
+    except FileNotFoundError:
+        rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
+        raise typer.Exit(1)
     logger = ActivityLogger(ctx.storage)
 
     url = Prompt.ask("URL (optional)", default="") or None
@@ -194,7 +198,11 @@ def update_cmd(
         rprint(f"[red]Job {id!r} not found.[/red]")
         raise typer.Exit(1)
 
-    ctx = open_workspace(storage)
+    try:
+        ctx = open_workspace(storage)
+    except FileNotFoundError:
+        rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
+        raise typer.Exit(1)
     logger = ActivityLogger(ctx.storage)
 
     from_stage = job.stage
@@ -226,7 +234,11 @@ def note_cmd(
         rprint(f"[red]Job {id!r} not found.[/red]")
         raise typer.Exit(1)
 
-    ctx = open_workspace(storage)
+    try:
+        ctx = open_workspace(storage)
+    except FileNotFoundError:
+        rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
+        raise typer.Exit(1)
     logger = ActivityLogger(ctx.storage)
 
     timestamp = _now()
@@ -247,7 +259,11 @@ def search_cmd(
     workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
 ) -> None:
     storage = _get_storage(workspace)
-    ctx = open_workspace(storage)
+    try:
+        ctx = open_workspace(storage)
+    except FileNotFoundError:
+        rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
+        raise typer.Exit(1)
     logger = ActivityLogger(ctx.storage)
 
     try:

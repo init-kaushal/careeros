@@ -50,15 +50,18 @@ def fetch_greenhouse(company: str) -> list[dict]:
     data = _get_json(f"{_GH_BASE}/{company}/jobs?content=true")
     result = []
     for job in data.get("jobs", []):
-        loc = job.get("location") or {}
-        raw = job.get("content") or ""
-        result.append({
-            "source_id": str(job["id"]),
-            "title": job["title"],
-            "url": job["absolute_url"],
-            "location": loc.get("name"),
-            "description": _strip_html(raw)[:_DESC_CAP],
-        })
+        try:
+            loc = job.get("location") or {}
+            raw = job.get("content") or ""
+            result.append({
+                "source_id": str(job["id"]),
+                "title": job["title"],
+                "url": job["absolute_url"],
+                "location": loc.get("name"),
+                "description": _strip_html(raw)[:_DESC_CAP],
+            })
+        except KeyError:
+            continue  # skip malformed postings, don't abort the whole fetch
     return result
 
 
@@ -66,13 +69,16 @@ def fetch_lever(company: str) -> list[dict]:
     data = _get_json(f"{_LEVER_BASE}/{company}?mode=json")
     result = []
     for posting in data:
-        cats = posting.get("categories") or {}
-        desc = posting.get("descriptionPlain") or ""
-        result.append({
-            "source_id": posting["id"],
-            "title": posting["text"],
-            "url": posting["hostedUrl"],
-            "location": cats.get("location"),
-            "description": desc[:_DESC_CAP],
-        })
+        try:
+            cats = posting.get("categories") or {}
+            desc = posting.get("descriptionPlain") or ""
+            result.append({
+                "source_id": posting["id"],
+                "title": posting["text"],
+                "url": posting["hostedUrl"],
+                "location": cats.get("location"),
+                "description": desc[:_DESC_CAP],
+            })
+        except KeyError:
+            continue  # skip malformed postings, don't abort the whole fetch
     return result
