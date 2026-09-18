@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import platform
 from contextlib import contextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generator
 
 if TYPE_CHECKING:
     from playwright.sync_api import BrowserContext, Page
@@ -12,14 +12,17 @@ if TYPE_CHECKING:
 def get_chrome_profile_path() -> str:
     system = platform.system()
     if system == "Darwin":
+        # os.path functions here resolve system paths, not workspace I/O — exempt from StorageProvider constraint
         return os.path.expanduser("~/Library/Application Support/Google/Chrome")
     if system == "Linux":
+        # os.path functions here resolve system paths, not workspace I/O — exempt from StorageProvider constraint
         return os.path.expanduser("~/.config/google-chrome")
+    # os.path functions here resolve system paths, not workspace I/O — exempt from StorageProvider constraint
     return os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
 
 
 @contextmanager
-def launch_browser(headless: bool = False):
+def launch_browser(headless: bool = False) -> Generator[tuple[BrowserContext, Page], None, None]:
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
