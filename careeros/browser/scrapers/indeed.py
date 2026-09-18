@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from playwright.sync_api import Page
 
-_BEACON = re.compile(r'<div[^>]+class="[^"]*\bjob_seen_beacon\b[^"]*"[^>]*>(.*?)</div>\s*</div>', re.DOTALL)
 _TITLE = re.compile(r'class="jobTitle"[^>]*>.*?<a[^>]+href="([^"]+)"[^>]*>([^<]+)', re.DOTALL)
 _COMPANY = re.compile(r'class="companyName"[^>]*>([^<]+)')
 _LOCATION = re.compile(r'class="companyLocation"[^>]*>([^<]+)')
@@ -27,7 +26,6 @@ class IndeedScraper:
                 continue
             href = title_m.group(1)
             url = href if href.startswith("http") else _INDEED_BASE + href
-            url = url.split("?")[0]
             title = title_m.group(2).strip()
             company_m = _COMPANY.search(card)
             location_m = _LOCATION.search(card)
@@ -61,7 +59,7 @@ class IndeedScraper:
                         "title": title,
                         "company": company,
                         "location": location,
-                        "url": url_full.split("?")[0],
+                        "url": url_full,
                     })
                 except Exception:
                     continue

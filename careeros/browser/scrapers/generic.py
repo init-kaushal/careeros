@@ -29,6 +29,9 @@ class GenericScraper:
         return results
 
     def search(self, page: Page, query: str, limit: int) -> list[dict]:
-        page.goto(query, timeout=30000)
-        html = page.content()
+        try:
+            page.goto(query, timeout=30000)
+            html = page.content()
+        except Exception:
+            return []
         return self.parse_listings(html)[:limit]

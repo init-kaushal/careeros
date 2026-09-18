@@ -44,7 +44,7 @@ class TestIndeedScraper:
         assert results[0]["title"] == "Senior SRE"
         assert results[0]["company"] == "Acme Corp"
         assert results[0]["location"] == "San Francisco, CA"
-        assert "indeed.com" in results[0]["url"] or results[0]["url"].startswith("https://")
+        assert "indeed.com" in results[0]["url"] and "jk=" in results[0]["url"]
 
     def test_parse_listings_empty_html_returns_empty_list(self):
         from careeros.browser.scrapers.indeed import IndeedScraper
