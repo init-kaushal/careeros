@@ -178,6 +178,24 @@ class TestBrowseEndToEnd:
         mock_linkedin.search.assert_not_called()
 
 
+class TestBrowseDuplicateIndex:
+    def test_duplicate_index_saves_once(self, tmp_path):
+        ws = _setup_workspace(tmp_path)
+        mock_scraper = MagicMock()
+        mock_scraper.search.return_value = _mock_postings()
+
+        with patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
+             patch("careeros.cli.browse_cmd.SCRAPERS", {"linkedin": mock_scraper}), \
+             patch("careeros.cli.browse_cmd.fetch_jd_text", return_value="jd"), \
+             patch("careeros.cli.browse_cmd.score_job", return_value=_mock_score()), \
+             patch("careeros.core.models.Job.save") as mock_save:
+            result = runner.invoke(browse_app, ["--board", "linkedin", "--workspace", ws], input="1 1\n")
+
+        assert result.exit_code == 0
+        assert mock_save.call_count == 1
+        assert "Saved 1 job" in result.output
+
+
 class TestBrowseErrorHandling:
     def test_playwright_not_installed_prints_install_instructions(self, tmp_path):
         ws = _setup_workspace(tmp_path)

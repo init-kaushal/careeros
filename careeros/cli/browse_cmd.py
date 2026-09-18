@@ -126,12 +126,14 @@ def browse_cmd(
     logger = ActivityLogger(ctx.storage)
     now = _now()
     saved = 0
+    seen_indices: set[int] = set()
     for part in picks_str.split():
         if not part.isdigit():
             continue
         idx = int(part) - 1
-        if not (0 <= idx < len(filtered)):
+        if not (0 <= idx < len(filtered)) or idx in seen_indices:
             continue
+        seen_indices.add(idx)
         p = filtered[idx]
         job_id = make_job_id(p["company"], p["title"])
         job = Job(
