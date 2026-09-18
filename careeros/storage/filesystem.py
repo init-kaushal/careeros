@@ -60,3 +60,7 @@ class LocalFilesystemStorage:
         full.parent.mkdir(parents=True, exist_ok=True)
         with open(full, "ab") as f:
             f.write(data)
+
+    def resolve(self, path: str) -> str:
+        """Return the absolute filesystem path for a workspace-relative path."""
+        return str(self._resolve(path))

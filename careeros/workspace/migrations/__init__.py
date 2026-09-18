@@ -24,3 +24,4 @@ def run_pending(storage: StorageProvider, applied: list[str]) -> list[str]:
 
 # Must be last — imports trigger @register decorators; register must be defined first
 from careeros.workspace.migrations import m001_initial  # noqa: F401, E402
+from careeros.workspace.migrations import m002_applications  # noqa: F401, E402

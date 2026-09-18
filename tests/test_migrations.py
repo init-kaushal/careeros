@@ -13,8 +13,8 @@ def test_run_pending_runs_unapplied(tmp_path):
 def test_run_pending_skips_applied(tmp_path):
     storage = LocalFilesystemStorage(str(tmp_path))
     run_pending(storage, applied=[])
-    # run again — should apply nothing new
-    newly = run_pending(storage, applied=["001_initial"])
+    # run again — should apply nothing new when all are marked as applied
+    newly = run_pending(storage, applied=["001_initial", "002_applications"])
     assert newly == []
 
 
@@ -57,3 +57,9 @@ def test_m001_idempotent(tmp_path):
     run_pending(storage, applied=[])
     run_pending(storage, applied=[])  # running m001 twice must not error
     assert storage.exists("profile/.keep")
+
+
+def test_m002_creates_applications_dir(tmp_path):
+    storage = LocalFilesystemStorage(str(tmp_path))
+    run_pending(storage, applied=[])
+    assert storage.exists("applications/.keep")

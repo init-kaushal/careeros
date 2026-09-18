@@ -70,3 +70,16 @@ def test_atomic_write_replaces_existing(tmp_path):
     storage.write("data.json", b"old")
     storage.atomic_write("data.json", b"new")
     assert storage.read("data.json") == b"new"
+
+
+def test_resolve_returns_absolute_path(tmp_path):
+    storage = LocalFilesystemStorage(str(tmp_path))
+    storage.write("resumes/resume.pdf", b"data")
+    result = storage.resolve("resumes/resume.pdf")
+    assert result == str(tmp_path / "resumes" / "resume.pdf")
+
+
+def test_resolve_rejects_path_traversal(tmp_path):
+    storage = LocalFilesystemStorage(str(tmp_path))
+    with pytest.raises(ValueError):
+        storage.resolve("../outside.txt")
