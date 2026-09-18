@@ -78,6 +78,15 @@ class TestScoreJob:
         prompt = mock_llm.call_args[1]["messages"][0]["content"]
         assert "Senior SRE" in prompt
 
+    def test_score_coerced_to_int_when_string(self):
+        from careeros.skills.job_score import score_job
+        mock_resp = MagicMock()
+        mock_resp.choices[0].message.content = '{"score": "85", "reasoning": "ok", "strengths": [], "gaps": []}'
+        with patch("litellm.completion", return_value=mock_resp):
+            result = score_job("some jd", _make_profile(), _make_skills())
+        assert result["score"] == 85
+        assert isinstance(result["score"], int)
+
     def test_jd_text_capped_at_4000_chars(self):
         from careeros.skills.job_score import score_job
         long_jd = "x" * 5000

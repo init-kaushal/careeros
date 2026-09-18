@@ -64,6 +64,8 @@ def score_job(
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
-        return _parse_json(resp.choices[0].message.content)
+        result = _parse_json(resp.choices[0].message.content)
+        result["score"] = int(result["score"])
+        return result
     except Exception:
         return dict(_FAILURE)
