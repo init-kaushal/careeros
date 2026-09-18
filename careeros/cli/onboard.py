@@ -13,7 +13,7 @@ import json
 
 
 def onboard_cmd(
-    workspace: str = typer.Option(None, "--workspace", "-w", help="Path for new workspace"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Path for new workspace"),
 ) -> None:
     rprint("[bold]Welcome to CareerOS[/bold]")
     rprint("Let's set up your workspace.\n")
