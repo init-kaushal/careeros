@@ -89,6 +89,10 @@ class TestApplyCmdHappyPath:
         # Cover letter saved
         save_calls = [str(c) for c in storage.atomic_write.call_args_list]
         assert any("cover_letter" in c for c in save_calls)
+        # Job stage saved as "applied"
+        job_saves = [c for c in storage.atomic_write.call_args_list if c.args[0] == "jobs/acme-sre-abc1.json"]
+        assert job_saves, "job.save() was not called"
+        assert b'"applied"' in job_saves[0].args[1]
 
     def test_successful_apply_logs_job_applied_event(self, tmp_path):
         storage = _mock_storage(tmp_path)
@@ -236,6 +240,8 @@ class TestApplyCmdFailurePaths:
             result = runner.invoke(apply_app, ["acme-sre-abc1"])
         assert result.exit_code == 1
         assert "incomplete" in result.output.lower()
+        # Stage must not have been saved as "applied"
+        assert not any(c.args[0] == "jobs/acme-sre-abc1.json" for c in storage.atomic_write.call_args_list)
 
     def test_playwright_not_installed_exits_1(self, tmp_path):
         storage = _mock_storage(tmp_path)
