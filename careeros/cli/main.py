@@ -1,5 +1,4 @@
 import typer
-from typing import Optional
 
 app = typer.Typer(name="careeros", help="CareerOS — your career, your data.")
 
@@ -8,7 +7,6 @@ def main(
     version: bool = typer.Option(
         False, "--version", "-v", help="Show version and exit."
     ),
-    ctx: typer.Context = typer.Context,
 ):
     """CareerOS — your career, your data."""
     if version:
