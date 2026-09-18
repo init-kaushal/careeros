@@ -2,6 +2,12 @@ import pytest
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace, WorkspaceContext
 
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        if item.get_closest_marker("integration"):
+            item.add_marker(pytest.mark.skip(reason="requires live browser — run with pytest -m integration"))
+
 SAMPLE_RESUME = """
 Alice Johnson
 Senior Site Reliability Engineer | San Francisco, CA
