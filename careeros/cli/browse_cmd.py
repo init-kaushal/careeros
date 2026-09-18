@@ -46,7 +46,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-@browse_app.command("browse")
+@browse_app.command()
 def browse_cmd(
     board: str = typer.Option(..., "--board", help="linkedin | indeed | wellfound | url"),
     url: str = typer.Option(None, "--url", help="Target URL (required when --board url)"),
