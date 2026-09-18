@@ -14,15 +14,21 @@ cd careeros
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 
-# Set your Anthropic API key
-export ANTHROPIC_API_KEY=sk-...
+# Set your API key for whichever provider you want to use:
+export ANTHROPIC_API_KEY=sk-ant-...   # Claude (default)
+export OPENAI_API_KEY=sk-...          # OpenAI
+# Ollama needs no key — just run `ollama serve` locally
+
+# Optional: choose a model (default is claude-haiku-4-5-20251001)
+export CAREEROS_MODEL=gpt-4o-mini       # OpenAI
+export CAREEROS_MODEL=ollama/llama3.2   # Ollama (free, local)
 
 # Run the onboarding wizard
 careeros onboard
 ```
 
-The wizard asks where to create your workspace, then extracts your profile from a resume or LinkedIn export.
-Your data is written to the workspace directory you chose — nothing leaves your machine.
+The wizard asks where to create your workspace, then extracts your profile from your resume using
+whichever model you configured. Your data is written locally — nothing leaves your machine after onboarding.
 
 ## What it does
 
@@ -77,7 +83,9 @@ your career data without needing CareerOS installed.
 ## Requirements
 
 - Python 3.11+
-- Anthropic API key (for `careeros onboard` profile extraction — everything else works offline)
+- An API key for your preferred LLM provider — used only during `careeros onboard` for profile
+  extraction. Everything else runs offline. Supported providers (via [LiteLLM](https://docs.litellm.ai/)):
+  Anthropic, OpenAI, Ollama (free, local), Groq, Mistral, Google, and 100+ more.
 
 ## Development
 

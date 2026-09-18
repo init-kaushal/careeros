@@ -6,8 +6,12 @@ your workspace lives wherever you put it. Framework updates (`git pull`) never t
 ## Prerequisites
 
 - Python 3.11 or later (`python3 --version`)
-- An [Anthropic API key](https://console.anthropic.com/) — used only during onboarding to extract
-  your profile from a resume. Everything else works offline.
+- An API key for your preferred LLM provider — used only during onboarding for profile extraction.
+  Everything else works offline. Supported via [LiteLLM](https://docs.litellm.ai/):
+  - **Anthropic Claude** (default): `ANTHROPIC_API_KEY`
+  - **OpenAI**: `OPENAI_API_KEY` + `CAREEROS_MODEL=gpt-4o-mini`
+  - **Ollama** (free, local): no key — just run `ollama serve` + `CAREEROS_MODEL=ollama/llama3.2`
+  - **Groq, Mistral, Google, and 100+ more**: see [LiteLLM providers](https://docs.litellm.ai/docs/providers)
 
 ## 1. Install
 
@@ -25,13 +29,22 @@ Verify the install:
 careeros --help
 ```
 
-## 2. Set your API key
+## 2. Set your API key and model
 
 ```bash
+# Anthropic Claude (default — no CAREEROS_MODEL needed)
 export ANTHROPIC_API_KEY=sk-ant-...
+
+# OpenAI
+export OPENAI_API_KEY=sk-...
+export CAREEROS_MODEL=gpt-4o-mini
+
+# Ollama (free, runs locally — no key needed)
+# Start Ollama first: `ollama serve` and `ollama pull llama3.2`
+export CAREEROS_MODEL=ollama/llama3.2
 ```
 
-Add this to your shell profile (`~/.zshrc`, `~/.bashrc`) so you don't need to set it each session.
+Add the relevant lines to your shell profile (`~/.zshrc`, `~/.bashrc`) so you don't need to set them each session.
 
 ## 3. Run the onboarding wizard
 

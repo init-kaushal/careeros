@@ -446,8 +446,10 @@
 <span class="c1">python -m venv</span> .venv &amp;&amp; <span class="c1">source</span> .venv/bin/activate
 <span class="c1">pip install</span> -e .
 
-<span class="c2"># set your API key</span>
-<span class="c1">export</span> ANTHROPIC_API_KEY=sk-ant-...
+<span class="c2"># set your API key (Anthropic, OpenAI, Groq, Ollama, ...)</span>
+<span class="c1">export</span> ANTHROPIC_API_KEY=sk-ant-...     <span class="c2"># Claude (default)</span>
+<span class="c2"># export OPENAI_API_KEY=sk-...           # or OpenAI</span>
+<span class="c2"># export CAREEROS_MODEL=ollama/llama3.2  # or Ollama (free, local)</span>
 
 <span class="c2"># run the onboarding wizard</span>
 <span class="c1">careeros onboard</span>
