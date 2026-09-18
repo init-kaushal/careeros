@@ -11,6 +11,7 @@ from careeros.core.activity import ActivityLogger
 from careeros.core.job_id import make_job_id
 from careeros.core.models import Job, JOB_STAGES
 from careeros.skills.job_extract import extract_job_fields
+from careeros.sources.ats import ATSFetchError, fetch_greenhouse, fetch_lever
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import open_workspace
 
@@ -174,3 +175,143 @@ def show_cmd(
             lines.append(f"  • {note}")
 
     rprint(Panel("\n".join(lines), title=f"[bold]{id}[/bold]"))
+
+
+@job_app.command("update")
+def update_cmd(
+    id: str = typer.Argument(..., help="Job ID"),
+    stage: str = typer.Option(..., "--stage", help="New stage"),
+    workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
+) -> None:
+    if stage not in JOB_STAGES:
+        rprint(f"[red]Invalid stage '{stage}'. Valid: {' '.join(JOB_STAGES)}[/red]")
+        raise typer.Exit(1)
+
+    storage = _get_storage(workspace)
+    try:
+        job = Job.load(storage, id)
+    except FileNotFoundError:
+        rprint(f"[red]Job {id!r} not found.[/red]")
+        raise typer.Exit(1)
+
+    ctx = open_workspace(storage)
+    logger = ActivityLogger(ctx.storage)
+
+    from_stage = job.stage
+    now = _now()
+    updates: dict = {"stage": stage, "updated_at": now}
+    if stage == "applied" and job.applied_at is None:
+        updates["applied_at"] = now
+
+    job = job.model_copy(update=updates)
+    job.save(storage)
+    logger.log(logger.new_event(
+        "job_stage_changed", "update",
+        f"Job stage changed: {id} {from_stage} → {stage}",
+        entity_type="job", entity_id=id,
+    ))
+    rprint(f"[bold]{id}[/bold]  {from_stage} → [green]{stage}[/green]")
+
+
+@job_app.command("note")
+def note_cmd(
+    id: str = typer.Argument(..., help="Job ID"),
+    text: str = typer.Argument(..., help="Note text"),
+    workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
+) -> None:
+    storage = _get_storage(workspace)
+    try:
+        job = Job.load(storage, id)
+    except FileNotFoundError:
+        rprint(f"[red]Job {id!r} not found.[/red]")
+        raise typer.Exit(1)
+
+    ctx = open_workspace(storage)
+    logger = ActivityLogger(ctx.storage)
+
+    timestamp = _now()
+    note_entry = f"{timestamp} — {text}"
+    job = job.model_copy(update={"notes": job.notes + [note_entry], "updated_at": timestamp})
+    job.save(storage)
+    logger.log(logger.new_event(
+        "job_note_added", "note", f"Note added to {id}",
+        entity_type="job", entity_id=id,
+    ))
+    rprint(f"Note added to [bold]{id}[/bold]")
+
+
+@job_app.command("search")
+def search_cmd(
+    source: str = typer.Option(..., "--source", help="greenhouse | lever"),
+    company: str = typer.Option(..., "--company", help="Company slug (e.g. stripe, acme)"),
+    workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
+) -> None:
+    storage = _get_storage(workspace)
+    ctx = open_workspace(storage)
+    logger = ActivityLogger(ctx.storage)
+
+    try:
+        if source == "greenhouse":
+            postings = fetch_greenhouse(company)
+        elif source == "lever":
+            postings = fetch_lever(company)
+        else:
+            rprint(f"[red]Unknown source '{source}'. Valid: greenhouse lever[/red]")
+            raise typer.Exit(1)
+    except ATSFetchError as e:
+        if "not_found" in str(e):
+            rprint(f"[red]Company '{company}' not found on {source}.[/red]")
+        else:
+            rprint(f"[red]Could not reach {source} API. Check your connection.[/red]")
+        raise typer.Exit(1)
+
+    if not postings:
+        rprint(f"No open roles found for '{company}' on {source}.")
+        return
+
+    table = Table(show_header=True)
+    table.add_column("#", style="bold")
+    table.add_column("Title")
+    table.add_column("Location")
+    table.add_column("URL")
+    for i, p in enumerate(postings, 1):
+        table.add_row(str(i), p["title"], p.get("location") or "—", p["url"])
+    console.print(table)
+
+    picks_str = Prompt.ask("Pick jobs to save (e.g. 1 3 5, or q to quit)")
+    if picks_str.strip().lower() == "q":
+        return
+
+    indices = []
+    for part in picks_str.split():
+        if part.isdigit():
+            idx = int(part) - 1
+            if 0 <= idx < len(postings):
+                indices.append(idx)
+
+    saved = 0
+    now = _now()
+    for idx in indices:
+        p = postings[idx]
+        job_id = make_job_id(company, p["title"])
+        job = Job(
+            id=job_id,
+            source=source,
+            source_id=p["source_id"],
+            url=p["url"],
+            company=company,
+            title=p["title"],
+            location=p.get("location"),
+            description=p.get("description"),
+            stage="saved",
+            created_at=now,
+            updated_at=now,
+        )
+        job.save(storage)
+        logger.log(logger.new_event(
+            "job_added", "search", f"Job saved from {source}: {company} — {p['title']}",
+            entity_type="job", entity_id=job_id,
+        ))
+        saved += 1
+
+    rprint(f"[green]Saved {saved} job(s)[/green]")

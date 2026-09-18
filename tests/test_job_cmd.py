@@ -125,3 +125,130 @@ def test_job_show_unknown_id(ws):
     result = runner.invoke(app, ["job", "show", "nonexistent-id", "--workspace", str(ws)])
     assert result.exit_code == 1
     assert "not found" in result.output.lower()
+
+
+def test_job_update_changes_stage(ws_with_job):
+    ws, job = ws_with_job
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["job", "update", job.id, "--stage", "applied", "--workspace", str(ws)]
+    )
+    assert result.exit_code == 0, result.output
+    storage = LocalFilesystemStorage(str(ws))
+    updated = Job.load(storage, job.id)
+    assert updated.stage == "applied"
+
+
+def test_job_update_sets_applied_at(ws_with_job):
+    ws, job = ws_with_job
+    runner = CliRunner()
+    runner.invoke(app, ["job", "update", job.id, "--stage", "applied", "--workspace", str(ws)])
+    storage = LocalFilesystemStorage(str(ws))
+    updated = Job.load(storage, job.id)
+    assert updated.applied_at is not None
+
+
+def test_job_update_logs_activity(ws_with_job):
+    ws, job = ws_with_job
+    runner = CliRunner()
+    runner.invoke(app, ["job", "update", job.id, "--stage", "applied", "--workspace", str(ws)])
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    log = (ws / "activity" / f"{today}.jsonl").read_text()
+    event_types = [json.loads(l)["event_type"] for l in log.strip().splitlines() if l]
+    assert "job_stage_changed" in event_types
+
+
+def test_job_update_invalid_stage(ws_with_job):
+    ws, job = ws_with_job
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["job", "update", job.id, "--stage", "badstage", "--workspace", str(ws)]
+    )
+    assert result.exit_code == 1
+    assert "Invalid stage" in result.output
+
+
+def test_job_update_unknown_id(ws):
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["job", "update", "nonexistent", "--stage", "applied", "--workspace", str(ws)]
+    )
+    assert result.exit_code == 1
+    assert "not found" in result.output.lower()
+
+
+def test_job_note_appends(ws_with_job):
+    ws, job = ws_with_job
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["job", "note", job.id, "Great team culture", "--workspace", str(ws)]
+    )
+    assert result.exit_code == 0, result.output
+    storage = LocalFilesystemStorage(str(ws))
+    updated = Job.load(storage, job.id)
+    assert any("Great team culture" in n for n in updated.notes)
+
+
+def test_job_note_unknown_id(ws):
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["job", "note", "nonexistent", "some note", "--workspace", str(ws)]
+    )
+    assert result.exit_code == 1
+    assert "not found" in result.output.lower()
+
+
+def test_job_search_saves_jobs(ws):
+    from careeros.sources.ats import ATSFetchError
+
+    postings = [
+        {
+            "source_id": "123",
+            "title": "Senior SRE",
+            "url": "https://boards.greenhouse.io/acme/jobs/123",
+            "location": "SF",
+            "description": "Great role.",
+        }
+    ]
+    with patch("careeros.cli.job_cmd.fetch_greenhouse", return_value=postings):
+        runner = CliRunner()
+        # user picks job 1
+        result = runner.invoke(
+            app,
+            ["job", "search", "--source", "greenhouse", "--company", "acme", "--workspace", str(ws)],
+            input="1\n",
+        )
+    assert result.exit_code == 0, result.output
+    storage = LocalFilesystemStorage(str(ws))
+    jobs = Job.list_all(storage)
+    assert len(jobs) == 1
+    assert jobs[0].title == "Senior SRE"
+    assert jobs[0].source == "greenhouse"
+
+
+def test_job_search_ats_error(ws):
+    from careeros.sources.ats import ATSFetchError
+
+    with patch("careeros.cli.job_cmd.fetch_greenhouse", side_effect=ATSFetchError("not_found")):
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["job", "search", "--source", "greenhouse", "--company", "nobody", "--workspace", str(ws)],
+        )
+    assert result.exit_code == 1
+
+
+def test_job_search_quit(ws):
+    postings = [
+        {"source_id": "1", "title": "SRE", "url": "https://example.com", "location": None, "description": ""}
+    ]
+    with patch("careeros.cli.job_cmd.fetch_greenhouse", return_value=postings):
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["job", "search", "--source", "greenhouse", "--company", "acme", "--workspace", str(ws)],
+            input="q\n",
+        )
+    assert result.exit_code == 0
+    storage = LocalFilesystemStorage(str(ws))
+    assert Job.list_all(storage) == []
