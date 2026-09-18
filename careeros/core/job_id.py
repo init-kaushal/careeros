@@ -1,5 +1,5 @@
-import os
 import re
+import secrets
 
 
 def make_job_id(company: str, title: str) -> str:
@@ -10,7 +10,7 @@ def make_job_id(company: str, title: str) -> str:
 
     company_slug = slugify(company)[:12]
     title_slug = slugify(title)[:16]
-    suffix = os.urandom(2).hex()
+    suffix = secrets.token_hex(2)
     parts = [p for p in [company_slug, title_slug] if p]
     base = "-".join(parts)[:28].rstrip("-")
     return f"{base}-{suffix}"

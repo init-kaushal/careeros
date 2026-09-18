@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from pydantic import BaseModel
 from careeros.storage.interface import StorageProvider
 
