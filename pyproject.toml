@@ -10,6 +10,7 @@ dependencies = [
     "typer[all]>=0.12",
     "litellm>=1.40",
     "pydantic>=2.0",
+    "playwright>=1.40",
 ]
 
 [project.optional-dependencies]
@@ -26,3 +27,4 @@ packages = ["careeros"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["integration: requires live browser and network (skipped by default)"]
