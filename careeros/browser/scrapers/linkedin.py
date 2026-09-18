@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import urllib.parse
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -37,13 +38,13 @@ class LinkedInScraper:
         return results
 
     def search(self, page: Page, query: str, limit: int) -> list[dict]:
-        import urllib.parse
         url = _BASE_URL + urllib.parse.quote(query)
         page.goto(url, timeout=30000)
         page.wait_for_selector(".job-card-container", timeout=15000)
         results = []
         while len(results) < limit:
             cards = page.locator(".job-card-container").all()
+            prev_count = len(results)
             for card in cards[len(results):]:
                 try:
                     link = card.locator("a.job-card-container__link").first
@@ -64,6 +65,18 @@ class LinkedInScraper:
                     continue
                 if len(results) >= limit:
                     break
-            else:
+            # scroll the results list panel down to trigger lazy-load
+            try:
+                page.evaluate(
+                    """
+                    const el = document.querySelector('.jobs-search-results-list');
+                    if (el) el.scrollTop = el.scrollHeight;
+                    """
+                )
+                page.wait_for_timeout(1500)
+            except Exception:
+                pass
+            # if no new cards were added after scrolling, there are no more results
+            if len(results) == prev_count:
                 break
         return results[:limit]
