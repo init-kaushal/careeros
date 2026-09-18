@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from pydantic import BaseModel
 from careeros.storage.interface import StorageProvider
 
@@ -85,3 +86,48 @@ class Goals(BaseModel):
         if not storage.exists("profile/goals.json"):
             return cls()
         return cls.model_validate_json(storage.read("profile/goals.json").decode())
+
+
+JOB_STAGES = ("saved", "applied", "interviewing", "offer", "closed")
+
+_JOB_DESC_CAP = 4000
+
+
+class Job(BaseModel):
+    id: str
+    source: str
+    source_id: str | None = None
+    url: str | None = None
+    company: str
+    title: str
+    location: str | None = None
+    remote: bool | None = None
+    salary_min: int | None = None
+    salary_max: int | None = None
+    currency: str = "USD"
+    description: str | None = None
+    requirements: list[str] = []
+    stage: str = "saved"
+    applied_at: str | None = None
+    notes: list[str] = []
+    created_at: str
+    updated_at: str
+
+    def save(self, storage: StorageProvider) -> None:
+        data = self
+        if data.description and len(data.description) > _JOB_DESC_CAP:
+            data = data.model_copy(update={"description": data.description[:_JOB_DESC_CAP]})
+        storage.atomic_write(f"jobs/{self.id}.json", data.model_dump_json(indent=2).encode())
+
+    @classmethod
+    def load(cls, storage: StorageProvider, job_id: str) -> "Job":
+        path = f"jobs/{job_id}.json"
+        if not storage.exists(path):
+            raise FileNotFoundError(f"Job {job_id!r} not found")
+        return cls.model_validate_json(storage.read(path).decode())
+
+    @classmethod
+    def list_all(cls, storage: StorageProvider) -> list["Job"]:
+        paths = [p for p in storage.list("jobs") if p.endswith(".json")]
+        jobs = [cls.model_validate_json(storage.read(p).decode()) for p in paths]
+        return sorted(jobs, key=lambda j: j.created_at, reverse=True)
