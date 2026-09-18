@@ -8,7 +8,12 @@ class LocalFilesystemStorage:
         self._root = Path(root)
 
     def _resolve(self, path: str) -> Path:
-        return self._root / path
+        resolved = (self._root / path).resolve()
+        try:
+            resolved.relative_to(self._root.resolve())
+        except ValueError:
+            raise ValueError(f"Path '{path}' escapes workspace root")
+        return resolved
 
     def read(self, path: str) -> bytes:
         return self._resolve(path).read_bytes()

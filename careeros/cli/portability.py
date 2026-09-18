@@ -55,14 +55,22 @@ def import_workspace_cmd(
 
     dest_path.mkdir(parents=True)
     with zipfile.ZipFile(source_path, "r") as zf:
+        for name in zf.namelist():
+            if name.startswith('/') or '..' in name.split('/'):
+                rprint(f"[red]Unsafe zip entry: {name}[/red]")
+                raise typer.Exit(1)
         zf.extractall(dest_path)
 
-    storage = LocalFilesystemStorage(str(dest_path))
     try:
+        storage = LocalFilesystemStorage(str(dest_path))
         open_workspace(storage)
     except Exception as e:
+        import shutil
+        shutil.rmtree(dest_path, ignore_errors=True)
         rprint(f"[red]Restored workspace failed validation: {e}[/red]")
         raise typer.Exit(1)
+
+    GlobalConfig(workspace_path=str(dest_path)).save()
 
     rprint(f"[green]Workspace imported to {dest_path}[/green]")
     rprint("Run [bold]careeros workspace validate[/bold] to confirm.")

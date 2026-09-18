@@ -1,3 +1,4 @@
+import dataclasses
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 import json
@@ -26,7 +27,8 @@ class Manifest:
     @classmethod
     def from_json(cls, data: str) -> "Manifest":
         obj = json.loads(data)
-        return cls(**obj)
+        known = {f.name for f in dataclasses.fields(cls)}
+        return cls(**{k: v for k, v in obj.items() if k in known})
 
     @classmethod
     def create_new(cls, storage_type: str = "local") -> "Manifest":
@@ -40,8 +42,14 @@ class Manifest:
 
 
 def check_schema_compatibility(manifest: Manifest) -> None:
-    if int(manifest.schema_version) > int(SUPPORTED_SCHEMA_VERSION):
+    try:
+        manifest_ver = int(manifest.schema_version)
+        supported_ver = int(SUPPORTED_SCHEMA_VERSION)
+    except ValueError:
         raise UnsupportedSchemaVersion(
-            f"Workspace schema version {manifest.schema_version} is newer than "
-            f"this CareerOS supports ({SUPPORTED_SCHEMA_VERSION}). Upgrade CareerOS."
+            f"schema_version '{manifest.schema_version}' is not a valid integer"
+        )
+    if manifest_ver > supported_ver:
+        raise UnsupportedSchemaVersion(
+            f"Workspace schema version {manifest.schema_version} is newer than supported {SUPPORTED_SCHEMA_VERSION}"
         )

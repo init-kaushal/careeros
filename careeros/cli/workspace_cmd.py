@@ -23,7 +23,16 @@ def _get_storage(workspace_path: str | None) -> LocalFilesystemStorage:
 @workspace_app.command("status")
 def status_cmd(workspace: str = typer.Option(None, "--workspace", help="Workspace path")) -> None:
     storage = _get_storage(workspace)
-    ctx = open_workspace(storage)
+    try:
+        ctx = open_workspace(storage)
+    except FileNotFoundError:
+        config = GlobalConfig.load()
+        ws_path = workspace or config.workspace_path or "(unknown)"
+        rprint(f"[red]No workspace found at {ws_path}. Run 'careeros onboard' first.[/red]")
+        raise typer.Exit(1)
+    except UnsupportedSchemaVersion as e:
+        rprint(f"[red]Schema incompatibility: {e}[/red]")
+        raise typer.Exit(1)
     profile = Profile.load_or_empty(storage)
     skills = Skills.load_or_empty(storage)
 
@@ -41,7 +50,8 @@ def status_cmd(workspace: str = typer.Option(None, "--workspace", help="Workspac
         lines = [l for l in last_content.strip().split("\n") if l]
         if lines:
             last = json.loads(lines[-1])
-            rprint(f"  Last:    {last['timestamp'][:19]} — {last['summary']}")
+            last_ts = last.get('timestamp', '')[:19]
+            rprint(f"  Last:    {last_ts} — {last.get('summary', '')}")
     else:
         rprint("  Last:    (no activity yet)")
 

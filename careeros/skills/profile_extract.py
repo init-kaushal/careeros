@@ -2,6 +2,14 @@ import json
 import anthropic
 from careeros.core.models import Profile, Skill, Skills
 
+
+def _parse_json(text: str) -> dict:
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    return json.loads(text)
+
 EXTRACTION_MODEL = "claude-haiku-4-5-20251001"
 
 # Instruction-only templates — resume text is concatenated, never interpolated,
@@ -46,15 +54,15 @@ def extract_basic_profile(
         max_tokens=512,
         messages=[{"role": "user", "content": _PROFILE_INSTRUCTIONS + resume_text}],
     )
-    profile_data = json.loads(profile_resp.content[0].text)
-    profile = Profile(**{k: v for k, v in profile_data.items() if v is not None})
+    profile_data = _parse_json(profile_resp.content[0].text)
+    profile = Profile.model_validate(profile_data)
 
     skills_resp = client.messages.create(
         model=EXTRACTION_MODEL,
         max_tokens=1024,
         messages=[{"role": "user", "content": _SKILLS_INSTRUCTIONS + resume_text}],
     )
-    skills_data = json.loads(skills_resp.content[0].text)
+    skills_data = _parse_json(skills_resp.content[0].text)
     skills = Skills(skills=[Skill(**s) for s in skills_data.get("skills", [])])
 
     return profile, skills

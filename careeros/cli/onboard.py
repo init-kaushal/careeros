@@ -26,7 +26,12 @@ def onboard_cmd(
     ws_path = str(Path(ws_path).expanduser())
 
     storage = LocalFilesystemStorage(ws_path)
-    ctx = init_workspace(storage)
+    try:
+        ctx = init_workspace(storage)
+    except FileExistsError:
+        rprint(f"[red]Workspace already exists at {ws_path}.[/red]")
+        rprint("Run [bold]careeros workspace status[/bold] to inspect it.")
+        raise typer.Exit(1)
     logger = ActivityLogger(ctx.storage)
     logger.log(logger.new_event("workspace_created", "init", f"Workspace initialized at {ws_path}"))
     rprint(f"\n[green]Workspace created at {ws_path}[/green]")
