@@ -1,4 +1,6 @@
 import pytest
+from careeros.storage.filesystem import LocalFilesystemStorage
+from careeros.workspace.manager import init_workspace, WorkspaceContext
 
 SAMPLE_RESUME = """
 Alice Johnson
@@ -19,3 +21,9 @@ Python, Go, Kubernetes, Terraform, AWS, Prometheus, Grafana, Linux
 EDUCATION
 BS Computer Science, UC Berkeley, 2016
 """
+
+
+@pytest.fixture
+def tmp_workspace(tmp_path) -> WorkspaceContext:
+    storage = LocalFilesystemStorage(str(tmp_path))
+    return init_workspace(storage)
