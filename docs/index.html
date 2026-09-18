@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CareerOS — privacy-first career automation</title>
+<meta name="description" content="CareerOS keeps your career data in a directory you own. Run the onboarding wizard, get a structured profile, export a portable workspace. Nothing leaves your machine.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Source+Sans+3:wght@300..700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  /* -------------------------------- tokens -------------------------------- */
+  :root {
+    --bg:         #EEEBDF;
+    --bg-raise:   #F8F6EE;
+    --bg-sunken:  #E6E2D3;
+    --ink:        #211E16;
+    --ink-dim:    #4A4638;
+    --muted:      #7D7869;
+    --line:       #D4CFBF;
+    --lamp:       #3D7A67;
+    --lamp-bright:#2E5F50;
+    --lamp-wash:  rgba(61,122,103,0.10);
+    --shadow:     0 1px 2px rgba(30,26,15,.06), 0 8px 24px rgba(30,26,15,.06);
+    --paper-noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:         #15171C;
+      --bg-raise:   #1C1F26;
+      --bg-sunken:  #11131A;
+      --ink:        #E8E4D8;
+      --ink-dim:    #A8A390;
+      --muted:      #666052;
+      --line:       #2A2D35;
+      --lamp:       #5FA88F;
+      --lamp-bright:#7FC2AA;
+      --lamp-wash:  rgba(95,168,143,0.12);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:         #15171C;
+    --bg-raise:   #1C1F26;
+    --bg-sunken:  #11131A;
+    --ink:        #E8E4D8;
+    --ink-dim:    #A8A390;
+    --muted:      #666052;
+    --line:       #2A2D35;
+    --lamp:       #5FA88F;
+    --lamp-bright:#7FC2AA;
+    --lamp-wash:  rgba(95,168,143,0.12);
+    color-scheme: dark;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+  }
+
+  /* --------------------------------- reset -------------------------------- */
+  *, *::before, *::after { box-sizing: border-box; }
+  html { font-size: 16px; scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Source Sans 3", system-ui, sans-serif;
+    font-size: 1rem;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4 {
+    font-family: "Fraunces", serif;
+    font-weight: 600;
+    text-wrap: balance;
+    margin: 0;
+    color: var(--ink);
+  }
+  code, .mono, pre { font-family: "JetBrains Mono", Consolas, monospace; font-variant-numeric: tabular-nums; }
+  p { margin: 0; }
+  svg { display: block; }
+  .icon { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  [hidden] { display: none !important; }
+
+  .wrap { max-width: 920px; margin: 0 auto; padding: 0 28px; }
+
+  /* --------------------------------- nav --------------------------------- */
+  .nav {
+    position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav-inner { max-width: 920px; margin: 0 auto; padding: 14px 28px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .brand { display: flex; align-items: center; gap: 9px; text-decoration: none; color: var(--ink); font-family: "Fraunces", serif; font-weight: 600; font-size: 1.05rem; }
+  .brand .icon { color: var(--lamp); width: 20px; height: 20px; }
+  .nav-links { display: flex; align-items: center; gap: 22px; }
+  .nav-links a { font-size: 14px; color: var(--ink-dim); text-decoration: none; }
+  .nav-links a:hover { color: var(--lamp); }
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--bg-raise); color: var(--ink-dim); cursor: pointer;
+  }
+  .icon-btn:hover { color: var(--lamp); border-color: var(--lamp); }
+  .icon-btn .icon { width: 17px; height: 17px; }
+  .icon-btn .moon { display: none; }
+  :root[data-theme="dark"] .icon-btn .sun { display: none; }
+  :root[data-theme="dark"] .icon-btn .moon { display: block; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .icon-btn .sun { display: none; }
+    :root:not([data-theme="light"]) .icon-btn .moon { display: block; }
+  }
+
+  /* --------------------------------- hero --------------------------------- */
+  .hero { position: relative; overflow: hidden; background: var(--bg-sunken); border-bottom: 1px solid var(--line); }
+  .hero::before {
+    content: ""; position: absolute; inset: -20% -10% auto -10%; height: 130%;
+    background: radial-gradient(ellipse 620px 420px at 50% 0%, var(--lamp-wash), transparent 65%);
+    pointer-events: none;
+  }
+  .hero::after {
+    content: ""; position: absolute; inset: 0; background: var(--paper-noise); pointer-events: none; opacity: 0.5;
+  }
+  .hero-glyph { position: absolute; right: -60px; top: 40px; width: 360px; height: 360px; color: var(--lamp); opacity: 0.07; pointer-events: none; }
+  .hero-inner { position: relative; padding: 88px 28px 76px; max-width: 920px; margin: 0 auto; display: flex; flex-direction: column; align-items: flex-start; gap: 28px; }
+  .hero-stamp { position: absolute; top: 24px; left: 28px; z-index: 1; font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--lamp); opacity: 0.18; border: 2px solid currentColor; padding: 6px 12px; border-radius: 2px; transform: rotate(-3deg); pointer-events: none; }
+  .eyebrow { display: inline-flex; align-items: center; gap: 9px; font-family: "JetBrains Mono", monospace; font-size: 12.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--lamp); }
+  .hero h1 { font-size: clamp(2.3rem, 5.2vw, 3.5rem); line-height: 1.07; letter-spacing: -0.01em; max-width: 18ch; }
+  .hero h1 em { font-style: italic; color: var(--lamp); }
+  .hero-sub { max-width: 56ch; font-size: 1.14rem; color: var(--ink-dim); }
+  .hero-sub code { color: var(--ink); }
+  .cta-row { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 4px; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 4px; font-size: 15px; font-weight: 600; text-decoration: none; border: 1px solid transparent; transition: transform .15s ease, background .15s ease, border-color .15s ease; }
+  .btn .icon { width: 16px; height: 16px; }
+  .btn-primary { background: var(--lamp); color: #F5F3EA; }
+  .btn-primary:hover { background: var(--lamp-bright); transform: translateY(-1px); }
+  .btn-ghost { border-color: var(--line); color: var(--ink); }
+  .btn-ghost:hover { border-color: var(--lamp); color: var(--lamp); }
+
+  .stats { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; width: 100%; margin-top: 8px; }
+  .stat { background: var(--bg-raise); padding: 18px 16px; }
+  .stat-n { font-size: 1.5rem; font-weight: 700; color: var(--lamp); display: block; font-family: "JetBrains Mono", monospace; }
+  .stat-l { font-size: 12.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 4px; display: block; }
+
+  /* ------------------------------- sections ------------------------------- */
+  section { padding: 76px 0; }
+  section + section { border-top: 1px solid var(--line); }
+  .kicker { display: flex; align-items: center; gap: 8px; font-family: "JetBrains Mono", monospace; font-size: 12.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  .kicker .icon { width: 15px; height: 15px; color: var(--lamp); }
+  .sec-title { font-size: clamp(1.55rem, 3vw, 2.05rem); margin-bottom: 18px; }
+  .sec-lede { color: var(--ink-dim); font-size: 1.05rem; max-width: 62ch; margin-bottom: 44px; }
+
+  /* ------------------------------ pipeline diagram ------------------------------ */
+  .pipeline { display: flex; align-items: stretch; gap: 0; margin-bottom: 48px; overflow-x: auto; padding-bottom: 4px; }
+  .pnode { flex: 1; min-width: 118px; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; padding: 4px 6px; }
+  .pnode .disc { width: 52px; height: 52px; border-radius: 50%; border: 1.5px solid var(--line); background: var(--bg-raise); display: flex; align-items: center; justify-content: center; color: var(--lamp); }
+  .pnode.opt .disc { border-style: dashed; }
+  .pnode .lbl { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+  .pnode .sub { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .parrow { flex: none; width: 34px; display: flex; align-items: center; justify-content: center; color: var(--line); margin-top: 26px; }
+  @media (max-width: 620px) { .pipeline { display: none; } }
+
+  /* -------------------------- steps (numbered) -------------------------- */
+  .method { display: flex; flex-direction: column; }
+  .step { display: grid; grid-template-columns: 56px 1fr; gap: 20px; padding: 26px 0; border-top: 1px solid var(--line); opacity: 0; transform: translateY(10px); transition: opacity .5s ease, transform .5s ease; }
+  .step.in { opacity: 1; transform: none; }
+  .step:last-child { border-bottom: 1px solid var(--line); }
+  .step-n { font-family: "Fraunces", serif; font-size: 1.7rem; color: var(--line); line-height: 1; }
+  .step h3 { font-size: 1.15rem; margin-bottom: 6px; display: flex; align-items: center; gap: 9px; }
+  .step h3 .icon { width: 19px; height: 19px; color: var(--lamp); }
+  .step p { color: var(--ink-dim); max-width: 58ch; }
+
+  /* ------------------------------ feature grid --------------------------- */
+  .feature-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .feature { background: var(--bg-raise); padding: 26px 24px; display: flex; flex-direction: column; gap: 10px; position: relative; overflow: hidden; }
+  .feature::before { content: ""; position: absolute; inset: 0; background: var(--paper-noise); pointer-events: none; opacity: 0.3; }
+  .feature .icon-wrap { width: 38px; height: 38px; border-radius: 8px; background: var(--lamp-wash); color: var(--lamp); display: flex; align-items: center; justify-content: center; margin-bottom: 4px; }
+  .feature .icon-wrap .icon { width: 20px; height: 20px; }
+  .feature h3 { font-size: 1.08rem; }
+  .feature p { color: var(--ink-dim); font-size: 14.5px; }
+  .feature .note { margin-top: auto; font-family: "JetBrains Mono", monospace; font-size: 11.5px; color: var(--muted); padding-top: 10px; border-top: 1px dashed var(--line); }
+  .feature .note b { color: var(--lamp); font-weight: 600; }
+
+  /* ------------------------------ quickstart ----------------------------- */
+  .term { background: var(--bg-sunken); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; box-shadow: var(--shadow); }
+  .term-bar { display: flex; align-items: center; gap: 7px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .term-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); }
+  .term-title { display: flex; align-items: center; gap: 6px; margin-left: 8px; font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--muted); }
+  .term-title .icon { width: 13px; height: 13px; }
+  .term pre { margin: 0; padding: 20px; overflow-x: auto; font-size: 13.5px; line-height: 1.75; color: var(--ink-dim); }
+  .term .c1 { color: var(--lamp); }
+  .term .c2 { color: var(--muted); }
+  .term .out { color: var(--ink-dim); }
+
+  /* ------------------------------ design principles ---------------------- */
+  .principles { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 16px; }
+  .principle { display: flex; gap: 12px; border-left: 3px solid var(--lamp); padding: 4px 0 4px 16px; }
+  .principle .icon { width: 18px; height: 18px; color: var(--lamp); flex: none; margin-top: 2px; }
+  .principle h4 { font-size: .95rem; font-weight: 700; margin-bottom: 5px; color: var(--ink); }
+  .principle p { font-size: 14px; color: var(--ink-dim); }
+
+  /* -------------------------------- sign-off / footer -------------------------------- */
+  footer { padding: 24px 0 64px; border-top: 1px solid var(--line); margin-top: 0; }
+  .foot-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
+  .foot-brand { display: flex; align-items: center; gap: 8px; font-family: "Fraunces", serif; font-size: 1.15rem; }
+  .foot-brand .icon { width: 18px; height: 18px; color: var(--lamp); }
+  .foot-links { display: flex; gap: 20px; flex-wrap: wrap; }
+  .foot-links a { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--muted); text-decoration: none; }
+  .foot-links a .icon { width: 14px; height: 14px; }
+  .foot-links a:hover { color: var(--lamp); }
+  .foot-note { font-size: 13px; color: var(--muted); margin-top: 22px; max-width: 62ch; }
+
+  @media (max-width: 720px) {
+    .hero-inner { padding: 56px 20px 48px; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .feature-grid { grid-template-columns: 1fr; }
+    .principles { grid-template-columns: 1fr; }
+    section { padding: 52px 0; }
+    .nav-links a:not(.icon-btn) { display: none; }
+    .hero-glyph { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { .step { transition: none; opacity: 1; transform: none; } html { scroll-behavior: auto; } }
+</style>
+</head>
+<body>
+
+<!-- ============================== inline icon set ============================== -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<defs>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"/></symbol>
+  <symbol id="i-github" viewBox="0 0 24 24"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.46-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.53 2.34 1.09 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.56-1.11-4.56-4.95 0-1.09.39-1.99 1.03-2.69-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.03a9.5 9.5 0 0 1 5 0c1.91-1.3 2.75-1.03 2.75-1.03.55 1.37.2 2.39.1 2.64.64.7 1.03 1.6 1.03 2.69 0 3.85-2.34 4.7-4.57 4.95.36.31.68.92.68 1.85v2.75c0 .26.18.58.69.48A10 10 0 0 0 12 2Z"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M7 3h7l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/><path d="M14 3v4h4"/><line x1="8.5" y1="12.5" x2="15.5" y2="12.5"/><line x1="8.5" y1="16" x2="13" y2="16"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.3M12 19.2v2.3M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.3M19.2 12h2.3M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5Z"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="16" rx="1.5"/><polyline points="6.5,9.5 10,12.5 6.5,15.5"/><line x1="12.5" y1="15.5" x2="17.5" y2="15.5"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.2 5 5.8v5.6c0 5 3 8 7 9.4 4-1.4 7-4.4 7-9.4V5.8Z"/><polyline points="9,12 11.2,14.2 15.3,9.8"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M6 8h12l-1 5a5 5 0 0 1-10 0Z"/><path d="M12 17v5"/></symbol>
+  <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8 1 .8 1.7V16h5.6v-.5c0-.7.3-1.3.8-1.7A6 6 0 0 0 12 3Z"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="11" rx="1.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/><circle cx="12" cy="16" r="1" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M3 12h4.5l1.5 3h6l1.5-3H21"/><path d="M5.5 5h13l2.5 7v7a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-7Z"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><line x1="3" y1="12" x2="19" y2="12"/><polyline points="13,6 19,12 13,18"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M9 6H5.5a1.5 1.5 0 0 0-1.5 1.5v11A1.5 1.5 0 0 0 5.5 20h11a1.5 1.5 0 0 0 1.5-1.5V15"/><path d="M13 4h7v7"/><line x1="20" y1="4" x2="11" y2="13"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M2 12 12 7l10 5-10 5Z"/><path d="M2 17l10 5 10-5"/><path d="M2 7l10-5 10 5"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24"><polygon points="13,2 3,14 12,14 11,22 21,10 12,10"/></symbol>
+</defs>
+</svg>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="#top">
+      <svg class="icon" width="20" height="20"><use href="#i-folder"/></svg>
+      CareerOS
+    </a>
+    <div class="nav-links">
+      <a href="#how-it-works">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#quickstart">Quickstart</a>
+      <a href="https://github.com/init-kaushal/careeros" target="_blank" rel="noopener" aria-label="GitHub">
+        <svg class="icon" width="18" height="18"><use href="#i-github"/></svg>
+      </a>
+      <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle color theme">
+        <svg class="icon sun" width="17" height="17"><use href="#i-sun"/></svg>
+        <svg class="icon moon" width="17" height="17"><use href="#i-moon"/></svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<div class="hero" id="top">
+  <svg class="hero-glyph" viewBox="0 0 24 24" stroke="currentColor" stroke-width="0.6" fill="none"><use href="#i-folder"/></svg>
+  <div class="hero-stamp">YOUR DATA</div>
+  <div class="hero-inner">
+    <span class="eyebrow">
+      <svg class="icon" width="14" height="14"><use href="#i-lock"/></svg>
+      Privacy-first · agent-portable · no cloud
+    </span>
+    <h1>Your career data, in a directory <em>you own</em>.</h1>
+    <p class="hero-sub">
+      <code>careeros onboard</code> extracts a structured profile from your resume,
+      writes it to your workspace, and never sends it anywhere again.
+      Export a portable zip. Hand it to any agent. Pull framework updates
+      without touching your data.
+    </p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/init-kaushal/careeros" target="_blank" rel="noopener">
+        <svg class="icon" width="16" height="16"><use href="#i-github"/></svg>View source
+      </a>
+      <a class="btn btn-ghost" href="#quickstart">
+        <svg class="icon" width="16" height="16"><use href="#i-terminal"/></svg>Get started
+      </a>
+    </div>
+    <div class="stats">
+      <div class="stat"><span class="stat-n">1</span><span class="stat-l">onboard command</span></div>
+      <div class="stat"><span class="stat-n">0</span><span class="stat-l">cloud accounts</span></div>
+      <div class="stat"><span class="stat-n">77</span><span class="stat-l">tests passing</span></div>
+      <div class="stat"><span class="stat-n">v1</span><span class="stat-l">manifest schema</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <section id="how-it-works">
+    <span class="kicker"><svg class="icon" width="15" height="15"><use href="#i-doc"/></svg>How it works</span>
+    <h2 class="sec-title">From resume to structured workspace in minutes</h2>
+    <p class="sec-lede">Three commands. Your data never leaves your machine after onboarding.
+      Framework updates pull cleanly — they never touch the workspace you own.</p>
+
+    <div class="pipeline" aria-hidden="true">
+      <div class="pnode">
+        <div class="disc"><svg class="icon" width="22" height="22"><use href="#i-terminal"/></svg></div>
+        <div class="lbl">Install</div><div class="sub">pip install</div>
+      </div>
+      <div class="parrow"><svg class="icon" width="18" height="18"><use href="#i-arrow"/></svg></div>
+      <div class="pnode">
+        <div class="disc"><svg class="icon" width="22" height="22"><use href="#i-bulb"/></svg></div>
+        <div class="lbl">Onboard</div><div class="sub">wizard</div>
+      </div>
+      <div class="parrow"><svg class="icon" width="18" height="18"><use href="#i-arrow"/></svg></div>
+      <div class="pnode">
+        <div class="disc"><svg class="icon" width="22" height="22"><use href="#i-user"/></svg></div>
+        <div class="lbl">Profile</div><div class="sub">extracted</div>
+      </div>
+      <div class="parrow"><svg class="icon" width="18" height="18"><use href="#i-arrow"/></svg></div>
+      <div class="pnode opt">
+        <div class="disc"><svg class="icon" width="22" height="22"><use href="#i-inbox"/></svg></div>
+        <div class="lbl">Export</div><div class="sub">portable</div>
+      </div>
+      <div class="parrow"><svg class="icon" width="18" height="18"><use href="#i-arrow"/></svg></div>
+      <div class="pnode">
+        <div class="disc"><svg class="icon" width="22" height="22"><use href="#i-plug"/></svg></div>
+        <div class="lbl">Any agent</div><div class="sub">reads it</div>
+      </div>
+    </div>
+
+    <div class="method">
+      <div class="step">
+        <div class="step-n">01</div>
+        <div>
+          <h3><svg class="icon" width="19" height="19"><use href="#i-terminal"/></svg>Install</h3>
+          <p>Clone the repo, create a virtualenv, and <code>pip install -e .</code>.
+            The <code>careeros</code> command is now on your path.
+            Python 3.11+ required; no other runtime dependencies.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-n">02</div>
+        <div>
+          <h3><svg class="icon" width="19" height="19"><use href="#i-bulb"/></svg>Run the onboarding wizard</h3>
+          <p><code>careeros onboard</code> asks where to create your workspace, then asks for your resume
+            or any text describing your background. It calls Claude Haiku once to extract
+            skills, titles, and goals — then writes the result locally. That's the only network call.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-n">03</div>
+        <div>
+          <h3><svg class="icon" width="19" height="19"><use href="#i-user"/></svg>Your profile is in <code>profile/profile.json</code></h3>
+          <p>Skills, job titles, years of experience, preferences, and goals — structured, editable JSON.
+            CareerOS reads it fresh on every command, so you can edit it directly at any time.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-n">04</div>
+        <div>
+          <h3><svg class="icon" width="19" height="19"><use href="#i-inbox"/></svg>Export and share</h3>
+          <p><code>careeros export</code> zips your entire workspace. Hand the zip to another
+            CareerOS install, an AI agent, or any tool that reads the workspace manifest.
+            The zip is self-contained — no CareerOS installation required to read it.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <span class="kicker"><svg class="icon" width="15" height="15"><use href="#i-layers"/></svg>Features</span>
+    <h2 class="sec-title">What Phase 1 ships</h2>
+    <p class="sec-lede">Everything needed to go from zero to a populated, portable workspace — and hand it to any agent runtime.</p>
+
+    <div class="feature-grid">
+      <div class="feature">
+        <div class="icon-wrap"><svg class="icon" width="20" height="20"><use href="#i-bulb"/></svg></div>
+        <h3>Onboarding wizard</h3>
+        <p>Six-step interactive wizard: workspace location, name, resume text, LLM extraction,
+          confirmation. Handles existing workspaces gracefully.</p>
+        <div class="note"><b>careeros onboard</b></div>
+      </div>
+      <div class="feature">
+        <div class="icon-wrap"><svg class="icon" width="20" height="20"><use href="#i-user"/></svg></div>
+        <h3>Profile extraction</h3>
+        <p>Sends your resume text to Claude Haiku once. Parses the response into a typed
+          <code>Profile</code> model — skills, titles, experience, goals — and writes it locally.</p>
+        <div class="note"><b>profile/profile.json</b></div>
+      </div>
+      <div class="feature">
+        <div class="icon-wrap"><svg class="icon" width="20" height="20"><use href="#i-doc"/></svg></div>
+        <h3>Workspace status &amp; validation</h3>
+        <p>Shows workspace path, schema version, profile summary, recent activity counts, and skills.
+          Validate runs schema and data integrity checks — zero output means everything is clean.</p>
+        <div class="note"><b>careeros workspace status</b></div>
+      </div>
+      <div class="feature">
+        <div class="icon-wrap"><svg class="icon" width="20" height="20"><use href="#i-inbox"/></svg></div>
+        <h3>Export &amp; import</h3>
+        <p>Export creates a portable zip with a stable layout. Import unpacks it, validates the
+          manifest, and makes it your active workspace — zip-slip protection included.</p>
+        <div class="note"><b>careeros export / careeros import</b></div>
+      </div>
+      <div class="feature">
+        <div class="icon-wrap"><svg class="icon" width="20" height="20"><use href="#i-shield"/></svg></div>
+        <h3>StorageProvider protocol</h3>
+        <p>All workspace I/O goes through an abstract protocol. Phase 1 ships
+          <code>LocalFilesystemStorage</code> with path-traversal guards.
+          Future backends (remote, encrypted) swap in without touching business logic.</p>
+        <div class="note"><b>careeros/storage/</b></div>
+      </div>
+      <div class="feature">
+        <div class="icon-wrap"><svg class="icon" width="20" height="20"><use href="#i-layers"/></svg></div>
+        <h3>Append-only activity log</h3>
+        <p>Every CLI action appends a timestamped JSON event to
+          <code>activity/YYYY-MM-DD.jsonl</code>. Events are never edited or deleted —
+          a full audit trail for any agent that reads the workspace.</p>
+        <div class="note"><b>activity/</b></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="quickstart">
+    <span class="kicker"><svg class="icon" width="15" height="15"><use href="#i-terminal"/></svg>Quickstart</span>
+    <h2 class="sec-title">Up and running in five minutes</h2>
+    <p class="sec-lede">Python 3.11+ and an Anthropic API key are the only prerequisites.
+      The API key is used once during onboarding; everything else runs offline.</p>
+
+    <div class="term">
+      <div class="term-bar">
+        <span class="term-dot"></span>
+        <span class="term-dot"></span>
+        <span class="term-dot"></span>
+        <span class="term-title"><svg class="icon" width="13" height="13"><use href="#i-terminal"/></svg>shell</span>
+      </div>
+      <pre><span class="c2"># clone and install</span>
+<span class="c1">git clone</span> https://github.com/init-kaushal/careeros
+<span class="c1">cd</span> careeros
+<span class="c1">python -m venv</span> .venv &amp;&amp; <span class="c1">source</span> .venv/bin/activate
+<span class="c1">pip install</span> -e .
+
+<span class="c2"># set your API key</span>
+<span class="c1">export</span> ANTHROPIC_API_KEY=sk-ant-...
+
+<span class="c2"># run the onboarding wizard</span>
+<span class="c1">careeros onboard</span>
+<span class="out">  Workspace path [~/my-career]: </span>
+<span class="out">  Your name: Jane Smith</span>
+<span class="out">  Paste your resume (blank line + enter when done):</span>
+<span class="out">  ...</span>
+<span class="out">  Extracting profile... done.</span>
+<span class="out">  Workspace ready at /Users/jane/my-career</span>
+
+<span class="c2"># check what was extracted</span>
+<span class="c1">careeros workspace status</span>
+<span class="out">  Workspace:  /Users/jane/my-career</span>
+<span class="out">  Version:    schema v1</span>
+<span class="out">  Profile:    Jane Smith · Software Engineer</span>
+<span class="out">  Skills:     12 skills</span>
+
+<span class="c2"># export a portable workspace zip</span>
+<span class="c1">careeros export</span>
+<span class="out">  Exported to /Users/jane/my-career/exports/careeros-export-2026-01-15.zip</span></pre>
+    </div>
+
+    <p style="margin-top: 28px; color: var(--ink-dim);">
+      For a full walkthrough including workspace layout, agent portability, and multi-workspace
+      setups, see the <a href="getting-started.md" style="color: var(--lamp);">getting started guide</a>.
+    </p>
+  </section>
+
+  <section id="design">
+    <span class="kicker"><svg class="icon" width="15" height="15"><use href="#i-shield"/></svg>Design principles</span>
+    <h2 class="sec-title">How it's built</h2>
+    <p class="sec-lede">Four constraints that drive every implementation decision.</p>
+
+    <div class="principles">
+      <div class="principle">
+        <svg class="icon" width="18" height="18"><use href="#i-lock"/></svg>
+        <div>
+          <h4>Your data stays yours</h4>
+          <p>The framework directory and your workspace are separate. Pull framework updates
+            with <code>git pull</code> — it never touches your workspace.</p>
+        </div>
+      </div>
+      <div class="principle">
+        <svg class="icon" width="18" height="18"><use href="#i-plug"/></svg>
+        <div>
+          <h4>Agent portability</h4>
+          <p>The workspace manifest is the contract. Any agent that reads it can work with
+            your career data without CareerOS installed.</p>
+        </div>
+      </div>
+      <div class="principle">
+        <svg class="icon" width="18" height="18"><use href="#i-layers"/></svg>
+        <div>
+          <h4>Swappable storage</h4>
+          <p>All I/O goes through <code>StorageProvider</code>. Local filesystem today,
+            remote or encrypted backends tomorrow — business logic doesn't change.</p>
+        </div>
+      </div>
+      <div class="principle">
+        <svg class="icon" width="18" height="18"><use href="#i-zap"/></svg>
+        <div>
+          <h4>Offline by default</h4>
+          <p>One network call during onboarding. Every other command — status, validate,
+            export, import — runs entirely offline, every time.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-row">
+      <div class="foot-brand">
+        <svg class="icon" width="18" height="18"><use href="#i-folder"/></svg>
+        CareerOS
+      </div>
+      <div class="foot-links">
+        <a href="https://github.com/init-kaushal/careeros" target="_blank" rel="noopener">
+          <svg class="icon" width="14" height="14"><use href="#i-github"/></svg>GitHub
+        </a>
+        <a href="getting-started.md">
+          <svg class="icon" width="14" height="14"><use href="#i-doc"/></svg>Getting started
+        </a>
+        <a href="https://github.com/init-kaushal/careeros/blob/main/LICENSE" target="_blank" rel="noopener">
+          <svg class="icon" width="14" height="14"><use href="#i-shield"/></svg>MIT License
+        </a>
+      </div>
+    </div>
+    <p class="foot-note">
+      Privacy-first, agent-portable career automation. Your data lives in a directory you control.
+    </p>
+  </div>
+</footer>
+
+<script>
+(function() {
+  const root = document.documentElement;
+  const btn  = document.getElementById('theme-toggle');
+  const mq   = window.matchMedia('(prefers-color-scheme: dark)');
+
+  function current() {
+    const t = root.getAttribute('data-theme');
+    if (t === 'light' || t === 'dark') return t;
+    return mq.matches ? 'dark' : 'light';
+  }
+
+  btn.addEventListener('click', function() {
+    root.setAttribute('data-theme', current() === 'dark' ? 'light' : 'dark');
+  });
+
+  // scroll-reveal for steps
+  const steps = document.querySelectorAll('.step');
+  const io = new IntersectionObserver(function(entries) {
+    entries.forEach(function(e) { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, { threshold: 0.15 });
+  steps.forEach(function(s) { io.observe(s); });
+})();
+</script>
+</body>
+</html>

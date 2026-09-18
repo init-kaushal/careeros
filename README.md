@@ -1,22 +1,101 @@
 # CareerOS
 
 Privacy-first, agent-portable career automation platform.
+Your resume, skills, and career data live in a directory you own — not in any cloud.
 
-## Setup
+**[→ init-kaushal.github.io/careeros](https://init-kaushal.github.io/careeros/)** — project overview and getting started guide.
 
-```bash
-pip install -e ".[dev]"
-```
-
-## Usage
+## Quickstart
 
 ```bash
+# Install (Python 3.11+)
+git clone https://github.com/init-kaushal/careeros
+cd careeros
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+
+# Set your Anthropic API key
+export ANTHROPIC_API_KEY=sk-...
+
+# Run the onboarding wizard
 careeros onboard
-careeros workspace status
-careeros export
 ```
 
-## Workspace
+The wizard asks where to create your workspace, then extracts your profile from a resume or LinkedIn export.
+Your data is written to the workspace directory you chose — nothing leaves your machine.
 
-Your career data lives in a directory you control, separate from this repo.
-Run `git pull` here to get framework updates without touching your data.
+## What it does
+
+**`careeros onboard`** — interactive wizard that creates a workspace, asks for a resume or text
+describing your background, calls Claude to extract structured profile data, and writes it to
+`profile/profile.json`. Takes about 60 seconds.
+
+**`careeros workspace status`** — shows workspace path, schema version, profile summary,
+recent activity, and counts of skills and goals.
+
+**`careeros workspace validate`** — validates workspace schema and data integrity. Zero output
+means everything is clean.
+
+**`careeros export`** — creates a portable zip of your entire workspace. Hand it to any agent
+runtime that speaks the CareerOS manifest format.
+
+**`careeros import <path>`** — imports a workspace zip, unpacks it, and makes it your active workspace.
+
+## Workspace layout
+
+CareerOS uses a two-directory model: the framework (this repo) and your workspace (a directory you own).
+
+```
+~/my-career/                  ← your workspace, never touched by framework updates
+  manifest.json               ← entry point for any agent runtime
+  config.json                 ← workspace-level settings
+  profile/
+    profile.json              ← structured profile data (skills, goals, preferences)
+  activity/
+    2026-01-15.jsonl          ← append-only activity log, one event per line
+  exports/                    ← created by `careeros export`
+```
+
+The workspace is self-contained. You can copy it, version-control it, or hand it to
+another tool without touching CareerOS.
+
+## Agent portability
+
+Every workspace has a `manifest.json` that any agent runtime can read:
+
+```json
+{
+  "schema_version": 1,
+  "careeros_version": "0.1.0",
+  "created_at": "2026-01-15T10:00:00Z"
+}
+```
+
+Any tool that reads the manifest can discover the workspace structure and work with
+your career data without needing CareerOS installed.
+
+## Requirements
+
+- Python 3.11+
+- Anthropic API key (for `careeros onboard` profile extraction — everything else works offline)
+
+## Development
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+pytest
+```
+
+Tests run fully offline — no API calls, no network. 77 tests, 0 dependencies on
+external services.
+
+## Status
+
+Phase 1 complete: onboarding wizard, profile extraction, workspace management,
+export/import. All workspace I/O goes through the `StorageProvider` protocol,
+so storage backends can be swapped without touching business logic.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
