@@ -145,3 +145,65 @@ class AutomationPolicy(BaseModel):
         if not storage.exists("config/automation_policy.json"):
             raise FileNotFoundError("config/automation_policy.json not found in workspace")
         return cls.model_validate_json(storage.read("config/automation_policy.json").decode())
+
+
+class Company(BaseModel):
+    id: str
+    name: str
+    url: str | None = None
+    industry: str | None = None
+    size: str | None = None
+    notes: str | None = None
+    researched_at: str
+
+    def save(self, storage: StorageProvider) -> None:
+        storage.atomic_write("companies/" + self.id + ".json", self.model_dump_json(indent=2).encode())
+
+    @classmethod
+    def load(cls, storage: StorageProvider, company_id: str) -> "Company":
+        path = "companies/" + company_id + ".json"
+        if not storage.exists(path):
+            raise FileNotFoundError("Company " + repr(company_id) + " not found")
+        return cls.model_validate_json(storage.read(path).decode())
+
+
+class Person(BaseModel):
+    id: str
+    company_id: str
+    name: str
+    role_category: str
+    title: str | None = None
+    linkedin_url: str | None = None
+    email: str | None = None
+    researched_at: str
+
+    def save(self, storage: StorageProvider) -> None:
+        storage.atomic_write("people/" + self.id + ".json", self.model_dump_json(indent=2).encode())
+
+    @classmethod
+    def load(cls, storage: StorageProvider, person_id: str) -> "Person":
+        path = "people/" + person_id + ".json"
+        if not storage.exists(path):
+            raise FileNotFoundError("Person " + repr(person_id) + " not found")
+        return cls.model_validate_json(storage.read(path).decode())
+
+
+class OutreachMessage(BaseModel):
+    id: str
+    job_id: str
+    person_id: str
+    draft_text: str
+    send_state: str = "drafted"
+    referral_state: str = "research"
+    created_at: str
+    sent_at: str | None = None
+
+    def save(self, storage: StorageProvider) -> None:
+        storage.atomic_write("outreach/" + self.id + ".json", self.model_dump_json(indent=2).encode())
+
+    @classmethod
+    def load(cls, storage: StorageProvider, message_id: str) -> "OutreachMessage":
+        path = "outreach/" + message_id + ".json"
+        if not storage.exists(path):
+            raise FileNotFoundError("OutreachMessage " + repr(message_id) + " not found")
+        return cls.model_validate_json(storage.read(path).decode())
