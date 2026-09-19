@@ -4,10 +4,8 @@ from datetime import datetime, timezone
 
 import typer
 from rich import print as rprint
-from rich.console import Console
 
 from careeros.browser.driver import fetch_jd_text, launch_browser
-from careeros.browser.scrapers.generic import GenericScraper
 from careeros.browser.scrapers.indeed import IndeedScraper
 from careeros.browser.scrapers.linkedin import LinkedInScraper
 from careeros.browser.scrapers.wellfound import WellfoundScraper
@@ -23,7 +21,6 @@ from careeros.skills.job_score import score_job
 from careeros.storage.filesystem import LocalFilesystemStorage
 
 discover_and_apply_app = typer.Typer(help="Unattended discover + auto-apply for scheduled runs.")
-console = Console()
 
 _RESUME_EXTENSIONS = (".pdf", ".docx")
 
@@ -157,44 +154,49 @@ def discover_and_apply_cmd(
 
         filler = next((f for f in FILLERS if f.can_handle(p["url"])), None)
         if filler is None:
+            runtime.record_activity(runtime.new_event(
+                "no_filler_available", "discover-and-apply",
+                "No filler available for " + p["company"] + " — " + p["title"],
+                status="failed", entity_type="job", entity_id=job_id,
+            ))
             skipped_count += 1
             continue
 
         cl_storage_path = "applications/" + job_id + "/cover_letter.txt"
-        runtime.storage.atomic_write(cl_storage_path, cover_letter.encode())
-        cover_letter_path = runtime.storage.resolve(cl_storage_path)
-
-        approval = runtime.request_approval(ActionProposal(
-            action="apply_to_job",
-            summary="Auto-apply (score " + str(p["score"]) + " >= threshold "
-            + str(policy.auto_apply_min_score) + ") to " + p["company"] + " — " + p["title"],
-            entity_type="job", entity_id=job_id,
-        ))
-        if not approval.approved:
-            skipped_count += 1
-            continue
-
-        job = Job.load(runtime.storage, job_id)
         try:
-            with launch_browser(headless=True) as (_, page):
-                success = filler.fill(page, job, profile, cover_letter, cover_letter_path, resume_path)
-        except Exception:
-            skipped_count += 1
-            continue
+            runtime.storage.atomic_write(cl_storage_path, cover_letter.encode())
+            cover_letter_path = runtime.storage.resolve(cl_storage_path)
 
-        if success:
-            applied_now = _now()
-            job = job.model_copy(update={"stage": "applied", "applied_at": applied_now, "updated_at": applied_now})
-            job.save(runtime.storage)
-            runtime.record_activity(runtime.new_event(
-                "job_applied", "discover-and-apply",
-                "Auto-applied (score " + str(p["score"]) + " >= threshold "
+            approval = runtime.request_approval(ActionProposal(
+                action="apply_to_job",
+                summary="Auto-apply (score " + str(p["score"]) + " >= threshold "
                 + str(policy.auto_apply_min_score) + ") to " + p["company"] + " — " + p["title"],
                 entity_type="job", entity_id=job_id,
             ))
-            applied_count += 1
-        else:
+            if not approval.approved:
+                skipped_count += 1
+                continue
+
+            job = Job.load(runtime.storage, job_id)
+            with launch_browser(headless=True) as (_, page):
+                success = filler.fill(page, job, profile, cover_letter, cover_letter_path, resume_path)
+
+            if success:
+                applied_now = _now()
+                job = job.model_copy(update={"stage": "applied", "applied_at": applied_now, "updated_at": applied_now})
+                job.save(runtime.storage)
+                runtime.record_activity(runtime.new_event(
+                    "job_applied", "discover-and-apply",
+                    "Auto-applied (score " + str(p["score"]) + " >= threshold "
+                    + str(policy.auto_apply_min_score) + ") to " + p["company"] + " — " + p["title"],
+                    entity_type="job", entity_id=job_id,
+                ))
+                applied_count += 1
+            else:
+                skipped_count += 1
+        except Exception:
             skipped_count += 1
+            continue
 
     rprint(
         "Discovered: " + str(saved_count) + ", Auto-applied: " + str(applied_count)
