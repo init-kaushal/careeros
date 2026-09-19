@@ -133,9 +133,11 @@ Yes. Run `careeros onboard --workspace /path/to/dir` or just provide a custom pa
 wizard asks. CareerOS stores the active workspace path in `~/.config/careeros/config.json`.
 
 **Does CareerOS send my data anywhere?**
-Only during `careeros onboard` — your resume text is sent to the Anthropic API (Claude Haiku)
-for extraction. The response is written locally and never sent again. All other commands
-run entirely offline.
+Your resume and job data are sent to your configured LLM provider for extraction, scoring, and
+drafting (cover letters, outreach messages, research summaries) — never to a CareerOS-run server,
+since there isn't one. `browse`, `apply`, `discover-and-apply`, and `research` drive Playwright
+against your own logged-in Chrome session rather than calling a scraping API. `outreach send` is
+the only command that reaches a third party directly, by SMTP, and only after you approve it.
 
 **Can I run multiple workspaces?**
 Yes — export one workspace, import it elsewhere, or just create a new one with `careeros onboard`.
@@ -145,3 +147,17 @@ Only one workspace is active at a time (tracked in `~/.config/careeros/config.js
 Any agent that reads `manifest.json` and understands the workspace layout. The manifest schema
 is versioned, and CareerOS validates it on open. Future versions will maintain backwards
 compatibility.
+
+## Beyond onboarding
+
+Once your workspace exists, CareerOS covers the rest of the job search:
+
+- `careeros browse --board linkedin` — search and score jobs through your own browser session
+- `careeros apply --job <id>` — generate a cover letter and fill the real application form
+- `careeros discover-and-apply` — run unattended from cron, auto-applying above a score threshold
+- `careeros research company --job <id>` / `research people --job <id>` / `research compensation --job <id>`
+  — browser-driven, LLM-extracted research on a job's company, its people, and market comp
+- `careeros outreach send --job <id> --person <id>` — draft and send outreach, gated by approval
+- `careeros job add / list / show / update / note / search` — manage saved jobs directly
+
+Run `careeros --help` or `careeros <command> --help` for the full option list on any of these.

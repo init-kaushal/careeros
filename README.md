@@ -32,20 +32,50 @@ whichever model you configured. Your data is written locally — nothing leaves 
 
 ## What it does
 
-**`careeros onboard`** — interactive wizard that creates a workspace, asks for a resume or text
-describing your background, calls Claude to extract structured profile data, and writes it to
-`profile/profile.json`. Takes about 60 seconds.
+CareerOS covers the whole job-search loop — discovery, scoring, applying, researching people,
+outreach, and compensation evidence — with every action gated by an approval seam and logged to
+an append-only audit trail.
 
-**`careeros workspace status`** — shows workspace path, schema version, profile summary,
-recent activity, and counts of skills and goals.
+**Workspace**
+- **`careeros onboard`** — interactive wizard that creates a workspace, extracts a structured
+  profile from your resume via LLM, and writes it to `profile/profile.json`.
+- **`careeros workspace status` / `workspace validate`** — workspace path, schema version,
+  profile/skills/goals summary, activity counts; validate checks schema and data integrity.
+- **`careeros export` / `careeros import <path>`** — zip your entire workspace, or restore one,
+  in a format any agent runtime that speaks the CareerOS manifest can read.
 
-**`careeros workspace validate`** — validates workspace schema and data integrity. Zero output
-means everything is clean.
+**Job discovery + scoring**
+- **`careeros job add / list / show / update / note / search`** — manage saved jobs directly.
+- **`careeros browse --board <linkedin|indeed|wellfound|url>`** — browser-driven job search using
+  your own logged-in session, LLM-scored against your profile, save the ones you want.
 
-**`careeros export`** — creates a portable zip of your entire workspace. Hand it to any agent
-runtime that speaks the CareerOS manifest format.
+**Applying**
+- **`careeros apply --job <id>`** — generates a role-specific cover letter (with an
+  accept/regenerate/quit review loop), then fills the real application form in your browser via
+  a platform-specific filler (Greenhouse, Lever, LinkedIn Easy Apply, or a generic fallback) —
+  gated behind an explicit approval prompt before anything is submitted.
+- **`careeros discover-and-apply`** — the unattended version: run from cron/launchd, it discovers
+  jobs across your configured boards and auto-applies to anything scoring above a threshold you
+  set, capped per run, with a full activity trail for every save and every apply.
 
-**`careeros import <path>`** — imports a workspace zip, unpacks it, and makes it your active workspace.
+**People + outreach**
+- **`careeros research company / people --job <id>`** — browser-driven research on a job's company
+  and the people there (role-classified: IC, EM, hiring manager, recruiter), LLM-extracted into
+  structured records.
+- **`careeros research compensation --job <id>`** — evidence-backed compensation data pulled from
+  a public salary source, with an honest confidence rating rather than a guessed number.
+- **`careeros outreach send --job <id> --person <id>`** — drafts a role-aware outreach message,
+  same review loop as `apply`, then sends it by email only after explicit approval — the one place
+  in CareerOS that makes a real, irreversible external action.
+- **`careeros people update <id> --email <address>`** — CareerOS never guesses an email address;
+  add one manually once you've found it.
+
+**Automation seam**
+Every command above routes through an `AgentRuntime` interface rather than talking to storage or
+prompting the user directly — `LocalRuntime` blocks on a real terminal prompt for interactive use,
+`AutomationRuntime` auto-approves for scheduled runs (because the approval already happened when
+you set the policy threshold), and the same interface is designed for a future agent-embedded
+runtime to plug in without any command code changing.
 
 ## Workspace layout
 
@@ -83,9 +113,16 @@ your career data without needing CareerOS installed.
 ## Requirements
 
 - Python 3.11+
-- An API key for your preferred LLM provider — used only during `careeros onboard` for profile
-  extraction. Everything else runs offline. Supported providers (via [LiteLLM](https://docs.litellm.ai/)):
-  Anthropic, OpenAI, Ollama (free, local), Groq, Mistral, Google, and 100+ more.
+- An API key for your preferred LLM provider — used for profile extraction, job scoring, cover
+  letter and outreach drafting, and company/people/compensation research. Supported providers
+  (via [LiteLLM](https://docs.litellm.ai/)): Anthropic, OpenAI, Ollama (free, local), Groq,
+  Mistral, Google, and 100+ more.
+- [Playwright](https://playwright.dev/) with Chrome, for `browse`, `apply`, `discover-and-apply`,
+  and `research` — these drive your own logged-in browser session rather than an API, so there's
+  no separate account to connect. `pip install playwright && playwright install chrome`.
+- SMTP credentials (`CAREEROS_SMTP_HOST/PORT/USER/PASSWORD` env vars) only if you use
+  `careeros outreach send` — read from the environment at send time, never written to your
+  workspace.
 
 ## Development
 
@@ -95,14 +132,26 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Tests run fully offline — no API calls, no network. 77 tests, 0 dependencies on
-external services.
+Tests run fully offline — no API calls, no network, no real browser. 285 tests, every
+LLM/browser/SMTP call mocked at the boundary.
 
 ## Status
 
-Phase 1 complete: onboarding wizard, profile extraction, workspace management,
-export/import. All workspace I/O goes through the `StorageProvider` protocol,
-so storage backends can be swapped without touching business logic.
+Eight phases shipped, in order:
+
+1. **Workspace core** — onboarding, profile extraction, `StorageProvider` protocol, export/import
+2. **Job pipeline** — job schema, LLM-assisted scoring against your profile
+3. **Browser search** — `browse`, scraping LinkedIn/Indeed/Wellfound via your own session
+4. **Auto-apply** — cover letter generation, platform-specific form fillers, approval-gated submit
+5. **Agent interoperability** — `AgentRuntime` seam (`LocalRuntime`, and the interface a future
+   agent-embedded runtime plugs into) so every command's approval logic is runtime-agnostic
+6. **Automation** — `discover-and-apply` for unattended, scheduled runs with a score-threshold policy
+7. **People + outreach** — company/people research, role-aware drafting, approval-gated email send
+8. **Compensation research** — evidence-backed comp data with an honest confidence rating
+
+All workspace I/O goes through the `StorageProvider` protocol, so storage backends can be
+swapped without touching business logic. Every meaningful action — both outcomes of any
+approval decision, not just the success path — writes to the append-only activity log.
 
 ## License
 
