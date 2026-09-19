@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
-import pytest
 from typer.testing import CliRunner
 
 from careeros.cli.apply_cmd import apply_app
@@ -9,21 +8,6 @@ from careeros.core.models import Goals, Job, Profile, Skills
 from careeros.runtime.base import ApprovalResult
 
 runner = CliRunner()
-
-
-@pytest.fixture(autouse=True)
-def _isolate_global_config(tmp_path, monkeypatch):
-    """Prevent tests from touching the real ~/.config/careeros/config.json.
-
-    apply_cmd() calls GlobalConfig.load() whenever --workspace isn't passed
-    on the CLI (which is every invocation in this file, matching the given
-    spec). Without isolation, tests would depend on ambient state on the
-    machine running them. Tests that need to exercise the "no workspace"
-    failure path explicitly patch GlobalConfig.load themselves and take
-    precedence over this fixture.
-    """
-    monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
-    GlobalConfig(workspace_path=str(tmp_path / "workspace")).save()
 
 
 def _make_job(url="https://boards.greenhouse.io/acme/jobs/123"):
@@ -66,7 +50,8 @@ class TestApplyCmdHappyPath:
         mock_filler.fill.return_value = True
         mock_filler.platform = "Greenhouse"
 
-        with patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
              patch("careeros.cli.apply_cmd.Job.load", return_value=job), \
              patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=profile), \
              patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
@@ -96,7 +81,8 @@ class TestApplyCmdHappyPath:
         mock_filler.fill.return_value = True
         mock_filler.platform = "Greenhouse"
 
-        with patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
              patch("careeros.cli.apply_cmd.Job.load", return_value=job), \
              patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
              patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
@@ -122,7 +108,8 @@ class TestApplyCmdFailurePaths:
 
     def test_job_not_found_exits_1(self, tmp_path):
         runtime = _mock_runtime(tmp_path)
-        with patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
              patch("careeros.cli.apply_cmd.Job.load", side_effect=FileNotFoundError):
             result = runner.invoke(apply_app, ["nonexistent"])
         assert result.exit_code == 1
@@ -133,7 +120,8 @@ class TestApplyCmdFailurePaths:
         now = datetime.now(timezone.utc).isoformat()
         job_no_url = Job(id="x", source="manual", url=None, company="Co", title="Role",
                          stage="saved", created_at=now, updated_at=now)
-        with patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
              patch("careeros.cli.apply_cmd.Job.load", return_value=job_no_url):
             result = runner.invoke(apply_app, ["x"])
         assert result.exit_code == 1
@@ -144,7 +132,8 @@ class TestApplyCmdFailurePaths:
         storage = MagicMock()
         storage.list.return_value = []
         runtime.storage = storage
-        with patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
              patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()):
             result = runner.invoke(apply_app, ["acme-sre-abc1"])
         assert result.exit_code == 1
@@ -152,7 +141,8 @@ class TestApplyCmdFailurePaths:
 
     def test_cover_letter_generation_failure_exits_1(self, tmp_path):
         runtime = _mock_runtime(tmp_path)
-        with patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
              patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
              patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
              patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
@@ -164,7 +154,8 @@ class TestApplyCmdFailurePaths:
 
     def test_user_quits_review_loop_exits_0(self, tmp_path):
         runtime = _mock_runtime(tmp_path)
-        with patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
              patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
              patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
              patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
@@ -180,7 +171,8 @@ class TestApplyCmdFailurePaths:
         mock_filler = MagicMock()
         mock_filler.can_handle.return_value = True
         mock_filler.platform = "Greenhouse"
-        with patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
              patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
              patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
              patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
@@ -200,7 +192,8 @@ class TestApplyCmdFailurePaths:
         mock_filler.can_handle.return_value = True
         mock_filler.fill.return_value = False
         mock_filler.platform = "Greenhouse"
-        with patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
              patch("careeros.cli.apply_cmd.Job.load", return_value=job), \
              patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
              patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
@@ -221,7 +214,8 @@ class TestApplyCmdFailurePaths:
         mock_filler = MagicMock()
         mock_filler.can_handle.return_value = True
         mock_filler.platform = "Greenhouse"
-        with patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
              patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
              patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
              patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
@@ -241,7 +235,8 @@ class TestApplyCmdFailurePaths:
         mock_filler.fill.return_value = True
         mock_filler.platform = "Greenhouse"
         mock_page = MagicMock()
-        with patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
              patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
              patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
              patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
@@ -262,7 +257,8 @@ class TestApplyCmdFailurePaths:
         mock_filler.fill.return_value = True
         mock_filler.platform = "Greenhouse"
         mock_page = MagicMock()
-        with patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
              patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
              patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
              patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
