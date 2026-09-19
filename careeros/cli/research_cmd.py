@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import urllib.parse
 
 import typer
 from rich import print as rprint
@@ -50,7 +51,7 @@ def company(
         raise typer.Exit(1)
 
     company_id = make_company_id(job_obj.company)
-    company_search_url = "https://www.linkedin.com/search/results/companies/?keywords=" + job_obj.company
+    company_search_url = "https://www.linkedin.com/search/results/companies/?keywords=" + urllib.parse.quote(job_obj.company)
 
     try:
         with launch_browser(headless=True) as (_, page):
