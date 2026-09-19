@@ -91,8 +91,15 @@ def send(
         break
 
     message_id = job + "__" + person
+    try:
+        existing_message = OutreachMessage.load(runtime.storage, message_id)
+        referral_state = existing_message.referral_state
+    except (FileNotFoundError, ValueError):
+        referral_state = "research"
+
     message = OutreachMessage(
-        id=message_id, job_id=job, person_id=person, draft_text=draft_text, created_at=_now(),
+        id=message_id, job_id=job, person_id=person, draft_text=draft_text,
+        referral_state=referral_state, created_at=_now(),
     )
     message.save(runtime.storage)
     runtime.record_activity(runtime.new_event(

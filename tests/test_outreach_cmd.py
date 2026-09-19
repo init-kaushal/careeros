@@ -112,6 +112,29 @@ class TestOutreachSend:
             result = runner.invoke(outreach_app, ["send", "--job", JOB_ID, "--person", PERSON_ID, "--workspace", ws_path])
         assert result.exit_code == 1
 
+    def test_resend_preserves_existing_referral_state(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path, with_email=True)
+        storage = LocalFilesystemStorage(ws_path)
+        now = datetime.now(timezone.utc).isoformat()
+        OutreachMessage(
+            id=MESSAGE_ID, job_id=JOB_ID, person_id=PERSON_ID,
+            draft_text="Hi Jane...", send_state="sent", referral_state="referral_requested",
+            created_at=now, sent_at=now,
+        ).save(storage)
+
+        with patch("careeros.cli.outreach_cmd.generate_outreach_message", return_value="Follow-up hi Jane..."), \
+             patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="a"), \
+             patch("careeros.runtime.local.Confirm.ask", return_value=True), \
+             patch("careeros.cli.outreach_cmd.send_email") as mock_send:
+            result = runner.invoke(outreach_app, ["send", "--job", JOB_ID, "--person", PERSON_ID, "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        mock_send.assert_called_once()
+        message = OutreachMessage.load(storage, MESSAGE_ID)
+        assert message.referral_state == "referral_requested"
+        assert message.send_state == "sent"
+        assert message.sent_at is not None
+
 
 class TestMarkReferralRequested:
     def test_sets_referral_state_and_logs(self, tmp_path):
