@@ -153,6 +153,10 @@ All workspace I/O goes through the `StorageProvider` protocol, so storage backen
 swapped without touching business logic. Every meaningful action — both outcomes of any
 approval decision, not just the success path — writes to the append-only activity log.
 
+See [ROADMAP.md](ROADMAP.md) for what's planned next: job source connectors + dedup, deep
+resume intelligence and per-job resume variants, a deterministic policy engine, a second real
+`AgentRuntime`, and outreach expansion.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
