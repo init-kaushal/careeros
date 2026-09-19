@@ -130,3 +130,18 @@ class Job(BaseModel):
         paths = [p for p in storage.list("jobs") if p.endswith(".json")]
         jobs = [cls.model_validate_json(storage.read(p).decode()) for p in paths]
         return sorted(jobs, key=lambda j: j.created_at, reverse=True)
+
+
+class AutomationPolicy(BaseModel):
+    auto_apply_min_score: int
+    max_auto_applies_per_run: int
+    boards: list[str]
+
+    def save(self, storage: StorageProvider) -> None:
+        storage.atomic_write("config/automation_policy.json", self.model_dump_json(indent=2).encode())
+
+    @classmethod
+    def load(cls, storage: StorageProvider) -> "AutomationPolicy":
+        if not storage.exists("config/automation_policy.json"):
+            raise FileNotFoundError("config/automation_policy.json not found in workspace")
+        return cls.model_validate_json(storage.read("config/automation_policy.json").decode())

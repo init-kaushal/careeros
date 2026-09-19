@@ -1,8 +1,9 @@
 import pytest
 from unittest.mock import MagicMock
-from careeros.runtime.factory import open_claude_code_runtime, open_local_runtime
+from careeros.runtime.factory import open_claude_code_runtime, open_local_runtime, open_automation_runtime
 from careeros.runtime.local import LocalRuntime
 from careeros.runtime.claude_code import ClaudeCodeRuntime
+from careeros.runtime.automation import AutomationRuntime
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace
 
@@ -42,3 +43,17 @@ def test_open_claude_code_runtime_missing_manifest_raises(tmp_path):
     callback = MagicMock()
     with pytest.raises(FileNotFoundError):
         open_claude_code_runtime(storage, approval_callback=callback)
+
+
+def test_open_automation_runtime_bootstraps_existing_workspace(tmp_path):
+    storage = LocalFilesystemStorage(str(tmp_path))
+    init_workspace(storage)
+    runtime = open_automation_runtime(storage)
+    assert isinstance(runtime, AutomationRuntime)
+    assert runtime.session_id
+
+
+def test_open_automation_runtime_missing_manifest_raises(tmp_path):
+    storage = LocalFilesystemStorage(str(tmp_path))
+    with pytest.raises(FileNotFoundError):
+        open_automation_runtime(storage)
