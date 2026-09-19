@@ -1,4 +1,4 @@
-from careeros.core.ids import make_company_id, make_person_id
+from careeros.core.ids import make_company_id, make_compensation_id, make_person_id
 
 
 def test_make_company_id_is_deterministic():
@@ -19,3 +19,15 @@ def test_make_person_id_differs_across_companies():
     id_a = make_person_id("Jane Doe", make_company_id("Acme Corp"))
     id_b = make_person_id("Jane Doe", make_company_id("Beta Inc"))
     assert id_a != id_b
+
+
+def test_make_compensation_id_is_non_deterministic():
+    id_a = make_compensation_id("Acme Corp", "Senior SRE")
+    id_b = make_compensation_id("Acme Corp", "Senior SRE")
+    assert id_a != id_b
+
+
+def test_make_compensation_id_includes_slugified_company_and_role():
+    comp_id = make_compensation_id("Acme Corp", "Senior SRE")
+    assert "acme-corp" in comp_id
+    assert "senior-sre" in comp_id

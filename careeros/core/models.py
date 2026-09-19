@@ -207,3 +207,31 @@ class OutreachMessage(BaseModel):
         if not storage.exists(path):
             raise FileNotFoundError("OutreachMessage " + repr(message_id) + " not found")
         return cls.model_validate_json(storage.read(path).decode())
+
+
+class CompensationDataPoint(BaseModel):
+    id: str
+    job_id: str
+    role: str
+    seniority: str | None = None
+    geo: str | None = None
+    company: str | None = None
+    currency: str = "USD"
+    base_min: int | None = None
+    base_max: int | None = None
+    bonus: str | None = None
+    equity: str | None = None
+    source: str = "levels.fyi"
+    source_url: str | None = None
+    confidence: str = "low"
+    researched_at: str
+
+    def save(self, storage: StorageProvider) -> None:
+        storage.atomic_write("compensation/" + self.id + ".json", self.model_dump_json(indent=2).encode())
+
+    @classmethod
+    def load(cls, storage: StorageProvider, data_point_id: str) -> "CompensationDataPoint":
+        path = "compensation/" + data_point_id + ".json"
+        if not storage.exists(path):
+            raise FileNotFoundError("CompensationDataPoint " + repr(data_point_id) + " not found")
+        return cls.model_validate_json(storage.read(path).decode())
