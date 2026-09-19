@@ -4,12 +4,13 @@ from rich import print as rprint
 from rich.prompt import Confirm, Prompt
 
 from careeros.config import GlobalConfig
-from careeros.core.activity import ActivityLogger
 from careeros.core.models import Goals, Preferences, Profile, Skills
+from careeros.runtime.local import LocalRuntime
 from careeros.skills.profile_extract import extract_basic_profile
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace
 import json
+import uuid
 
 
 def onboard_cmd(
@@ -32,8 +33,8 @@ def onboard_cmd(
         rprint(f"[red]Workspace already exists at {ws_path}.[/red]")
         rprint("Run [bold]careeros workspace status[/bold] to inspect it.")
         raise typer.Exit(1)
-    logger = ActivityLogger(ctx.storage)
-    logger.log(logger.new_event("workspace_created", "init", f"Workspace initialized at {ws_path}"))
+    runtime = LocalRuntime(storage, ctx, session_id=uuid.uuid4().hex)
+    runtime.record_activity(runtime.new_event("workspace_created", "init", "Workspace initialized at " + ws_path))
     rprint(f"\n[green]Workspace created at {ws_path}[/green]")
 
     # Step 2: resume
@@ -44,8 +45,10 @@ def onboard_cmd(
         raise typer.Exit(1)
 
     resume_text = resume_file.read_text()
-    storage.atomic_write("resumes/master.md", resume_text.encode())
-    logger.log(logger.new_event("resume_imported", "import", f"Resume imported from {resume_path_str}", entity_type="resume"))
+    runtime.storage.atomic_write("resumes/master.md", resume_text.encode())
+    runtime.record_activity(runtime.new_event(
+        "resume_imported", "import", "Resume imported from " + resume_path_str, entity_type="resume"
+    ))
 
     # Step 3: profile extraction
     rprint("\nExtracting profile from resume...")
@@ -64,9 +67,11 @@ def onboard_cmd(
     if not Confirm.ask("\nDoes this look right?", default=True):
         rprint("[yellow]Edit profile/profile.json in your workspace to correct it.[/yellow]")
 
-    profile.save(storage)
-    skills.save(storage)
-    logger.log(logger.new_event("profile_extracted", "extract", f"Profile extracted: {profile.name}", entity_type="profile"))
+    profile.save(runtime.storage)
+    skills.save(runtime.storage)
+    runtime.record_activity(runtime.new_event(
+        "profile_extracted", "extract", "Profile extracted: " + (profile.name or ""), entity_type="profile"
+    ))
 
     # Step 4: preferences
     rprint("\n[bold]Job Preferences[/bold]")
@@ -89,7 +94,7 @@ def onboard_cmd(
         minimum_compensation=min_comp,
         locations=locations,
     )
-    prefs.save(storage)
+    prefs.save(runtime.storage)
 
     # Step 5: job sources
     rprint("\n[bold]Job Sources[/bold]")
@@ -100,7 +105,7 @@ def onboard_cmd(
         for s in sources_raw.split(",")
         if s.strip()
     ]
-    storage.atomic_write("config/sources.json", json.dumps({"sources": sources}, indent=2).encode())
+    runtime.storage.atomic_write("config/sources.json", json.dumps({"sources": sources}, indent=2).encode())
 
     # Step 6: goals (optional)
     goals = Goals()
@@ -111,11 +116,11 @@ def onboard_cmd(
             short_term=[g.strip() for g in st_raw.split(",") if g.strip()],
             long_term=[g.strip() for g in lt_raw.split(",") if g.strip()],
         )
-    goals.save(storage)
+    goals.save(runtime.storage)
 
     # Save global config
     GlobalConfig(workspace_path=ws_path).save()
-    logger.log(logger.new_event("onboard_complete", "onboard", "Onboarding complete"))
+    runtime.record_activity(runtime.new_event("onboard_complete", "onboard", "Onboarding complete"))
 
     rprint(f"\n[bold green]CareerOS ready.[/bold green]")
     rprint(f"Workspace: {ws_path}")

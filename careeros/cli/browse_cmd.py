@@ -14,13 +14,12 @@ from careeros.browser.scrapers.indeed import IndeedScraper
 from careeros.browser.scrapers.linkedin import LinkedInScraper
 from careeros.browser.scrapers.wellfound import WellfoundScraper
 from careeros.config import GlobalConfig
-from careeros.core.activity import ActivityLogger
 from careeros.core.job_id import make_job_id
 from careeros.core.models import Goals, Job, Profile, Skills
+from careeros.runtime.factory import open_local_runtime
 from careeros.skills.browse_query import job_query_from_profile
 from careeros.skills.job_score import score_job
 from careeros.storage.filesystem import LocalFilesystemStorage
-from careeros.workspace.manager import open_workspace
 
 browse_app = typer.Typer(name="browse", help="Search job boards using your browser session.")
 console = Console()
@@ -64,21 +63,20 @@ def browse_cmd(
         rprint("[red]Provide --url when using --board url.[/red]")
         raise typer.Exit(1)
 
-    storage = _get_storage(workspace)
     try:
-        ctx = open_workspace(storage)
+        runtime = open_local_runtime(_get_storage(workspace))
     except FileNotFoundError:
         rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
         raise typer.Exit(1)
 
     try:
-        profile = Profile.load(storage)
+        profile = Profile.load(runtime.storage)
     except FileNotFoundError:
         rprint("[red]No profile found. Run 'careeros onboard' first.[/red]")
         raise typer.Exit(1)
 
-    skills = Skills.load_or_empty(storage)
-    goals = Goals.load_or_empty(storage)
+    skills = Skills.load_or_empty(runtime.storage)
+    goals = Goals.load_or_empty(runtime.storage)
     query = job_query_from_profile(profile, goals) if board != "url" else (url or "")
     scraper = GenericScraper() if board == "url" else SCRAPERS[board]
 
@@ -123,10 +121,9 @@ def browse_cmd(
     if picks_str.strip().lower() == "q":
         return
 
-    logger = ActivityLogger(ctx.storage)
-    now = _now()
     saved = 0
     seen_indices: set[int] = set()
+    now = _now()
     for part in picks_str.split():
         if not part.isdigit():
             continue
@@ -147,8 +144,8 @@ def browse_cmd(
             created_at=now,
             updated_at=now,
         )
-        job.save(storage)
-        logger.log(logger.new_event(
+        job.save(runtime.storage)
+        runtime.record_activity(runtime.new_event(
             "job_added", "browse",
             "Job saved from " + p["source_board"] + ": " + p["company"] + " — " + p["title"],
             entity_type="job", entity_id=job_id,
