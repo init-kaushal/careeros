@@ -50,13 +50,11 @@ def onboard_cmd(
         "resume_imported", "import", "Resume imported from " + resume_path_str, entity_type="resume"
     ))
 
-    # Step 3: profile extraction
+    # Step 3: profile extraction — extract_basic_profile never raises; on any
+    # failure it returns an empty Profile()/Skills(), same sentinel pattern
+    # every other skill in this codebase uses.
     rprint("\nExtracting profile from resume...")
-    try:
-        profile, skills = extract_basic_profile(resume_text)
-    except Exception as e:
-        rprint(f"[yellow]Extraction failed ({e}). Starting with empty profile.[/yellow]")
-        profile, skills = Profile(), Skills()
+    profile, skills = extract_basic_profile(resume_text)
 
     rprint("\n[bold]Extracted profile:[/bold]")
     rprint(f"  Name:       {profile.name or '(not found)'}")

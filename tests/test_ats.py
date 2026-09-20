@@ -37,6 +37,21 @@ def _mock_urlopen(payload: object, status: int = 200) -> MagicMock:
     return resp
 
 
+def test_fetch_greenhouse_url_encodes_company():
+    with patch("urllib.request.urlopen", return_value=_mock_urlopen(GH_FIXTURE)) as mock_urlopen:
+        fetch_greenhouse("acme/../../etc")
+    requested_url = mock_urlopen.call_args[0][0].full_url
+    assert "acme%2F..%2F..%2Fetc" in requested_url
+    assert "/../" not in requested_url
+
+
+def test_fetch_lever_url_encodes_company():
+    with patch("urllib.request.urlopen", return_value=_mock_urlopen(LEVER_FIXTURE)) as mock_urlopen:
+        fetch_lever("stripe & co")
+    requested_url = mock_urlopen.call_args[0][0].full_url
+    assert "stripe%20%26%20co" in requested_url
+
+
 def test_fetch_greenhouse_parses_jobs():
     with patch("urllib.request.urlopen", return_value=_mock_urlopen(GH_FIXTURE)):
         result = fetch_greenhouse("acme")

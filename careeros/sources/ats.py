@@ -1,5 +1,6 @@
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
 
@@ -47,7 +48,7 @@ _LEVER_BASE = "https://api.lever.co/v0/postings"
 
 
 def fetch_greenhouse(company: str) -> list[dict]:
-    data = _get_json(f"{_GH_BASE}/{company}/jobs?content=true")
+    data = _get_json(_GH_BASE + "/" + urllib.parse.quote(company, safe="") + "/jobs?content=true")
     result = []
     for job in data.get("jobs", []):
         try:
@@ -66,7 +67,7 @@ def fetch_greenhouse(company: str) -> list[dict]:
 
 
 def fetch_lever(company: str) -> list[dict]:
-    data = _get_json(f"{_LEVER_BASE}/{company}?mode=json")
+    data = _get_json(_LEVER_BASE + "/" + urllib.parse.quote(company, safe="") + "?mode=json")
     result = []
     for posting in data:
         try:

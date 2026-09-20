@@ -4,6 +4,7 @@ import litellm
 from careeros.core.models import Profile, Skill, Skills
 
 DEFAULT_LLM_MODEL = "claude-haiku-4-5-20251001"
+_CONTENT_CAP = 4000
 
 # Instruction-only templates — resume text is concatenated, never interpolated,
 # so braces in user content cannot cause KeyError or prompt injection via formatting.
@@ -48,21 +49,25 @@ def extract_basic_profile(
     model: str | None = None,
 ) -> tuple[Profile, Skills]:
     effective_model = model or os.environ.get("CAREEROS_MODEL", DEFAULT_LLM_MODEL)
+    capped_text = resume_text[:_CONTENT_CAP]
 
-    profile_resp = litellm.completion(
-        model=effective_model,
-        max_tokens=512,
-        messages=[{"role": "user", "content": _PROFILE_INSTRUCTIONS + resume_text}],
-    )
-    profile_data = _parse_json(profile_resp.choices[0].message.content)
-    profile = Profile.model_validate(profile_data)
+    try:
+        profile_resp = litellm.completion(
+            model=effective_model,
+            max_tokens=512,
+            messages=[{"role": "user", "content": _PROFILE_INSTRUCTIONS + capped_text}],
+        )
+        profile_data = _parse_json(profile_resp.choices[0].message.content)
+        profile = Profile.model_validate(profile_data)
 
-    skills_resp = litellm.completion(
-        model=effective_model,
-        max_tokens=1024,
-        messages=[{"role": "user", "content": _SKILLS_INSTRUCTIONS + resume_text}],
-    )
-    skills_data = _parse_json(skills_resp.choices[0].message.content)
-    skills = Skills(skills=[Skill(**s) for s in skills_data.get("skills", [])])
+        skills_resp = litellm.completion(
+            model=effective_model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": _SKILLS_INSTRUCTIONS + capped_text}],
+        )
+        skills_data = _parse_json(skills_resp.choices[0].message.content)
+        skills = Skills(skills=[Skill(**s) for s in skills_data.get("skills", [])])
 
-    return profile, skills
+        return profile, skills
+    except Exception:
+        return Profile(), Skills()

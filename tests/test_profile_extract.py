@@ -87,6 +87,34 @@ def test_model_param_overrides_env(monkeypatch):
         assert call.kwargs["model"] == "ollama/llama3.2"
 
 
+def test_returns_empty_sentinel_on_llm_failure():
+    with patch("litellm.completion", side_effect=Exception("API error")):
+        profile, skills = extract_basic_profile("dummy resume")
+    assert profile == Profile()
+    assert skills == Skills()
+
+
+def test_returns_empty_sentinel_on_malformed_json():
+    with patch("litellm.completion", side_effect=_mock_completion(["not json at all"])):
+        profile, skills = extract_basic_profile("dummy resume")
+    assert profile == Profile()
+    assert skills == Skills()
+
+
+def test_resume_text_truncated_at_4000_chars():
+    profile_json = '{"name":"Eve","title":null,"years_of_experience":null,"location":null,"email":null,"summary":null}'
+    skills_json = '{"skills":[]}'
+    long_resume = "x" * 10000
+
+    with patch("litellm.completion", side_effect=_mock_completion([profile_json, skills_json])) as mock_comp:
+        extract_basic_profile(long_resume)
+
+    first_call_messages = mock_comp.call_args_list[0].kwargs["messages"]
+    sent_content = first_call_messages[0]["content"]
+    assert ("x" * 4000) in sent_content
+    assert ("x" * 4001) not in sent_content
+
+
 def test_resume_text_included_in_prompt():
     profile_json = '{"name":"Eve","title":null,"years_of_experience":null,"location":null,"email":null,"summary":null}'
     skills_json = '{"skills":[]}'

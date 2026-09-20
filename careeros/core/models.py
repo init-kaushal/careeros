@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from careeros.storage.interface import StorageProvider
 
 
@@ -132,10 +132,24 @@ class Job(BaseModel):
         return sorted(jobs, key=lambda j: j.created_at, reverse=True)
 
 
+_VALID_AUTOMATION_BOARDS = ("linkedin", "indeed", "wellfound")
+
+
 class AutomationPolicy(BaseModel):
-    auto_apply_min_score: int
-    max_auto_applies_per_run: int
+    auto_apply_min_score: int = Field(ge=1, le=100)
+    max_auto_applies_per_run: int = Field(ge=1, le=50)
     boards: list[str]
+
+    @field_validator("boards")
+    @classmethod
+    def _validate_boards(cls, value: list[str]) -> list[str]:
+        unknown = [b for b in value if b not in _VALID_AUTOMATION_BOARDS]
+        if unknown:
+            raise ValueError(
+                "Unknown board(s): " + ", ".join(unknown)
+                + ". Valid: " + ", ".join(_VALID_AUTOMATION_BOARDS)
+            )
+        return value
 
     def save(self, storage: StorageProvider) -> None:
         storage.atomic_write("config/automation_policy.json", self.model_dump_json(indent=2).encode())
