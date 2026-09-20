@@ -376,6 +376,33 @@ class TestBrowseErrorHandling:
         assert "already in use" in result.output
         assert "Traceback" not in result.output
 
+    def test_board_url_saves_job_with_host_derived_company(self, tmp_path):
+        # Review CRITICAL 1: GenericScraper used to hardcode company="", which
+        # posting_from_scrape now rejects, so every --board url listing was
+        # silently skipped. This drives the REAL GenericScraper (not patched,
+        # unlike test_board_url_needs_no_session which quits at the prompt
+        # before saving anything) through the actual save path.
+        ws_path = _setup_workspace(tmp_path)
+        mock_page = MagicMock()
+        mock_page.url = "https://www.boards.example.com/careers"
+        mock_page.content.return_value = '<a href="/jobs/123">Senior SRE</a>'
+        with patch("careeros.cli.browse_cmd.launch_browser", _mock_launch(mock_page)), \
+             patch("careeros.cli.browse_cmd.fetch_jd_text", return_value="jd"), \
+             patch("careeros.cli.browse_cmd.score_job", return_value=_mock_score()), \
+             patch("careeros.cli.browse_cmd.Prompt.ask", return_value="1"):
+            result = runner.invoke(
+                browse_app,
+                ["--board", "url", "--url", "https://www.boards.example.com/careers",
+                 "--workspace", ws_path],
+            )
+
+        assert result.exit_code == 0
+        assert "Saved 1 job(s)" in result.output
+        storage = LocalFilesystemStorage(ws_path)
+        jobs = Job.list_all(storage)
+        assert len(jobs) == 1
+        assert jobs[0].company == "boards.example.com"
+
     def test_locked_profile_during_preflight_reports_a_plain_message(self, tmp_path):
         # The pre-flight (require_board_session -> check_board_sessions) is the
         # FIRST thing to open the isolated profile, ahead of browse_cmd's own

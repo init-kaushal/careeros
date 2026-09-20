@@ -36,6 +36,14 @@ class GenericScraper:
         except Exception:
             return []
         results = self.parse_listings(html)[:limit]
+        # parse_listings is pure and has no access to the page, so it cannot
+        # know the host. The host is a real, stable dedup key — unlike the
+        # "" company placeholder it replaces, which made every listing here
+        # fail posting_from_scrape's empty-company guard and get skipped.
+        host = urllib.parse.urlsplit(page.url).netloc
+        if host.startswith("www."):
+            host = host[len("www."):]
         for r in results:
             r["url"] = urllib.parse.urljoin(page.url, r["url"])
+            r["company"] = host
         return results

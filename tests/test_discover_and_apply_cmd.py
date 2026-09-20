@@ -801,3 +801,51 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.build_source", return_value=source):
             result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
         assert result.exit_code == 1
+
+    def test_two_sources_surfacing_one_posting_applies_once(self, tmp_path):
+        # Review CRITICAL 2: `eligible` used to be built per posting, not per
+        # job. When the browser (linkedin) and an API source (greenhouse)
+        # surface the same posting in one run, both discovery dicts merge to
+        # the same job_id, both carry already_applied=False from discovery
+        # time, and the apply loop never re-read persisted state — so it
+        # applied twice. Reproduced here with two distinct sources resolving
+        # to one Job via the fuzzy company+title tier, and asserted fixed.
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5,
+                                  boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        storage = LocalFilesystemStorage(ws_path)
+        storage.atomic_write("config/sources.json", json.dumps({"sources": [
+            {"source": "greenhouse", "board": "acme", "company": "Acme"}]}).encode())
+
+        mock_filler = MagicMock()
+        mock_filler.can_handle.return_value = True
+        mock_filler.fill.return_value = True
+        mock_filler.platform = "Greenhouse"
+        mock_page = MagicMock()
+
+        source = MagicMock()
+        source.name = "greenhouse"
+        source.fetch.return_value = [Posting(
+            source="greenhouse", title="Senior SRE", company="Acme",
+            url="https://boards.greenhouse.io/acme/jobs/1")]
+
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS",
+                   {"linkedin": MagicMock(search=MagicMock(return_value=[
+                       _posting(company="Acme", title="Senior SRE",
+                                url="https://www.linkedin.com/jobs/view/9")]))}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
+             patch("careeros.cli.discover_and_apply_cmd.build_source", return_value=source), \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job",
+                   return_value={"score": 95, "reasoning": "great"}), \
+             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert mock_filler.fill.call_count == 1
+        jobs = Job.list_all(storage)
+        assert len(jobs) == 1
+        assert jobs[0].stage == "applied"

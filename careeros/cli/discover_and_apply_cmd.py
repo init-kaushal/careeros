@@ -175,11 +175,20 @@ def discover_and_apply_cmd(
         else:
             duplicate_count += 1
 
-    eligible = sorted(
-        [p for p in discovered
-         if p.get("job_id") and p["score"] >= policy.auto_apply_min_score and not p.get("already_applied")],
-        key=lambda p: p["score"], reverse=True,
-    )
+    # Two sources can surface the same posting in one run; both discovery
+    # dicts then carry the same job_id after save_new's merge. Dedupe here,
+    # keeping the highest-scoring entry, so neither the max_auto_applies_per_run
+    # cap nor the reported counts are inflated by a duplicate that would never
+    # actually be applied to twice (see the job.applied_at re-read below).
+    best_by_job_id: dict[str, dict] = {}
+    for p in discovered:
+        if not p.get("job_id") or p["score"] < policy.auto_apply_min_score or p.get("already_applied"):
+            continue
+        job_id = p["job_id"]
+        current = best_by_job_id.get(job_id)
+        if current is None or p["score"] > current["score"]:
+            best_by_job_id[job_id] = p
+    eligible = sorted(best_by_job_id.values(), key=lambda p: p["score"], reverse=True)
 
     resume_entries = sorted([
         p for p in runtime.storage.list("resumes/versions/")
@@ -201,6 +210,12 @@ def discover_and_apply_cmd(
 
         job_id = p["job_id"]
         job = Job.load(runtime.storage, job_id)
+        if job.applied_at is not None:
+            # Re-read persisted state rather than trusting discovery-time
+            # already_applied: this also covers an out-of-band apply that
+            # happened mid-run (e.g. via a concurrent `careeros apply`).
+            skipped_count += 1
+            continue
         policy_result = policy_engine.check_job(job)
         if policy_result.blocked:
             runtime.record_activity(runtime.new_event(
