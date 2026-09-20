@@ -10,6 +10,7 @@ def _patch_launch(monkeypatch, context, record=None):
     @contextmanager
     def fake_launch(headless=False):
         if record is not None:
+            record["opens"] = record.get("opens", 0) + 1
             record["headless"] = headless
             record["entered"] = True
         try:
@@ -63,7 +64,7 @@ def test_multiple_boards_resolved_in_one_context_open(monkeypatch):
     _patch_launch(monkeypatch, context, record)
     result = check_board_sessions(["linkedin", "wellfound"])
     assert result == {"linkedin": True, "wellfound": False}
-    assert record["entered"] is True
+    assert record["opens"] == 1
 
 
 def test_unknown_board_is_false_and_opens_no_browser(monkeypatch):
@@ -98,4 +99,21 @@ def test_context_is_closed_even_when_cookie_read_raises(monkeypatch):
     record = {}
     _patch_launch(monkeypatch, context, record)
     assert check_board_sessions(["linkedin"]) == {"linkedin": False}
+    assert record["exited"] is True
+
+
+def test_one_board_failing_does_not_stop_the_others(monkeypatch):
+    context = MagicMock()
+
+    def cookies(domain):
+        if domain == "https://www.linkedin.com":
+            raise RuntimeError("transient browser error")
+        return [{"name": "_wellfound_session", "value": "x"}]
+
+    context.cookies.side_effect = cookies
+    record = {}
+    _patch_launch(monkeypatch, context, record)
+    result = check_board_sessions(["linkedin", "wellfound"])
+    assert result == {"linkedin": False, "wellfound": True}
+    assert record["opens"] == 1
     assert record["exited"] is True

@@ -28,6 +28,10 @@ def check_board_sessions(names: list[str]) -> dict[str, bool]:
             board = BOARDS[name]
             try:
                 cookies = context.cookies(board.cookie_domain)
+            except (AttributeError, TypeError):
+                # A malformed Board or a changed Playwright signature is a bug,
+                # not a signed-out user. Never let it read as "unauthorized".
+                raise
             except Exception:
                 result[name] = False
                 continue
