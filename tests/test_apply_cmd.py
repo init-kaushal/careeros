@@ -321,6 +321,35 @@ class TestApplyCmdFailurePaths:
         assert "careeros browser login --board linkedin" in result.output
         mock_browser.assert_not_called()
 
+    def test_linkedin_apply_reports_a_plain_message_when_profile_is_busy(self, tmp_path):
+        # require_board_session (via preflight -> check_board_sessions) is the
+        # first thing to open the isolated profile for a LinkedIn apply, ahead
+        # of apply_cmd's own try/except around its later launch_browser call.
+        # Patch the real seam so this exercises the pre-flight path itself.
+        from careeros.browser.driver import BrowserProfileBusy
+        from careeros.browser.fillers.linkedin import LinkedInFiller
+
+        runtime = _mock_runtime(tmp_path)
+        job = _make_job(url="https://www.linkedin.com/jobs/view/1")
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+             patch("careeros.cli.apply_cmd.Job.load", return_value=job), \
+             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Dear team"), \
+             patch("careeros.cli.apply_cmd.FILLERS", [LinkedInFiller()]), \
+             patch("careeros.browser.session.launch_browser",
+                   side_effect=BrowserProfileBusy("already in use by another CareerOS process")), \
+             patch("careeros.cli.apply_cmd.launch_browser") as mock_browser, \
+             patch("careeros.cli.apply_cmd.Prompt.ask", side_effect=["a"]):
+            result = runner.invoke(apply_app, ["acme-sre-abc1"])
+
+        assert result.exit_code == 1
+        assert "already in use" in result.output
+        assert "Traceback" not in result.output
+        mock_browser.assert_not_called()
+
     def test_greenhouse_apply_needs_no_session(self, tmp_path):
         from careeros.browser.fillers.greenhouse import GreenhouseFiller
 

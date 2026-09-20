@@ -67,7 +67,11 @@ def discover_and_apply_cmd(
     skills = Skills.load_or_empty(runtime.storage)
     goals = Goals.load_or_empty(runtime.storage)
     boards = [board] if board else policy.boards
-    sessions = check_board_sessions(boards)
+    try:
+        sessions = check_board_sessions(boards)
+    except BrowserProfileBusy as exc:
+        rprint("[red]" + str(exc) + "[/red]")
+        raise typer.Exit(1)
     unauthorized = [b for b in boards if not sessions.get(b)]
     for b in unauthorized:
         runtime.record_activity(runtime.new_event(
@@ -123,7 +127,7 @@ def discover_and_apply_cmd(
         existing = existing_by_key.get(key)
         if existing is not None:
             p["job_id"] = existing.id
-            p["already_applied"] = existing.stage == "applied"
+            p["already_applied"] = existing.applied_at is not None
             duplicate_count += 1
             continue
 

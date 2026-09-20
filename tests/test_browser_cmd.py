@@ -110,6 +110,41 @@ def test_status_lists_authorized_and_unauthorized_boards():
     assert "indeed" in result.output
 
 
+def test_login_reports_a_plain_message_when_profile_is_busy(tmp_path):
+    from careeros.browser.driver import BrowserProfileBusy
+
+    ws = _workspace(tmp_path)
+    with patch(
+        "careeros.cli.browser_cmd.launch_browser",
+        side_effect=BrowserProfileBusy("already in use by another CareerOS process"),
+    ):
+        result = runner.invoke(app, ["browser", "login", "--board", "linkedin", "--workspace", str(ws)])
+    assert result.exit_code == 1
+    assert "already in use" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_login_reports_a_plain_message_when_goto_raises(tmp_path):
+    # A generic failure inside the login loop (e.g. the user closes the window
+    # mid-login) must not escape as a raw traceback either, and must read
+    # distinctly from the BrowserProfileBusy message.
+    ws = _workspace(tmp_path)
+    context = MagicMock()
+    page = MagicMock()
+    page.goto.side_effect = RuntimeError("Target page, context or browser has been closed")
+
+    @contextmanager
+    def fake_launch(headless=False):
+        yield context, page
+
+    with patch("careeros.cli.browser_cmd.launch_browser", fake_launch):
+        result = runner.invoke(app, ["browser", "login", "--board", "linkedin", "--workspace", str(ws)])
+    assert result.exit_code == 1
+    assert "Login failed" in result.output
+    assert "already in use" not in result.output
+    assert "Traceback" not in result.output
+
+
 def test_status_needs_no_workspace(tmp_path, monkeypatch):
     monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "missing.json")
     with patch(
@@ -119,3 +154,16 @@ def test_status_needs_no_workspace(tmp_path, monkeypatch):
         result = runner.invoke(app, ["browser", "status"])
     assert result.exit_code == 0
     assert "No workspace configured" not in result.output
+
+
+def test_status_reports_a_plain_message_when_profile_is_busy():
+    from careeros.browser.driver import BrowserProfileBusy
+
+    with patch(
+        "careeros.cli.browser_cmd.check_board_sessions",
+        side_effect=BrowserProfileBusy("already in use by another CareerOS process"),
+    ):
+        result = runner.invoke(app, ["browser", "status"])
+    assert result.exit_code == 1
+    assert "already in use" in result.output
+    assert "Traceback" not in result.output

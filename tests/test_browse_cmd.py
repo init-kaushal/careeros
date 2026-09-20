@@ -316,3 +316,23 @@ class TestBrowseErrorHandling:
         assert result.exit_code == 1
         assert "already in use" in result.output
         assert "Traceback" not in result.output
+
+    def test_locked_profile_during_preflight_reports_a_plain_message(self, tmp_path):
+        # The pre-flight (require_board_session -> check_board_sessions) is the
+        # FIRST thing to open the isolated profile, ahead of browse_cmd's own
+        # try/except around its later launch_browser call. Patch the real seam
+        # (careeros.browser.session.launch_browser) rather than check_board_sessions
+        # itself, so this exercises the actual pre-flight path, not a bypass of it.
+        from careeros.browser.driver import BrowserProfileBusy
+
+        ws_path = _setup_workspace(tmp_path)
+        with patch(
+            "careeros.browser.session.launch_browser",
+            side_effect=BrowserProfileBusy("already in use by another CareerOS process"),
+        ):
+            result = runner.invoke(
+                browse_app, ["--board", "linkedin", "--workspace", ws_path]
+            )
+        assert result.exit_code == 1
+        assert "already in use" in result.output
+        assert "Traceback" not in result.output

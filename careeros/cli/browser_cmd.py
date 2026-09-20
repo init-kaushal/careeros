@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.table import Table
 
 from careeros.browser.boards import BOARDS
-from careeros.browser.driver import get_careeros_profile_path, launch_browser
+from careeros.browser.driver import BrowserProfileBusy, get_careeros_profile_path, launch_browser
 from careeros.browser.session import check_board_sessions
 from careeros.config import GlobalConfig
 from careeros.runtime.factory import open_local_runtime
@@ -53,15 +53,22 @@ def login(
     rprint("[yellow]Sign in in the browser window. CareerOS detects it and closes automatically.[/yellow]")
 
     authorized = False
-    with launch_browser(headless=False) as (context, page):
-        page.goto(board_obj.login_url, timeout=30000)
-        deadline = time.monotonic() + _LOGIN_TIMEOUT_SECONDS
-        while time.monotonic() < deadline:
-            cookies = context.cookies(board_obj.cookie_domain)
-            if any(c.get("name") == board_obj.session_cookie for c in cookies):
-                authorized = True
-                break
-            time.sleep(_POLL_INTERVAL_SECONDS)
+    try:
+        with launch_browser(headless=False) as (context, page):
+            page.goto(board_obj.login_url, timeout=30000)
+            deadline = time.monotonic() + _LOGIN_TIMEOUT_SECONDS
+            while time.monotonic() < deadline:
+                cookies = context.cookies(board_obj.cookie_domain)
+                if any(c.get("name") == board_obj.session_cookie for c in cookies):
+                    authorized = True
+                    break
+                time.sleep(_POLL_INTERVAL_SECONDS)
+    except BrowserProfileBusy as exc:
+        rprint("[red]" + str(exc) + "[/red]")
+        raise typer.Exit(1)
+    except Exception as exc:
+        rprint("[red]Login failed: " + str(exc) + "[/red]")
+        raise typer.Exit(1)
 
     if not authorized:
         rprint(
@@ -82,7 +89,11 @@ def login(
 def status() -> None:
     """Show which boards have an authorized session. Needs no workspace."""
     names = list(BOARDS)
-    sessions = check_board_sessions(names)
+    try:
+        sessions = check_board_sessions(names)
+    except BrowserProfileBusy as exc:
+        rprint("[red]" + str(exc) + "[/red]")
+        raise typer.Exit(1)
 
     table = Table(show_header=True)
     table.add_column("Board")

@@ -161,6 +161,26 @@ class TestResearchSessionPreflight:
         assert result.exit_code == 1
         mock_browser.assert_not_called()
 
+    def test_research_company_locked_profile_reports_a_plain_message(self, tmp_path):
+        # require_board_session is the first thing to open the isolated
+        # profile here, ahead of research_cmd's own try/except around its
+        # later launch_browser call. Patch the real seam
+        # (careeros.browser.session.launch_browser), not check_board_sessions,
+        # so this exercises the actual pre-flight path.
+        from careeros.browser.driver import BrowserProfileBusy
+
+        ws_path = _setup_workspace(tmp_path)
+        with patch(
+            "careeros.browser.session.launch_browser",
+            side_effect=BrowserProfileBusy("already in use by another CareerOS process"),
+        ):
+            result = runner.invoke(
+                research_app, ["company", "--job", "acme-sre-abc1", "--workspace", ws_path]
+            )
+        assert result.exit_code == 1
+        assert "already in use" in result.output
+        assert "Traceback" not in result.output
+
     def test_research_compensation_needs_no_session(self, tmp_path):
         ws_path = _setup_workspace(tmp_path)
         with patch("careeros.cli.preflight.check_board_sessions") as cbs, \

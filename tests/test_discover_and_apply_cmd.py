@@ -139,6 +139,92 @@ class TestDiscoverAndApplyCmd:
         assert "careeros browser login" in result.output
         assert launches == []
 
+    def test_locked_profile_during_session_check_reports_a_plain_message(self, tmp_path):
+        # check_board_sessions is called bare here (not through preflight),
+        # and it's the first thing to open the isolated profile in this
+        # command. Patch the real seam (careeros.browser.session.launch_browser)
+        # so this exercises check_board_sessions's actual implementation
+        # raising, not a stand-in for it.
+        from careeros.browser.driver import BrowserProfileBusy
+
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        with patch(
+            "careeros.browser.session.launch_browser",
+            side_effect=BrowserProfileBusy("already in use by another CareerOS process"),
+        ):
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+        assert result.exit_code == 1
+        assert "already in use" in result.output
+        assert "Traceback" not in result.output
+
+    def test_interviewing_job_with_applied_at_is_not_reapplied(self, tmp_path):
+        # Review finding: dedup previously keyed "already_applied" off
+        # stage == "applied", so a job advanced to interviewing/offer/closed
+        # (routine via `careeros job update --stage`) would be re-applied to
+        # if the posting were rediscovered. applied_at persists across later
+        # stage changes and is the correct signal.
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        storage = LocalFilesystemStorage(ws_path)
+        now = datetime.now(timezone.utc).isoformat()
+        Job(
+            id="acme-sre-existing", source="browse", url="https://boards.greenhouse.io/acme/jobs/1",
+            company="Acme", title="Senior SRE", stage="interviewing",
+            applied_at=now, created_at=now, updated_at=now,
+        ).save(storage)
+        mock_filler = MagicMock()
+        mock_filler.can_handle.return_value = True
+
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
+             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+
+        assert result.exit_code == 0
+        mock_filler.fill.assert_not_called()
+        jobs = Job.list_all(storage)
+        assert len(jobs) == 1
+        assert jobs[0].stage == "interviewing"
+
+    def test_saved_job_without_applied_at_is_still_eligible(self, tmp_path):
+        # Regression guard for the fix above: a job that was saved but never
+        # actually applied to must still be eligible for auto-apply.
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        storage = LocalFilesystemStorage(ws_path)
+        now = datetime.now(timezone.utc).isoformat()
+        Job(
+            id="acme-sre-existing", source="browse", url="https://boards.greenhouse.io/acme/jobs/1",
+            company="Acme", title="Senior SRE", stage="saved",
+            applied_at=None, created_at=now, updated_at=now,
+        ).save(storage)
+        mock_filler = MagicMock()
+        mock_filler.can_handle.return_value = True
+        mock_filler.fill.return_value = True
+        mock_filler.platform = "Greenhouse"
+        mock_page = MagicMock()
+
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
+             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+
+        assert result.exit_code == 0
+        mock_filler.fill.assert_called_once()
+        jobs = Job.list_all(storage)
+        assert len(jobs) == 1
+        assert jobs[0].stage == "applied"
+
     def test_missing_policy_exits_1(self, tmp_path):
         ws_path = _setup_workspace(tmp_path, policy=None)
         result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
