@@ -221,6 +221,55 @@ class TestDiscoverAndApplyCmd:
         applied_jobs = [j for j in jobs if j.stage == "applied"]
         assert applied_jobs[0].company == "Beta"
 
+    def test_second_run_does_not_reapply_to_already_applied_job(self, tmp_path):
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        mock_filler = MagicMock()
+        mock_filler.can_handle.return_value = True
+        mock_filler.fill.return_value = True
+        mock_filler.platform = "Greenhouse"
+        mock_page = MagicMock()
+
+        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
+             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+            first = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+            second = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+
+        assert first.exit_code == 0
+        assert second.exit_code == 0
+        # The identical posting rediscovered on the second run must not create a
+        # second Job record or trigger a second real application.
+        assert mock_filler.fill.call_count == 1
+        storage = LocalFilesystemStorage(ws_path)
+        jobs = Job.list_all(storage)
+        assert len(jobs) == 1
+        assert jobs[0].stage == "applied"
+        assert "Duplicates: 1" in second.output
+
+    def test_duplicate_saved_job_reuses_existing_id_instead_of_creating_new_one(self, tmp_path):
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        mock_filler = MagicMock()
+        mock_filler.can_handle.return_value = True
+
+        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 50, "reasoning": "meh"}), \
+             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+            runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+            second = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+
+        assert second.exit_code == 0
+        storage = LocalFilesystemStorage(ws_path)
+        jobs = Job.list_all(storage)
+        assert len(jobs) == 1
+        assert "Duplicates: 1" in second.output
+
     def test_launch_browser_always_headless(self, tmp_path):
         policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
         ws_path = _setup_workspace(tmp_path, policy=policy)

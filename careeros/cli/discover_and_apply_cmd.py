@@ -120,8 +120,24 @@ def discover_and_apply_cmd(
             rprint("[red]Playwright is not installed.[/red]")
             raise typer.Exit(1)
 
+    # Minimal dedup: match on (company, title) case-insensitively against jobs already
+    # in the workspace. This is a stopgap ahead of Phase 10's canonical-URL fingerprint
+    # engine — it prevents the most damaging case (re-submitting a real application to
+    # the same employer on every cron run) without claiming to solve cross-board dedup.
+    existing_jobs = Job.list_all(runtime.storage)
+    existing_by_key = {(j.company.strip().lower(), j.title.strip().lower()): j for j in existing_jobs}
+
     saved_count = 0
+    duplicate_count = 0
     for p in discovered:
+        key = (p["company"].strip().lower(), p["title"].strip().lower())
+        existing = existing_by_key.get(key)
+        if existing is not None:
+            p["job_id"] = existing.id
+            p["already_applied"] = existing.stage == "applied"
+            duplicate_count += 1
+            continue
+
         job_id = make_job_id(p["company"], p["title"])
         job = Job(
             id=job_id,
@@ -143,9 +159,11 @@ def discover_and_apply_cmd(
         ))
         saved_count += 1
         p["job_id"] = job_id
+        p["already_applied"] = False
+        existing_by_key[key] = job
 
     eligible = sorted(
-        [p for p in discovered if p["score"] >= policy.auto_apply_min_score],
+        [p for p in discovered if p["score"] >= policy.auto_apply_min_score and not p.get("already_applied")],
         key=lambda p: p["score"], reverse=True,
     )
 
@@ -223,6 +241,6 @@ def discover_and_apply_cmd(
             continue
 
     rprint(
-        "Discovered: " + str(saved_count) + ", Auto-applied: " + str(applied_count)
-        + ", Skipped: " + str(skipped_count)
+        "Discovered: " + str(saved_count) + ", Duplicates: " + str(duplicate_count)
+        + ", Auto-applied: " + str(applied_count) + ", Skipped: " + str(skipped_count)
     )
