@@ -27,9 +27,9 @@ def m001_initial(storage: StorageProvider) -> None:
             "config/policies.json",
             json.dumps(
                 {
-                    "hard_requirements": {},
-                    "soft_requirements": {},
-                    "approval_required": True,
+                    "blocked_companies": [],
+                    "min_salary": None,
+                    "blocked_locations": [],
                 },
                 indent=2,
             ).encode(),

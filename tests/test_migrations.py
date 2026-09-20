@@ -49,7 +49,7 @@ def test_m001_creates_policies_json(tmp_path):
     run_pending(storage, applied=[])
     assert storage.exists("config/policies.json")
     data = json.loads(storage.read("config/policies.json"))
-    assert data["approval_required"] is True
+    assert data == {"blocked_companies": [], "min_salary": None, "blocked_locations": []}
 
 
 def test_m001_idempotent(tmp_path):
