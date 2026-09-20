@@ -1,6 +1,7 @@
 import os
 import litellm
 from careeros.core.models import Company, Goals, Job, Person, Profile
+from careeros.skills.sanitize import wrap_untrusted
 
 DEFAULT_LLM_MODEL = "claude-haiku-4-5-20251001"
 
@@ -30,16 +31,8 @@ _COMMON_SUFFIX = (
 )
 
 
-def _build_context_text(person: Person, job: Job, company: Company, profile: Profile, goals: Goals) -> str:
+def _build_trusted_context(profile: Profile, goals: Goals) -> str:
     lines = []
-    if person.title:
-        lines.append("Recipient: " + person.name + " (" + person.title + ")")
-    else:
-        lines.append("Recipient: " + person.name)
-    lines.append("Company: " + company.name)
-    if company.industry:
-        lines.append("Industry: " + company.industry)
-    lines.append("Job: " + job.title)
     if profile.title:
         lines.append("Candidate title: " + profile.title)
     if profile.summary:
@@ -49,18 +42,36 @@ def _build_context_text(person: Person, job: Job, company: Company, profile: Pro
     return "\n".join(lines)
 
 
+def _build_untrusted_context(person: Person, job: Job, company: Company) -> str:
+    lines = []
+    if person.title:
+        lines.append("Recipient: " + person.name + " (" + person.title + ")")
+    else:
+        lines.append("Recipient: " + person.name)
+    lines.append("Company: " + company.name)
+    if company.industry:
+        lines.append("Industry: " + company.industry)
+    lines.append("Job: " + job.title)
+    return "\n".join(lines)
+
+
 def generate_outreach_message(
     person: Person, job: Job, company: Company, profile: Profile, goals: Goals, model: str | None = None,
 ) -> str:
     effective_model = model or os.environ.get("CAREEROS_MODEL", DEFAULT_LLM_MODEL)
     instructions = _INSTRUCTIONS_BY_ROLE.get(person.role_category, _INSTRUCTIONS_BY_ROLE["ic"])
-    context_text = _build_context_text(person, job, company, profile, goals)
-    prompt = instructions + _COMMON_SUFFIX + context_text
+    trusted_context = _build_trusted_context(profile, goals)
+    system_text = instructions + _COMMON_SUFFIX + trusted_context
+    untrusted_context = _build_untrusted_context(person, job, company)
+    user_text = wrap_untrusted(untrusted_context)
     try:
         resp = litellm.completion(
             model=effective_model,
             max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": system_text},
+                {"role": "user", "content": user_text},
+            ],
         )
         content = resp.choices[0].message.content
         if not content:

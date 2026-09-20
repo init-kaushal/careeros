@@ -62,3 +62,27 @@ class TestGenerateOutreachMessage:
                 _make_person("em"), _make_job(), _make_company(), _make_profile(), Goals()
             )
         assert result == ""
+
+    def test_sends_system_and_wrapped_user_message(self):
+        from careeros.skills.outreach_draft import generate_outreach_message
+        mock_resp = MagicMock()
+        mock_resp.choices[0].message.content = "Draft text"
+        with patch("careeros.skills.outreach_draft.litellm.completion", return_value=mock_resp) as mock_llm:
+            generate_outreach_message(_make_person("ic"), _make_job(), _make_company(), _make_profile(), Goals())
+        messages = mock_llm.call_args.kwargs["messages"]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+        assert "<untrusted_content>" in messages[1]["content"]
+        assert "Jane Doe" in messages[1]["content"]
+        assert "Acme Corp" in messages[1]["content"]
+
+    def test_trusted_profile_fields_stay_in_system_message(self):
+        from careeros.skills.outreach_draft import generate_outreach_message
+        mock_resp = MagicMock()
+        mock_resp.choices[0].message.content = "Draft text"
+        with patch("careeros.skills.outreach_draft.litellm.completion", return_value=mock_resp) as mock_llm:
+            generate_outreach_message(_make_person("ic"), _make_job(), _make_company(), _make_profile(), Goals())
+        messages = mock_llm.call_args.kwargs["messages"]
+        assert "Senior SRE" in messages[0]["content"]
+        assert "Jane Doe" not in messages[0]["content"]
