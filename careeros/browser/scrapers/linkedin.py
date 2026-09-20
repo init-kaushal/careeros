@@ -7,7 +7,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from playwright.sync_api import Page
 
-_JOB_CARD = re.compile(r'<div[^>]+class="[^"]*\bjob-card-container\b[^"]*"[^>]*>(.*?)</div>', re.DOTALL)
+_JOB_CARD = re.compile(
+    r'<div[^>]+class="[^"]*\bjob-card-container\b[^"]*"[^>]*>(.*?)(?=<div[^>]+class="[^"]*\bjob-card-container\b|$)',
+    re.DOTALL,
+)
 _LINK = re.compile(r'class="[^"]*\bjob-card-container__link\b[^"]*"[^>]+href="([^"]+)"[^>]*>([^<]+)', re.DOTALL)
 _COMPANY = re.compile(r'class="[^"]*\bjob-card-container__company-name\b[^"]*"[^>]*>([^<]+)')
 _LOCATION = re.compile(r'class="[^"]*\bjob-card-container__metadata-item\b[^"]*"[^>]*>([^<]+)')
