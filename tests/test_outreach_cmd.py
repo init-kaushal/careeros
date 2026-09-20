@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -154,6 +155,28 @@ class TestMarkReferralRequested:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         log_content = storage.read("activity/" + today + ".jsonl").decode()
         assert "referral_requested" in log_content
+
+    def test_unsafe_job_and_person_values_are_slugified_not_raised(self, tmp_path):
+        # --job/--person are raw CLI input; a value like "../../etc" must be
+        # slugified into a safe path segment rather than escaping the
+        # outreach/ directory or surfacing storage's ValueError as an
+        # unhandled traceback.
+        ws_path = _setup_workspace(tmp_path)
+        storage = LocalFilesystemStorage(ws_path)
+        now = datetime.now(timezone.utc).isoformat()
+        OutreachMessage(
+            id="acme-sre-abc1__acme-corp-jane-doe", job_id="../../acme-sre-abc1", person_id="../../acme-corp-jane-doe",
+            draft_text="Hi Jane...", send_state="sent", created_at=now,
+        ).save(storage)
+
+        result = runner.invoke(outreach_app, [
+            "mark-referral-requested", "--job", "../../acme-sre-abc1", "--person", "../../acme-corp-jane-doe", "--workspace", ws_path,
+        ])
+
+        assert result.exit_code == 0
+        assert not (Path(ws_path) / "etc").exists()
+        message = OutreachMessage.load(storage, "acme-sre-abc1__acme-corp-jane-doe")
+        assert message.referral_state == "referral_requested"
 
 
 class TestPeopleUpdate:

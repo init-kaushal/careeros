@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 import typer
@@ -21,6 +22,22 @@ people_app = typer.Typer(help="Manage researched people.")
 console = Console()
 
 MAX_REGENERATIONS = 5
+
+
+def _slugify(s: str) -> str:
+    s = s.lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    return s.strip("-")
+
+
+def _message_id(job_id: str, person_id: str) -> str:
+    # job/person come from --job/--person CLI arguments; slugify before using
+    # them as path segments so an arbitrary or malformed value never reaches
+    # storage._resolve() as a raw path component (which would otherwise
+    # either write outside the intended outreach/ subdirectory for a value
+    # like "../foo", or surface as an unhandled ValueError traceback for a
+    # value that trips the workspace-root escape check).
+    return _slugify(job_id) + "__" + _slugify(person_id)
 
 
 @people_app.callback()
@@ -90,7 +107,7 @@ def send(
             continue
         break
 
-    message_id = job + "__" + person
+    message_id = _message_id(job, person)
     try:
         existing_message = OutreachMessage.load(runtime.storage, message_id)
         referral_state = existing_message.referral_state
@@ -173,7 +190,7 @@ def mark_referral_requested(
         rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
         raise typer.Exit(1)
 
-    message_id = job + "__" + person
+    message_id = _message_id(job, person)
     try:
         message = OutreachMessage.load(runtime.storage, message_id)
     except (FileNotFoundError, ValueError):
