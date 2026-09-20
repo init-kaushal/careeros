@@ -115,7 +115,7 @@ Rules are checked in a fixed order (companies, salary, locations); the first rul
 
 `check_job` is called before any `ActionProposal` for the job is constructed, and before any LLM call whose only purpose is to prepare that action (cover letter, outreach draft) — a blocked job never causes work to be attempted, not just never causes approval to be asked.
 
-**`careeros/cli/apply_cmd.py`** — immediately after `job = Job.load(runtime.storage, job_id)` (~line 59), before jd_text/cover-letter generation:
+**`careeros/cli/apply_cmd.py`** — after the resume-presence check (~line 78, right after `resume_path = runtime.storage.resolve(resume_file)`), before profile load and cover-letter generation. Not placed immediately after `job = Job.load(...)` (line 59): that would run the policy check before the resume check, which is a cheap local-storage check with its own dedicated failure test (`test_no_resume_exits_1`) — placing policy after it keeps that test's early exit untouched and keeps the ordering "cheapest/most-local checks first":
 
 ```python
 policy_engine = PolicyEngine(PolicyConfig.load(runtime.storage))
@@ -185,6 +185,8 @@ In every call site, a block is unconditional: there is no flag or environment va
 - A job matching a blocked-company rule never reaches `runtime.request_approval` (assert the mock was not called) and logs a `policy_blocked` event naming the rule.
 - `discover_and_apply_cmd`'s summary line reports the correct `Blocked: N` count, and a blocked job does not count toward `Skipped` or `Auto-applied`.
 - An unblocked job proceeds through the existing approval flow unchanged (regression check — this phase must not alter behavior for the non-blocked path).
+
+**Existing-test fixture note:** `tests/test_discover_and_apply_cmd.py` and `tests/test_outreach_cmd.py` build their test workspaces via real `LocalFilesystemStorage` + `init_workspace(storage)`, which runs `m001_initial` and produces a real, unblocked `config/policies.json` — none of their existing tests need any change for `PolicyConfig.load` to work. `tests/test_apply_cmd.py`'s `_mock_runtime` helper uses a bare `MagicMock()` for storage with `storage.exists.return_value = True` already set (so `PolicyConfig.load` would try to parse whatever `storage.read` returns); adding `storage.read.return_value = b"{}"` to that same helper is the one change needed — `PolicyConfig.model_validate_json(b"{}")` parses to an all-defaults, unblocked config, so every existing apply_cmd test that reaches the policy-check line keeps passing without per-test edits.
 
 ## Migration note
 
