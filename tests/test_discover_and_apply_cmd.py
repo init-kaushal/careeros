@@ -220,6 +220,34 @@ class TestDiscoverAndApplyCmd:
         assert stages == ["applied", "saved"]
         applied_jobs = [j for j in jobs if j.stage == "applied"]
         assert applied_jobs[0].company == "Beta"
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        log_content = storage.read("activity/" + today + ".jsonl").decode()
+        assert "apply_error" in log_content
+
+    def test_fill_returns_false_logs_apply_incomplete(self, tmp_path):
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        mock_filler = MagicMock()
+        mock_filler.can_handle.return_value = True
+        mock_filler.fill.return_value = False
+        mock_filler.platform = "Greenhouse"
+        mock_page = MagicMock()
+
+        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
+             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+
+        assert result.exit_code == 0
+        storage = LocalFilesystemStorage(ws_path)
+        jobs = Job.list_all(storage)
+        assert jobs[0].stage == "saved"
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        log_content = storage.read("activity/" + today + ".jsonl").decode()
+        assert "apply_incomplete" in log_content
 
     def test_second_run_does_not_reapply_to_already_applied_job(self, tmp_path):
         policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])

@@ -235,8 +235,18 @@ def discover_and_apply_cmd(
                 ))
                 applied_count += 1
             else:
+                runtime.record_activity(runtime.new_event(
+                    "apply_incomplete", "discover-and-apply",
+                    "Form fill incomplete for " + p["company"] + " — " + p["title"],
+                    status="failed", entity_type="job", entity_id=job_id,
+                ))
                 skipped_count += 1
-        except Exception:
+        except Exception as exc:
+            runtime.record_activity(runtime.new_event(
+                "apply_error", "discover-and-apply",
+                "Error while applying to " + p["company"] + " — " + p["title"] + ": " + type(exc).__name__,
+                status="failed", entity_type="job", entity_id=job_id,
+            ))
             skipped_count += 1
             continue
 
