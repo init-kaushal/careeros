@@ -77,3 +77,19 @@ def test_greenhouse_skips_posting_missing_a_url_without_aborting_the_batch():
 def test_empty_board_returns_empty_list():
     with patch("careeros.sources.greenhouse.fetch_greenhouse", return_value=[]):
         assert GreenhouseSource("Stripe").fetch("stripe") == []
+
+
+def test_postings_from_ats_maps_every_field_and_skips_urlless_items():
+    from careeros.sources.base import postings_from_ats
+    raw = [
+        {"source_id": "1", "title": "A", "location": "SF", "description": "jd",
+         "url": "https://x.test/1"},
+        {"source_id": "2", "title": "B", "location": None, "description": None},
+    ]
+    out = postings_from_ats("greenhouse", "Stripe", raw)
+    assert [p.title for p in out] == ["A"]
+    assert out[0].source == "greenhouse"
+    assert out[0].company == "Stripe"
+    assert out[0].location == "SF"
+    assert out[0].description == "jd"
+    assert out[0].source_id == "1"

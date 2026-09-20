@@ -73,3 +73,27 @@ def posting_from_scrape(raw: dict) -> Posting:
         location=raw.get("location"),
         description=raw.get("description"),
     )
+
+
+def postings_from_ats(source: str, company: str, raw_items: list[dict]) -> list[Posting]:
+    """Map an ATS transport's raw dicts into Postings.
+
+    Shared by every ATS JobSource so a new Posting field is mapped in one
+    place rather than once per vendor. Items without a URL are skipped: the
+    URL is half the dedup key, so a posting without one is unusable.
+    """
+    postings = []
+    for raw in raw_items:
+        url = raw.get("url")
+        if not url:
+            continue
+        postings.append(Posting(
+            source=source,
+            title=raw["title"],
+            company=company,
+            url=url,
+            location=raw.get("location"),
+            description=raw.get("description"),
+            source_id=raw.get("source_id"),
+        ))
+    return postings
