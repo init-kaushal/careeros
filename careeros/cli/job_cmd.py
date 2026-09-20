@@ -9,9 +9,13 @@ from rich.prompt import Confirm, Prompt
 from careeros.config import GlobalConfig
 from careeros.core.activity import ActivityLogger
 from careeros.core.job_id import make_job_id
+from careeros.core.job_store import JobStore
 from careeros.core.models import Job, JOB_STAGES
 from careeros.skills.job_extract import extract_job_fields
-from careeros.sources.ats import ATSFetchError, fetch_greenhouse, fetch_lever
+from careeros.sources.ats import ATSFetchError
+from careeros.sources.base import job_from_posting
+from careeros.sources.greenhouse import GreenhouseSource
+from careeros.sources.lever import LeverSource
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import open_workspace
 
@@ -36,6 +40,7 @@ def _now() -> str:
 @job_app.command("add")
 def add_cmd(
     workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
+    force: bool = typer.Option(False, "--force", help="Save even if a matching job already exists"),
 ) -> None:
     storage = _get_storage(workspace)
     try:
@@ -108,12 +113,17 @@ def add_cmd(
         created_at=now,
         updated_at=now,
     )
-    job.save(storage)
+    outcome = JobStore(storage).save_new(job, force=force)
+    if not outcome.created:
+        rprint("[yellow]Matches existing job " + outcome.job.id
+               + " — enriched instead of duplicating. Use --force to save anyway.[/yellow]")
     logger.log(logger.new_event(
-        "job_added", "add", "Job added: " + company + " — " + title,
-        entity_type="job", entity_id=job_id,
+        "job_added" if outcome.created else "job_merged", "add",
+        "Job added: " + company + " — " + title,
+        entity_type="job", entity_id=outcome.job.id,
     ))
-    rprint(f"\n[green]Saved[/green] as [bold]{job_id}[/bold]  (stage: saved)")
+    rprint("\n[green]Saved[/green] as [bold]" + outcome.job.id + "[/bold]  (stage: "
+           + outcome.job.stage + ")")
 
 
 @job_app.command("list")
@@ -268,21 +278,21 @@ def search_cmd(
 
     try:
         if source == "greenhouse":
-            postings = fetch_greenhouse(company)
+            postings = GreenhouseSource(company).fetch(company)
         elif source == "lever":
-            postings = fetch_lever(company)
+            postings = LeverSource(company).fetch(company)
         else:
-            rprint(f"[red]Unknown source '{source}'. Valid: greenhouse lever[/red]")
+            rprint("[red]Unknown source '" + source + "'. Valid: greenhouse lever[/red]")
             raise typer.Exit(1)
     except ATSFetchError as e:
         if "not_found" in str(e):
-            rprint(f"[red]Company '{company}' not found on {source}.[/red]")
+            rprint("[red]Company '" + company + "' not found on " + source + ".[/red]")
         else:
-            rprint(f"[red]Could not reach {source} API. Check your connection.[/red]")
+            rprint("[red]Could not reach " + source + " API. Check your connection.[/red]")
         raise typer.Exit(1)
 
     if not postings:
-        rprint(f"No open roles found for '{company}' on {source}.")
+        rprint("No open roles found for '" + company + "' on " + source + ".")
         return
 
     table = Table(show_header=True)
@@ -291,7 +301,7 @@ def search_cmd(
     table.add_column("Location")
     table.add_column("URL")
     for i, p in enumerate(postings, 1):
-        table.add_row(str(i), p["title"], p.get("location") or "—", p["url"])
+        table.add_row(str(i), p.title, p.location or "—", p.url)
     console.print(table)
 
     picks_str = Prompt.ask("Pick jobs to save (e.g. 1 3 5, or q to quit)")
@@ -306,28 +316,19 @@ def search_cmd(
                 indices.append(idx)
 
     saved = 0
+    duplicates = 0
     now = _now()
+    store = JobStore(storage)
     for idx in indices:
-        p = postings[idx]
-        job_id = make_job_id(company, p["title"])
-        job = Job(
-            id=job_id,
-            source=source,
-            source_id=p["source_id"],
-            url=p["url"],
-            company=company,
-            title=p["title"],
-            location=p.get("location"),
-            description=p.get("description"),
-            stage="saved",
-            created_at=now,
-            updated_at=now,
-        )
-        job.save(storage)
+        outcome = store.save_new(job_from_posting(postings[idx], now))
+        if outcome.created:
+            saved += 1
+        else:
+            duplicates += 1
         logger.log(logger.new_event(
-            "job_added", "search", f"Job saved from {source}: {company} — {p['title']}",
-            entity_type="job", entity_id=job_id,
+            "job_added" if outcome.created else "job_merged", "search",
+            "Job saved from " + source + ": " + company + " — " + postings[idx].title,
+            entity_type="job", entity_id=outcome.job.id,
         ))
-        saved += 1
 
-    rprint(f"[green]Saved {saved} job(s)[/green]")
+    rprint("[green]Saved " + str(saved) + " job(s)[/green], Duplicates: " + str(duplicates))

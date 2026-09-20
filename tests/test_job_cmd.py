@@ -5,9 +5,13 @@ from pathlib import Path
 from unittest.mock import patch
 from typer.testing import CliRunner
 from careeros.cli.main import app
+from careeros.core.job_store import JobStore
 from careeros.core.models import Job, JOB_STAGES
+from careeros.sources.base import Posting
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace
+
+_NOW = "2026-09-20T00:00:00+00:00"
 
 
 def _now() -> str:
@@ -199,18 +203,19 @@ def test_job_note_unknown_id(ws):
 
 
 def test_job_search_saves_jobs(ws):
-    from careeros.sources.ats import ATSFetchError
-
     postings = [
-        {
-            "source_id": "123",
-            "title": "Senior SRE",
-            "url": "https://boards.greenhouse.io/acme/jobs/123",
-            "location": "SF",
-            "description": "Great role.",
-        }
+        Posting(
+            source="greenhouse",
+            source_id="123",
+            title="Senior SRE",
+            url="https://boards.greenhouse.io/acme/jobs/123",
+            location="SF",
+            description="Great role.",
+            company="acme",
+        )
     ]
-    with patch("careeros.cli.job_cmd.fetch_greenhouse", return_value=postings):
+    with patch("careeros.cli.job_cmd.GreenhouseSource") as gs:
+        gs.return_value.fetch.return_value = postings
         runner = CliRunner()
         # user picks job 1
         result = runner.invoke(
@@ -229,7 +234,8 @@ def test_job_search_saves_jobs(ws):
 def test_job_search_ats_error(ws):
     from careeros.sources.ats import ATSFetchError
 
-    with patch("careeros.cli.job_cmd.fetch_greenhouse", side_effect=ATSFetchError("not_found")):
+    with patch("careeros.cli.job_cmd.GreenhouseSource") as gs:
+        gs.return_value.fetch.side_effect = ATSFetchError("not_found")
         runner = CliRunner()
         result = runner.invoke(
             app,
@@ -240,9 +246,11 @@ def test_job_search_ats_error(ws):
 
 def test_job_search_quit(ws):
     postings = [
-        {"source_id": "1", "title": "SRE", "url": "https://example.com", "location": None, "description": ""}
+        Posting(source="greenhouse", source_id="1", title="SRE", url="https://example.com",
+                location=None, description="", company="acme")
     ]
-    with patch("careeros.cli.job_cmd.fetch_greenhouse", return_value=postings):
+    with patch("careeros.cli.job_cmd.GreenhouseSource") as gs:
+        gs.return_value.fetch.return_value = postings
         runner = CliRunner()
         result = runner.invoke(
             app,
@@ -252,3 +260,65 @@ def test_job_search_quit(ws):
     assert result.exit_code == 0
     storage = LocalFilesystemStorage(str(ws))
     assert Job.list_all(storage) == []
+
+
+def test_add_deduplicates_against_an_existing_job(ws):
+    storage = LocalFilesystemStorage(str(ws))
+    JobStore(storage).save_new(Job(
+        id="acme-sre-aaaa", source="manual", company="Acme", title="Senior SRE",
+        url="https://x.test/1", created_at=_NOW, updated_at=_NOW,
+    ))
+    runner = CliRunner()
+    with patch("careeros.cli.job_cmd.Prompt.ask", side_effect=[
+        "https://x.test/1", "Acme", "Senior SRE", "", "", "", "USD",
+    ]), patch("careeros.cli.job_cmd.Confirm.ask", return_value=False), \
+         patch("careeros.cli.job_cmd.extract_job_fields", return_value={}):
+        result = runner.invoke(app, ["job", "add", "--workspace", str(ws)])
+    assert result.exit_code == 0
+    assert len(Job.list_all(storage)) == 1
+
+
+def test_add_force_creates_a_duplicate(ws):
+    storage = LocalFilesystemStorage(str(ws))
+    JobStore(storage).save_new(Job(
+        id="acme-sre-aaaa", source="manual", company="Acme", title="Senior SRE",
+        url="https://x.test/1", created_at=_NOW, updated_at=_NOW,
+    ))
+    runner = CliRunner()
+    with patch("careeros.cli.job_cmd.Prompt.ask", side_effect=[
+        "https://x.test/1", "Acme", "Senior SRE", "", "", "", "USD",
+    ]), patch("careeros.cli.job_cmd.Confirm.ask", return_value=False), \
+         patch("careeros.cli.job_cmd.extract_job_fields", return_value={}):
+        result = runner.invoke(app, ["job", "add", "--force", "--workspace", str(ws)])
+    assert result.exit_code == 0
+    assert len(Job.list_all(storage)) == 2
+
+
+def test_search_deduplicates_on_a_second_run(ws):
+    storage = LocalFilesystemStorage(str(ws))
+    postings = [Posting(source="greenhouse", title="Senior SRE", company="stripe",
+                        url="https://boards.greenhouse.io/stripe/jobs/1",
+                        location="SF", source_id="1")]
+    runner = CliRunner()
+    with patch("careeros.cli.job_cmd.GreenhouseSource") as gs, \
+         patch("careeros.cli.job_cmd.Prompt.ask", return_value="1"):
+        gs.return_value.fetch.return_value = postings
+        runner.invoke(app, ["job", "search", "--source", "greenhouse",
+                            "--company", "stripe", "--workspace", str(ws)])
+        result = runner.invoke(app, ["job", "search", "--source", "greenhouse",
+                                     "--company", "stripe", "--workspace", str(ws)])
+    assert len(Job.list_all(storage)) == 1
+    assert "Duplicates: 1" in result.output
+
+
+def test_search_reports_saved_and_duplicate_counts(ws):
+    postings = [Posting(source="greenhouse", title="Senior SRE", company="stripe",
+                        url="https://boards.greenhouse.io/stripe/jobs/1")]
+    runner = CliRunner()
+    with patch("careeros.cli.job_cmd.GreenhouseSource") as gs, \
+         patch("careeros.cli.job_cmd.Prompt.ask", return_value="1"):
+        gs.return_value.fetch.return_value = postings
+        result = runner.invoke(app, ["job", "search", "--source", "greenhouse",
+                                     "--company", "stripe", "--workspace", str(ws)])
+    assert "Saved 1" in result.output
+    assert "Duplicates: 0" in result.output
