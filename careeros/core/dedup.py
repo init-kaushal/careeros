@@ -22,6 +22,19 @@ _ABBREVIATIONS = {
 
 _PUNCT = re.compile(r"[^a-z0-9]+")
 
+# Punctuation-bearing technology tokens that _PUNCT would otherwise strip
+# down to a bare letter, colliding two different roles into one: "C++
+# Engineer" and "C# Engineer" both became "c engineer", and ".NET Developer"
+# collided with a literal "NET Developer". Replaced with alphanumeric
+# equivalents BEFORE the punctuation strip, on word boundaries, so a lone
+# "c" (as in "C Engineer") is left untouched.
+_TECH_TOKENS = (
+    (re.compile(r"(?<![a-z0-9])c\+\+(?![a-z0-9])"), "cplusplus"),
+    (re.compile(r"(?<![a-z0-9])c#(?![a-z0-9])"), "csharp"),
+    (re.compile(r"(?<![a-z0-9])f#(?![a-z0-9])"), "fsharp"),
+    (re.compile(r"(?<![a-z0-9])\.net(?![a-z0-9])"), "dotnet"),
+)
+
 
 def _is_tracking(key: str) -> bool:
     k = key.lower()
@@ -42,7 +55,10 @@ def canonical_url(url: str | None) -> str:
 
 
 def normalize_title(title: str) -> str:
-    cleaned = _PUNCT.sub(" ", (title or "").lower()).strip()
+    lowered = (title or "").lower()
+    for pattern, replacement in _TECH_TOKENS:
+        lowered = pattern.sub(replacement, lowered)
+    cleaned = _PUNCT.sub(" ", lowered).strip()
     # Whole-token expansion only. A substring replace would turn
     # "engineering" into "engineerineering".
     return " ".join(_ABBREVIATIONS.get(tok, tok) for tok in cleaned.split())

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from careeros.core.dedup import is_same_posting
+from careeros.core.dedup import canonical_url, is_same_posting
 from careeros.core.models import Job, Sighting
 from careeros.storage.interface import StorageProvider
 
@@ -70,9 +70,18 @@ class JobStore:
             sightings.append(Sighting(
                 source=existing.source, url=existing.url, seen_at=existing.created_at,
             ))
-        sightings.append(Sighting(
-            source=incoming.source, url=incoming.url, seen_at=incoming.created_at,
-        ))
+        # sightings is "where has this posting been seen" — a set of places,
+        # not a hit counter. A daily rediscovery of the same posting on the
+        # same source must not append a near-duplicate entry differing only
+        # in seen_at, so dedupe on (source, canonical url) before appending.
+        incoming_key = (incoming.source, canonical_url(incoming.url))
+        already_sighted = any(
+            (s.source, canonical_url(s.url)) == incoming_key for s in sightings
+        )
+        if not already_sighted:
+            sightings.append(Sighting(
+                source=incoming.source, url=incoming.url, seen_at=incoming.created_at,
+            ))
         updates["sightings"] = sightings
 
         if enriched:

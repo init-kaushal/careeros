@@ -72,6 +72,7 @@ def posting_from_scrape(raw: dict) -> Posting:
         url=raw["url"],
         location=raw.get("location"),
         description=raw.get("description"),
+        source_id=raw.get("source_id"),
     )
 
 

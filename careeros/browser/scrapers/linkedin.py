@@ -56,6 +56,13 @@ class LinkedInScraper:
                     link = card.locator("a.job-card-container__link").first
                     title = link.inner_text().strip()
                     href = link.get_attribute("href") or ""
+                    if not href:
+                        # Same failure mode as the Indeed scraper: an empty
+                        # href used to urljoin down to page.url itself, so
+                        # every card on the page collapsed to one degenerate
+                        # URL that the URL dedup tier then merges into a
+                        # single Job, silently dropping every other listing.
+                        continue
                     href = urllib.parse.urljoin(page.url, href)
                     href = href.split("?")[0]
                     company = card.locator(".job-card-container__company-name").first.inner_text().strip()

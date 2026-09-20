@@ -53,6 +53,13 @@ class IndeedScraper:
                     link = card.locator("h2.jobTitle a").first
                     title = link.inner_text().strip()
                     href = link.get_attribute("href") or ""
+                    if not href:
+                        # An empty href here used to fall through to the base
+                        # URL, so every card on the page collapsed to one
+                        # degenerate "https://www.indeed.com" record — which
+                        # the URL dedup tier then merges into a single Job,
+                        # silently dropping every other listing.
+                        continue
                     url_full = href if href.startswith("http") else _INDEED_BASE + href
                     company = card.locator(".companyName").first.inner_text().strip()
                     loc_el = card.locator(".companyLocation").first

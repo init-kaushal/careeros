@@ -66,6 +66,57 @@ class TestLinkedInScraper:
         results = scraper.search(page, "sre", 1)
         assert results[0]["url"] == "https://www.linkedin.com/jobs/view/123"
 
+    def test_search_skips_card_with_empty_href(self):
+        # Review IMPORTANT 3: an empty href used to urljoin down to page.url
+        # itself, so every card on a page whose selector stopped matching
+        # collapsed into one degenerate URL — which the URL dedup tier then
+        # merges into a single Job, silently dropping the rest.
+        from careeros.browser.scrapers.linkedin import LinkedInScraper
+        scraper = LinkedInScraper()
+        page = MagicMock()
+        page.url = "https://www.linkedin.com/jobs/search/?keywords=sre"
+
+        bad_link = MagicMock()
+        bad_link.inner_text.return_value = "Bad Card"
+        bad_link.get_attribute.return_value = None
+
+        good_link = MagicMock()
+        good_link.inner_text.return_value = "Senior SRE"
+        good_link.get_attribute.return_value = "/jobs/view/123"
+
+        company_locator = MagicMock()
+        company_locator.first.inner_text.return_value = "Acme"
+
+        loc_locator = MagicMock()
+        loc_locator.first.count.return_value = 0
+
+        def make_card(link):
+            def card_locator(selector):
+                if "link" in selector:
+                    m = MagicMock()
+                    m.first = link
+                    return m
+                if "company-name" in selector:
+                    return company_locator
+                if "metadata-item" in selector:
+                    return loc_locator
+                return MagicMock()
+            card = MagicMock()
+            card.locator.side_effect = card_locator
+            return card
+
+        # LinkedInScraper re-locates the card list every outer pagination
+        # pass. Return the two cards once, then nothing, so the loop
+        # terminates after one pass regardless of how the skipped card
+        # affects the results-length-based slicing.
+        pages = [[make_card(bad_link), make_card(good_link)], []]
+        page.locator.return_value.all.side_effect = lambda: pages.pop(0) if pages else []
+        page.evaluate.return_value = None
+
+        results = scraper.search(page, "sre", 5)
+        assert len(results) == 1
+        assert results[0]["url"] == "https://www.linkedin.com/jobs/view/123"
+
 
 class TestIndeedScraper:
     def test_parse_listings_returns_normalized_dicts(self):
@@ -82,6 +133,52 @@ class TestIndeedScraper:
     def test_parse_listings_empty_html_returns_empty_list(self):
         from careeros.browser.scrapers.indeed import IndeedScraper
         assert IndeedScraper().parse_listings("<div></div>") == []
+
+    def test_search_skips_card_with_empty_href(self):
+        # Review IMPORTANT 3: an empty href used to fall through to the bare
+        # base URL, so every card on a page whose selector stopped matching
+        # collapsed into one degenerate URL — which the URL dedup tier then
+        # merges into a single Job, silently dropping the rest.
+        from careeros.browser.scrapers.indeed import IndeedScraper
+        scraper = IndeedScraper()
+        page = MagicMock()
+        page.wait_for_selector.return_value = None
+
+        bad_link = MagicMock()
+        bad_link.inner_text.return_value = "Bad Card"
+        bad_link.get_attribute.return_value = None
+
+        good_link = MagicMock()
+        good_link.inner_text.return_value = "Senior SRE"
+        good_link.get_attribute.return_value = "/viewjob?jk=123"
+
+        company_locator = MagicMock()
+        company_locator.first.inner_text.return_value = "Acme"
+
+        loc_locator = MagicMock()
+        loc_locator.first.count.return_value = 0
+
+        def make_card(link):
+            def card_locator(selector):
+                if "jobTitle" in selector:
+                    m = MagicMock()
+                    m.first = link
+                    return m
+                if "companyName" in selector:
+                    return company_locator
+                if "companyLocation" in selector:
+                    return loc_locator
+                return MagicMock()
+            card = MagicMock()
+            card.locator.side_effect = card_locator
+            return card
+
+        page.locator.return_value.all.return_value = [make_card(bad_link), make_card(good_link)]
+        page.locator.return_value.count.return_value = 0
+
+        results = scraper.search(page, "sre", 5)
+        assert len(results) == 1
+        assert "jk=123" in results[0]["url"]
 
 
 class TestWellfoundScraper:

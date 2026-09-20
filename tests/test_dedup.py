@@ -72,6 +72,21 @@ def test_normalize_title_expands_whole_tokens_only():
     assert normalize_title("Sreepathi") == "sreepathi"
 
 
+def test_normalize_title_distinguishes_punctuation_bearing_tech_tokens():
+    # Review IMPORTANT 6: the plain punctuation strip reduced both "C++" and
+    # "C#" to a bare "c", silently merging two different roles at one
+    # employer. Same failure for ".NET" vs a literal "NET".
+    assert normalize_title("C++ Engineer") != normalize_title("C# Engineer")
+    assert normalize_title("C++ Engineer") == normalize_title("c++ engineer")
+    assert normalize_title(".NET Developer") != normalize_title("NET Developer")
+
+
+def test_normalize_title_tech_token_replacement_is_word_bounded():
+    # A lone "c" (as in "C Engineer") must not be swept up by the c++/c#
+    # substitutions.
+    assert normalize_title("C Engineer") == "c engineer"
+
+
 # --- normalize_location ---
 
 def test_normalize_location_none_stays_none():

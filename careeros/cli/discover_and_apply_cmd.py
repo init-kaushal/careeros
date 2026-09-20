@@ -135,6 +135,7 @@ def discover_and_apply_cmd(
                 "company": posting.company,
                 "location": posting.location,
                 "url": posting.url,
+                "source_id": posting.source_id,
                 "score": result["score"],
                 "jd_text": jd_text,
             })

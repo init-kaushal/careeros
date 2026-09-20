@@ -112,6 +112,34 @@ def test_second_merge_appends_without_reseeding(tmp_path):
     assert [s.source for s in out.job.sightings] == ["linkedin", "greenhouse", "wellfound"]
 
 
+def test_repeated_merge_from_the_same_source_and_url_does_not_grow_sightings(tmp_path):
+    # Review IMPORTANT 4: sightings is "where has this posting been seen" —
+    # a set of places, not a hit counter. A daily discover-and-apply run
+    # rediscovering the same posting used to append a near-identical
+    # Sighting (differing only in seen_at) every tick, unbounded.
+    store = _store(tmp_path)
+    store.save_new(_job())
+    store.save_new(_job(id="b", source="greenhouse", url="https://greenhouse.test/9"))
+    out = store.save_new(_job(id="c", source="greenhouse", url="https://greenhouse.test/9"))
+    assert [s.source for s in out.job.sightings] == ["linkedin", "greenhouse"]
+
+    out = store.save_new(_job(id="d", source="greenhouse", url="https://greenhouse.test/9"))
+    assert [s.source for s in out.job.sightings] == ["linkedin", "greenhouse"]
+
+
+def test_repeated_merge_matches_on_canonical_url_not_raw_url(tmp_path):
+    # A tracking-param variant of the same URL must still count as the same
+    # sighting, not a new one — canonical_url is the identity, not the raw
+    # string.
+    store = _store(tmp_path)
+    store.save_new(_job())
+    store.save_new(_job(id="b", source="greenhouse", url="https://greenhouse.test/9"))
+    out = store.save_new(_job(
+        id="c", source="greenhouse", url="https://greenhouse.test/9?utm_source=li",
+    ))
+    assert [s.source for s in out.job.sightings] == ["linkedin", "greenhouse"]
+
+
 def test_force_creates_a_duplicate(tmp_path):
     store = _store(tmp_path)
     store.save_new(_job())
