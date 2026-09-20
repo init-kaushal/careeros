@@ -110,7 +110,7 @@ def add_cmd(
     )
     job.save(storage)
     logger.log(logger.new_event(
-        "job_added", "add", f"Job added: {company} — {title}",
+        "job_added", "add", "Job added: " + company + " — " + title,
         entity_type="job", entity_id=job_id,
     ))
     rprint(f"\n[green]Saved[/green] as [bold]{job_id}[/bold]  (stage: saved)")
