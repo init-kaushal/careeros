@@ -93,6 +93,15 @@ JOB_STAGES = ("saved", "applied", "interviewing", "offer", "closed")
 _JOB_DESC_CAP = 4000
 
 
+class Sighting(BaseModel):
+    """One place a posting was seen. Recorded when dedup merges a new
+    sighting into an existing record."""
+
+    source: str
+    url: str | None = None
+    seen_at: str
+
+
 class Job(BaseModel):
     id: str
     source: str
@@ -110,10 +119,16 @@ class Job(BaseModel):
     stage: str = "saved"
     applied_at: str | None = None
     notes: list[str] = []
+    sightings: list[Sighting] = []
     created_at: str
     updated_at: str
 
     def save(self, storage: StorageProvider) -> None:
+        """Write this job, overwriting any record with the same id.
+
+        For a NEW job use JobStore.save_new instead: it deduplicates against
+        existing records, which this method deliberately does not do.
+        """
         data = self
         if data.description and len(data.description) > _JOB_DESC_CAP:
             data = data.model_copy(update={"description": data.description[:_JOB_DESC_CAP]})
