@@ -439,3 +439,51 @@ class TestDiscoverAndApplyCmd:
             runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         mock_browser.assert_called_with(headless=True)
+
+    def test_locked_profile_during_auto_apply_aborts_the_run(self, tmp_path):
+        from contextlib import contextmanager as _contextmanager
+
+        from careeros.browser.driver import BrowserProfileBusy
+
+        # Two eligible jobs: if a locked profile were treated as a per-job
+        # failure, the second would still burn a cover-letter LLM call.
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        mock_filler = MagicMock()
+        mock_filler.can_handle.return_value = True
+        mock_filler.fill.return_value = True
+        mock_filler.platform = "Greenhouse"
+        mock_page = MagicMock()
+        postings = [
+            _posting(company="Acme", title="Role One", url="https://boards.greenhouse.io/acme/jobs/1"),
+            _posting(company="Beta", title="Role Two", url="https://boards.greenhouse.io/beta/jobs/2"),
+        ]
+
+        # The discovery loop's launch_browser call (once, for the "linkedin"
+        # board) must succeed normally; only the auto-apply loop's calls must
+        # raise BrowserProfileBusy, so this test exercises the auto-apply site
+        # specifically and not the discovery site.
+        call_count = {"n": 0}
+
+        def _launch(headless=True):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                @_contextmanager
+                def _ctx():
+                    yield MagicMock(), mock_page
+                return _ctx()
+            raise BrowserProfileBusy("already in use by another CareerOS process")
+
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=postings))}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", side_effect=_launch), \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
+             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter") as mock_gen, \
+             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+
+        assert result.exit_code == 1
+        assert "already in use" in result.output
+        assert mock_gen.call_count <= 1

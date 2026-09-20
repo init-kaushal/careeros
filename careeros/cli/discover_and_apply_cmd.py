@@ -243,6 +243,13 @@ def discover_and_apply_cmd(
                     status="failed", entity_type="job", entity_id=job_id,
                 ))
                 skipped_count += 1
+        except BrowserProfileBusy as exc:
+            # A locked profile is a whole-run condition, not a per-job failure:
+            # continuing would re-run a paid cover-letter generation for every
+            # remaining job only to fail identically at launch. Match the
+            # discovery loop and stop.
+            rprint("[red]" + str(exc) + "[/red]")
+            raise typer.Exit(1)
         except Exception as exc:
             runtime.record_activity(runtime.new_event(
                 "apply_error", "discover-and-apply",
