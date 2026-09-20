@@ -108,11 +108,20 @@ def send(
         break
 
     message_id = _message_id(job, person)
+    already_sent_at: str | None = None
     try:
         existing_message = OutreachMessage.load(runtime.storage, message_id)
         referral_state = existing_message.referral_state
+        if existing_message.send_state == "sent":
+            already_sent_at = existing_message.sent_at
     except (FileNotFoundError, ValueError):
         referral_state = "research"
+
+    if already_sent_at:
+        rprint(
+            "[yellow]An outreach email to " + person_obj.name + " was already sent on "
+            + already_sent_at + ". This will send another.[/yellow]"
+        )
 
     message = OutreachMessage(
         id=message_id, job_id=job, person_id=person, draft_text=draft_text,
@@ -125,9 +134,15 @@ def send(
         entity_type="outreach_message", entity_id=message_id,
     ))
 
+    approval_summary = "Send outreach email to " + person_obj.name + " re: " + job_obj.company + " — " + job_obj.title + "?"
+    if already_sent_at:
+        approval_summary = (
+            "Already sent to " + person_obj.name + " on " + already_sent_at
+            + " — send ANOTHER outreach email re: " + job_obj.company + " — " + job_obj.title + "?"
+        )
     result = runtime.request_approval(ActionProposal(
         action="send_outreach",
-        summary="Send outreach email to " + person_obj.name + " re: " + job_obj.company + " — " + job_obj.title + "?",
+        summary=approval_summary,
         entity_type="outreach_message", entity_id=message_id,
     ))
     if not result.approved:
@@ -172,7 +187,7 @@ def send(
     message.save(runtime.storage)
     runtime.record_activity(runtime.new_event(
         "outreach_sent", "outreach",
-        "Sent outreach to " + person_obj.name + " (" + person_obj.email + ")",
+        "Sent outreach to " + person_obj.name,
         entity_type="outreach_message", entity_id=message_id,
     ))
     rprint("[green]Sent to " + person_obj.name + "[/green]")

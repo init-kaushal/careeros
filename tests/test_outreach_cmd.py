@@ -74,6 +74,10 @@ class TestOutreachSend:
         log_content = storage.read("activity/" + today + ".jsonl").decode()
         assert "outreach_send_approved" in log_content
         assert "outreach_sent" in log_content
+        # The recipient's email is PII beyond what's needed for audit --
+        # entity_id already identifies the person; the address itself
+        # must never land in the append-only activity log.
+        assert "jane@acme.com" not in log_content
 
     def test_approved_without_email_blocks_send_and_does_not_log_failed(self, tmp_path):
         ws_path = _setup_workspace(tmp_path, with_email=False)
@@ -135,6 +139,8 @@ class TestOutreachSend:
         assert message.referral_state == "referral_requested"
         assert message.send_state == "sent"
         assert message.sent_at is not None
+        # A re-send must be surfaced to the human approving it, not silent.
+        assert "already sent" in result.output.lower()
 
 
 class TestMarkReferralRequested:
