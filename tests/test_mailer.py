@@ -1,4 +1,5 @@
 import smtplib
+import ssl
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,12 +22,29 @@ def test_send_email_success(monkeypatch):
 
     mock_smtp_cls.assert_called_once_with("smtp.example.com", 587)
     mock_server.starttls.assert_called_once()
+    starttls_context = mock_server.starttls.call_args.kwargs.get("context")
+    assert isinstance(starttls_context, ssl.SSLContext)
+    assert starttls_context.check_hostname is True
+    assert starttls_context.verify_mode == ssl.CERT_REQUIRED
     mock_server.login.assert_called_once_with("me@example.com", "secret")
     mock_server.sendmail.assert_called_once()
     call_args = mock_server.sendmail.call_args[0]
     assert call_args[0] == "me@example.com"
     assert call_args[1] == ["jane@acme.com"]
     assert "Body text" in call_args[2]
+
+
+def test_send_email_rejects_invalid_recipient(monkeypatch):
+    from careeros.mailer import send_email
+    monkeypatch.setenv("CAREEROS_SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("CAREEROS_SMTP_PORT", "587")
+    monkeypatch.setenv("CAREEROS_SMTP_USER", "me@example.com")
+    monkeypatch.setenv("CAREEROS_SMTP_PASSWORD", "secret")
+
+    with patch("careeros.mailer.smtplib.SMTP") as mock_smtp_cls:
+        with pytest.raises(ValueError):
+            send_email("not-an-email", "Hello", "Body text")
+    mock_smtp_cls.assert_not_called()
 
 
 def test_send_email_missing_env_var_raises_key_error(monkeypatch):
