@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Field, field_validator
+from careeros.browser.boards import BOARD_NAMES
 from careeros.storage.interface import StorageProvider
 
 
@@ -132,7 +133,7 @@ class Job(BaseModel):
         return sorted(jobs, key=lambda j: j.created_at, reverse=True)
 
 
-_VALID_AUTOMATION_BOARDS = ("linkedin", "indeed", "wellfound")
+_VALID_AUTOMATION_BOARDS = BOARD_NAMES
 
 
 class AutomationPolicy(BaseModel):

@@ -6,10 +6,8 @@ from datetime import datetime, timezone
 import typer
 from rich import print as rprint
 
+from careeros.browser.boards import BOARDS
 from careeros.browser.driver import fetch_jd_text, launch_browser
-from careeros.browser.scrapers.indeed import IndeedScraper
-from careeros.browser.scrapers.linkedin import LinkedInScraper
-from careeros.browser.scrapers.wellfound import WellfoundScraper
 from careeros.cli.apply_cmd import FILLERS
 from careeros.config import GlobalConfig
 from careeros.core.job_id import make_job_id
@@ -41,11 +39,7 @@ pass --i-accept-the-risk, or set """ + _GATE_ENV_VAR + """=1 in the environment
 (for cron/launchd use). See ROADMAP.md for what Phase 9 fixes.[/yellow]
 """
 
-SCRAPERS: dict = {
-    "linkedin": LinkedInScraper(),
-    "indeed": IndeedScraper(),
-    "wellfound": WellfoundScraper(),
-}
+SCRAPERS: dict = {name: board.scraper for name, board in BOARDS.items()}
 
 
 def _get_storage(workspace_path: str | None) -> LocalFilesystemStorage:

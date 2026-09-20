@@ -8,11 +8,9 @@ from rich.console import Console
 from rich.prompt import Prompt
 from rich.table import Table
 
+from careeros.browser.boards import BOARDS
 from careeros.browser.driver import fetch_jd_text, launch_browser
 from careeros.browser.scrapers.generic import GenericScraper
-from careeros.browser.scrapers.indeed import IndeedScraper
-from careeros.browser.scrapers.linkedin import LinkedInScraper
-from careeros.browser.scrapers.wellfound import WellfoundScraper
 from careeros.config import GlobalConfig
 from careeros.core.job_id import make_job_id
 from careeros.core.models import Goals, Job, Profile, Skills
@@ -24,11 +22,7 @@ from careeros.storage.filesystem import LocalFilesystemStorage
 browse_app = typer.Typer(name="browse", help="Search job boards using your browser session.")
 console = Console()
 
-SCRAPERS: dict = {
-    "linkedin": LinkedInScraper(),
-    "indeed": IndeedScraper(),
-    "wellfound": WellfoundScraper(),
-}
+SCRAPERS: dict = {name: board.scraper for name, board in BOARDS.items()}
 
 
 def _get_storage(workspace_path: str | None) -> LocalFilesystemStorage:
@@ -54,7 +48,7 @@ def browse_cmd(
     headless: bool = typer.Option(False, "--headless/--no-headless", help="Run browser headlessly"),
     workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
 ) -> None:
-    valid_boards = {"linkedin", "indeed", "wellfound", "url"}
+    valid_boards = set(BOARDS) | {"url"}
     if board not in valid_boards:
         rprint(f"[red]Invalid --board '{board}'. Valid: {' '.join(sorted(valid_boards))}[/red]")
         raise typer.Exit(1)
