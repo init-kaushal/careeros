@@ -113,9 +113,23 @@ class TestScoreJob:
         mock_resp.choices[0].message.content = '{"score": 50, "reasoning": "ok", "strengths": [], "gaps": []}'
         with patch("litellm.completion", return_value=mock_resp) as mock_llm:
             score_job(long_jd, _make_profile(), _make_skills())
-        prompt = mock_llm.call_args[1]["messages"][0]["content"]
+        prompt = mock_llm.call_args[1]["messages"][1]["content"]
         assert "x" * 4001 not in prompt
         assert "x" * 4000 in prompt or prompt.count("x") <= 4000
+
+    def test_sends_system_and_wrapped_user_message(self):
+        from careeros.skills.job_score import score_job
+        mock_resp = MagicMock()
+        mock_resp.choices[0].message.content = '{"score": 50, "reasoning": "ok", "strengths": [], "gaps": []}'
+        with patch("litellm.completion", return_value=mock_resp) as mock_llm:
+            score_job("some jd text", _make_profile(), _make_skills())
+        messages = mock_llm.call_args[1]["messages"]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert "Senior SRE" in messages[0]["content"]
+        assert messages[1]["role"] == "user"
+        assert "<untrusted_content>" in messages[1]["content"]
+        assert "some jd text" in messages[1]["content"]
 
 
 class TestJobQueryFromProfile:

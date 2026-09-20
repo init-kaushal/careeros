@@ -74,12 +74,24 @@ def test_jd_text_in_prompt():
     with patch("litellm.completion", return_value=_mock_resp(_FULL)) as mock_c:
         extract_job_fields(jd)
     messages = mock_c.call_args.kwargs["messages"]
-    assert jd in messages[0]["content"]
+    assert jd in messages[1]["content"]
 
 
 def test_jd_truncated_to_4000_chars():
     long_jd = "x" * 6000
     with patch("litellm.completion", return_value=_mock_resp(_FULL)) as mock_c:
         extract_job_fields(long_jd)
-    content = mock_c.call_args.kwargs["messages"][0]["content"]
+    content = mock_c.call_args.kwargs["messages"][1]["content"]
     assert "x" * 4001 not in content
+
+
+def test_sends_system_and_wrapped_user_message():
+    jd = "Looking for a Senior SRE"
+    with patch("litellm.completion", return_value=_mock_resp(_FULL)) as mock_c:
+        extract_job_fields(jd)
+    messages = mock_c.call_args.kwargs["messages"]
+    assert len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert messages[1]["role"] == "user"
+    assert "<untrusted_content>" in messages[1]["content"]
+    assert jd in messages[1]["content"]

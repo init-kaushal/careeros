@@ -2,6 +2,7 @@ import json
 import os
 import litellm
 from careeros.core.models import Profile, Skills
+from careeros.skills.sanitize import wrap_untrusted
 
 DEFAULT_LLM_MODEL = "claude-haiku-4-5-20251001"
 _JD_CAP = 4000
@@ -57,12 +58,16 @@ def score_job(
 ) -> dict:
     effective_model = model or os.environ.get("CAREEROS_MODEL", DEFAULT_LLM_MODEL)
     profile_text = _build_profile_text(profile, skills)
-    prompt = _SCORE_INSTRUCTIONS + profile_text + "\n\nJob description:\n" + jd_text[:_JD_CAP]
+    system_text = _SCORE_INSTRUCTIONS + profile_text
+    user_text = "Job description:\n" + wrap_untrusted(jd_text[:_JD_CAP])
     try:
         resp = litellm.completion(
             model=effective_model,
             max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": system_text},
+                {"role": "user", "content": user_text},
+            ],
         )
         result = _parse_json(resp.choices[0].message.content)
         score = max(1, min(100, int(result["score"])))

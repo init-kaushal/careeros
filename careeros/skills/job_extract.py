@@ -1,6 +1,7 @@
 import json
 import os
 import litellm
+from careeros.skills.sanitize import wrap_untrusted
 
 DEFAULT_LLM_MODEL = "claude-haiku-4-5-20251001"
 
@@ -20,8 +21,6 @@ Use null for any field not found.
   "requirements": ["<requirement>", "..."],
   "summary": "<1-2 sentence job summary or null>"
 }
-
-Job description:
 """
 
 _JD_CAP = 4000
@@ -38,11 +37,15 @@ def _parse_json(text: str) -> dict:
 def extract_job_fields(jd_text: str, model: str | None = None) -> dict:
     effective_model = model or os.environ.get("CAREEROS_MODEL", DEFAULT_LLM_MODEL)
     truncated = jd_text[:_JD_CAP]
+    user_text = "Job description:\n" + wrap_untrusted(truncated)
     try:
         resp = litellm.completion(
             model=effective_model,
             max_tokens=1024,
-            messages=[{"role": "user", "content": _JD_INSTRUCTIONS + truncated}],
+            messages=[
+                {"role": "system", "content": _JD_INSTRUCTIONS},
+                {"role": "user", "content": user_text},
+            ],
         )
         return _parse_json(resp.choices[0].message.content)
     except Exception:

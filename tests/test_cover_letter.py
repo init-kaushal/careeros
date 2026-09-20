@@ -81,7 +81,7 @@ class TestGenerateCoverLetter:
         mock_resp.choices[0].message.content = "Cover letter"
         with patch("litellm.completion", return_value=mock_resp) as mock_llm:
             generate_cover_letter(long_jd, _make_profile(), _make_skills(), _make_goals())
-        prompt = mock_llm.call_args[1]["messages"][0]["content"]
+        prompt = mock_llm.call_args[1]["messages"][1]["content"]
         assert "x" * 4001 not in prompt
 
     def test_goals_in_prompt(self):
@@ -92,3 +92,17 @@ class TestGenerateCoverLetter:
             generate_cover_letter("jd text", _make_profile(), _make_skills(), _make_goals())
         prompt = mock_llm.call_args[1]["messages"][0]["content"]
         assert "platform engineering role" in prompt
+
+    def test_sends_system_and_wrapped_user_message(self):
+        from careeros.skills.cover_letter import generate_cover_letter
+        mock_resp = MagicMock()
+        mock_resp.choices[0].message.content = "Cover letter"
+        with patch("litellm.completion", return_value=mock_resp) as mock_llm:
+            generate_cover_letter("some jd text", _make_profile(), _make_skills(), _make_goals())
+        messages = mock_llm.call_args[1]["messages"]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert "Senior SRE" in messages[0]["content"]
+        assert messages[1]["role"] == "user"
+        assert "<untrusted_content>" in messages[1]["content"]
+        assert "some jd text" in messages[1]["content"]
