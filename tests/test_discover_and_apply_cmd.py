@@ -41,9 +41,25 @@ def _posting(company="Acme", title="Senior SRE", url="https://boards.greenhouse.
 
 
 class TestDiscoverAndApplyCmd:
+    def test_gated_without_opt_in_exits_1(self, tmp_path):
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+        assert result.exit_code == 1
+        assert "gated" in result.output.lower()
+
+    def test_gated_env_var_opt_in_bypasses_flag(self, tmp_path, monkeypatch):
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        monkeypatch.setenv("CAREEROS_ALLOW_UNSAFE_AUTOMATION", "1")
+        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[]))}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()):
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+        assert result.exit_code == 0
+
     def test_missing_policy_exits_1(self, tmp_path):
         ws_path = _setup_workspace(tmp_path, policy=None)
-        result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+        result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
         assert result.exit_code == 1
         assert "automation_policy" in result.output.lower()
 
@@ -58,7 +74,7 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 50, "reasoning": "meh"}), \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
-            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
 
         assert result.exit_code == 0
         mock_filler.fill.assert_not_called()
@@ -82,7 +98,7 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
              patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
-            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
 
         assert result.exit_code == 0
         mock_filler.fill.assert_called_once()
@@ -113,7 +129,7 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
              patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
-            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
 
         assert result.exit_code == 0
         assert mock_filler.fill.call_count == 1
@@ -136,7 +152,7 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
              patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value=""), \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
-            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
 
         assert result.exit_code == 0
         mock_filler.fill.assert_not_called()
@@ -157,7 +173,7 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
              patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
-            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
 
         assert result.exit_code == 0
         storage = LocalFilesystemStorage(ws_path)
@@ -191,7 +207,7 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
              patch.object(LocalFilesystemStorage, "atomic_write", flaky_atomic_write), \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
-            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
 
         assert result.exit_code == 0
         # Acme's cover-letter write raised inside the try/except — it must be skipped,
@@ -213,6 +229,6 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.launch_browser") as mock_browser:
             mock_browser.return_value.__enter__ = MagicMock(return_value=(MagicMock(), MagicMock()))
             mock_browser.return_value.__exit__ = MagicMock(return_value=False)
-            runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+            runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
 
         mock_browser.assert_called_with(headless=True)

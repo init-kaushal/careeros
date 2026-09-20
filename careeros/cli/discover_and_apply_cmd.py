@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 
 import typer
@@ -23,6 +24,21 @@ from careeros.storage.filesystem import LocalFilesystemStorage
 discover_and_apply_app = typer.Typer(help="Unattended discover + auto-apply for scheduled runs.")
 
 _RESUME_EXTENSIONS = (".pdf", ".docx")
+
+_GATE_ENV_VAR = "CAREEROS_ALLOW_UNSAFE_AUTOMATION"
+
+_GATE_WARNING = """\
+[red bold]discover-and-apply is gated pending Phase 9 (Policy Engine + content sanitization).[/red bold]
+[yellow]A 2026-09-20 external review found this command's safety design incomplete: the
+auto-apply score is produced by an LLM reading unsanitized, attacker-controllable job
+posting text, and there is no deterministic policy layer in front of approval. A crafted
+job listing can currently influence its own score. There is also no deduplication yet, so
+a scheduled run can re-submit a real application to the same employer on every run.
+
+This command is not disabled — it is opt-in until those gaps close. To run it anyway,
+pass --i-accept-the-risk, or set """ + _GATE_ENV_VAR + """=1 in the environment
+(for cron/launchd use). See ROADMAP.md for what Phase 9 fixes.[/yellow]
+"""
 
 SCRAPERS: dict = {
     "linkedin": LinkedInScraper(),
@@ -49,7 +65,15 @@ def _now() -> str:
 def discover_and_apply_cmd(
     board: str = typer.Option(None, "--board", help="Single board to run (overrides policy's board list)"),
     workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
+    i_accept_the_risk: bool = typer.Option(
+        False, "--i-accept-the-risk", help="Required opt-in until Phase 9 ships (see ROADMAP.md)"
+    ),
 ) -> None:
+    if not i_accept_the_risk and os.environ.get(_GATE_ENV_VAR) != "1":
+        rprint(_GATE_WARNING)
+        raise typer.Exit(1)
+    rprint("[yellow]Running with unsafe automation accepted — see ROADMAP.md Phase 9.[/yellow]")
+
     try:
         runtime = open_automation_runtime(_get_storage(workspace))
     except FileNotFoundError:
