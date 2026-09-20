@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from careeros.cli.discover_and_apply_cmd import discover_and_apply_app
-from careeros.core.models import AutomationPolicy, Job, Profile, Skill, Skills
+from careeros.core.models import AutomationPolicy, Job, PolicyConfig, Profile, Skill, Skills
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace
 
@@ -297,6 +297,32 @@ class TestDiscoverAndApplyCmd:
         jobs = Job.list_all(storage)
         assert len(jobs) == 1
         assert "Duplicates: 1" in second.output
+
+    def test_policy_blocked_company_skipped_and_counted(self, tmp_path):
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        storage = LocalFilesystemStorage(ws_path)
+        PolicyConfig(blocked_companies=["Acme"]).save(storage)
+        mock_filler = MagicMock()
+        mock_filler.can_handle.return_value = True
+
+        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
+             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter") as mock_gen, \
+             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+
+        assert result.exit_code == 0
+        mock_gen.assert_not_called()
+        mock_filler.fill.assert_not_called()
+        assert "Blocked: 1" in result.output
+        jobs = Job.list_all(storage)
+        assert jobs[0].stage == "saved"
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        log_content = storage.read("activity/" + today + ".jsonl").decode()
+        assert "policy_blocked" in log_content
 
     def test_launch_browser_always_headless(self, tmp_path):
         policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])

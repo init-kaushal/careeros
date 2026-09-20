@@ -13,7 +13,8 @@ from careeros.browser.scrapers.wellfound import WellfoundScraper
 from careeros.cli.apply_cmd import FILLERS
 from careeros.config import GlobalConfig
 from careeros.core.job_id import make_job_id
-from careeros.core.models import AutomationPolicy, Goals, Job, Profile, Skills
+from careeros.core.models import AutomationPolicy, Goals, Job, PolicyConfig, Profile, Skills
+from careeros.core.policy_engine import PolicyEngine
 from careeros.runtime.base import ActionProposal
 from careeros.runtime.factory import open_automation_runtime
 from careeros.skills.browse_query import job_query_from_profile
@@ -173,8 +174,10 @@ def discover_and_apply_cmd(
     ])
     resume_path = runtime.storage.resolve(resume_entries[-1]) if resume_entries else None
 
+    policy_engine = PolicyEngine(PolicyConfig.load(runtime.storage))
     applied_count = 0
     skipped_count = 0
+    blocked_count = 0
     for p in eligible:
         if applied_count >= policy.max_auto_applies_per_run:
             break
@@ -184,6 +187,17 @@ def discover_and_apply_cmd(
             continue
 
         job_id = p["job_id"]
+        job = Job.load(runtime.storage, job_id)
+        policy_result = policy_engine.check_job(job)
+        if policy_result.blocked:
+            runtime.record_activity(runtime.new_event(
+                "policy_blocked", "discover-and-apply",
+                "Blocked by policy (" + policy_result.rule + "): " + p["company"] + " — " + p["title"],
+                status="failed", entity_type="job", entity_id=job_id,
+            ))
+            blocked_count += 1
+            continue
+
         cover_letter = generate_cover_letter(p["jd_text"], profile, skills, goals)
         if not cover_letter:
             runtime.record_activity(runtime.new_event(
@@ -252,5 +266,6 @@ def discover_and_apply_cmd(
 
     rprint(
         "Discovered: " + str(saved_count) + ", Duplicates: " + str(duplicate_count)
+        + ", Blocked: " + str(blocked_count)
         + ", Auto-applied: " + str(applied_count) + ", Skipped: " + str(skipped_count)
     )
