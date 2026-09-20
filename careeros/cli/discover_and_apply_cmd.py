@@ -10,6 +10,7 @@ from careeros.browser.driver import BrowserProfileBusy, fetch_jd_text, launch_br
 from careeros.browser.session import check_board_sessions
 from careeros.cli.apply_cmd import FILLERS
 from careeros.config import GlobalConfig
+from careeros.config_sources import build_source, load_board_entries
 from careeros.core.job_store import JobStore
 from careeros.core.models import AutomationPolicy, Goals, Job, PolicyConfig, Profile, Skills
 from careeros.core.policy_engine import PolicyEngine
@@ -18,6 +19,7 @@ from careeros.runtime.factory import open_automation_runtime
 from careeros.skills.browse_query import job_query_from_profile
 from careeros.skills.cover_letter import generate_cover_letter
 from careeros.skills.job_score import score_job
+from careeros.sources.ats import ATSFetchError
 from careeros.sources.base import job_from_posting, posting_from_scrape
 from careeros.storage.filesystem import LocalFilesystemStorage
 
@@ -85,11 +87,6 @@ def discover_and_apply_cmd(
             status="failed", entity_type="board", entity_id=b,
         ))
     boards = [b for b in boards if sessions.get(b)]
-    if not boards:
-        rprint(
-            "[red]No authorized board sessions. Run: careeros browser login --board <name>[/red]"
-        )
-        raise typer.Exit(1)
     query = job_query_from_profile(profile, goals)
 
     discovered: list[dict] = []
@@ -114,6 +111,40 @@ def discover_and_apply_cmd(
         except BrowserProfileBusy as exc:
             rprint("[red]" + str(exc) + "[/red]")
             raise typer.Exit(1)
+
+    entries = load_board_entries(runtime.storage)
+    unavailable: list[str] = []
+    for entry in entries:
+        label = entry.source + ":" + entry.board
+        try:
+            postings = build_source(entry).fetch(entry.board)
+        except ATSFetchError as exc:
+            unavailable.append(label)
+            runtime.record_activity(runtime.new_event(
+                "source_unavailable", "discover-and-apply",
+                "Could not fetch " + label + ": " + str(exc),
+                status="failed", entity_type="source", entity_id=label,
+            ))
+            continue
+        for posting in postings:
+            jd_text = posting.description or ""
+            result = score_job(jd_text, profile, skills)
+            discovered.append({
+                "source_board": posting.source,
+                "title": posting.title,
+                "company": posting.company,
+                "location": posting.location,
+                "url": posting.url,
+                "score": result["score"],
+                "jd_text": jd_text,
+            })
+
+    if not boards and (not entries or len(unavailable) == len(entries)):
+        rprint(
+            "[red]No authorized board sessions and no reachable API sources.\n"
+            "Run: careeros browser login --board <name>, or check config/sources.json[/red]"
+        )
+        raise typer.Exit(1)
 
     store = JobStore(runtime.storage)
     saved_count = 0
@@ -258,4 +289,5 @@ def discover_and_apply_cmd(
         + ", Blocked: " + str(blocked_count)
         + ", Auto-applied: " + str(applied_count) + ", Skipped: " + str(skipped_count)
         + ", Unauthorized boards: " + (", ".join(unauthorized) if unauthorized else "none")
+        + ", Unavailable sources: " + (", ".join(unavailable) if unavailable else "none")
     )

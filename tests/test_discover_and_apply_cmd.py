@@ -9,6 +9,8 @@ from typer.testing import CliRunner
 from careeros.cli.discover_and_apply_cmd import discover_and_apply_app
 from careeros.core.job_store import JobStore
 from careeros.core.models import AutomationPolicy, Job, PolicyConfig, Profile, Skill, Skills
+from careeros.sources.ats import ATSFetchError
+from careeros.sources.base import Posting
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace
 
@@ -733,3 +735,69 @@ class TestDiscoverAndApplyCmd:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         log_content = storage.read("activity/" + today + ".jsonl").decode()
         assert "posting_unusable" in log_content
+
+    def test_api_source_postings_join_the_pipeline(self, tmp_path):
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5,
+                                  boards=[])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        storage = LocalFilesystemStorage(ws_path)
+        storage.atomic_write("config/sources.json", json.dumps({"sources": [
+            {"source": "greenhouse", "board": "stripe", "company": "Stripe"}]}).encode())
+        source = MagicMock()
+        source.name = "greenhouse"
+        source.fetch.return_value = [Posting(
+            source="greenhouse", title="Senior SRE", company="Stripe",
+            url="https://boards.greenhouse.io/stripe/jobs/1")]
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={}), \
+             patch("careeros.cli.discover_and_apply_cmd.build_source", return_value=source), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job",
+                   return_value={"score": 10, "reasoning": "meh"}):
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+        assert result.exit_code == 0
+        assert len(Job.list_all(storage)) == 1
+
+    def test_unavailable_source_is_skipped_and_logged(self, tmp_path):
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5,
+                                  boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        storage = LocalFilesystemStorage(ws_path)
+        storage.atomic_write("config/sources.json", json.dumps({"sources": [
+            {"source": "greenhouse", "board": "nope", "company": "Nope"}]}).encode())
+        source = MagicMock()
+        source.name = "greenhouse"
+        source.fetch.side_effect = ATSFetchError("not_found")
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS") as scrapers, \
+             patch("careeros.cli.discover_and_apply_cmd.build_source", return_value=source), \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="jd"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job",
+                   return_value={"score": 10, "reasoning": "meh"}):
+            scrapers.__getitem__.return_value.search.return_value = []
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert "Unavailable sources: greenhouse:nope" in result.output
+        logs = sorted((tmp_path / "activity").glob("*.jsonl"))
+        events = [json.loads(l) for l in logs[-1].read_text().strip().split("\n") if l]
+        unavail = [e for e in events if e["event_type"] == "source_unavailable"]
+        assert len(unavail) == 1
+        assert unavail[0]["status"] == "failed"
+
+    def test_all_boards_unauthorized_and_all_sources_unavailable_exits_non_zero(self, tmp_path):
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5,
+                                  boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        storage = LocalFilesystemStorage(ws_path)
+        storage.atomic_write("config/sources.json", json.dumps({"sources": [
+            {"source": "greenhouse", "board": "nope", "company": "Nope"}]}).encode())
+        source = MagicMock()
+        source.name = "greenhouse"
+        source.fetch.side_effect = ATSFetchError("not_found")
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": False}), \
+             patch("careeros.cli.discover_and_apply_cmd.build_source", return_value=source):
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+        assert result.exit_code == 1
