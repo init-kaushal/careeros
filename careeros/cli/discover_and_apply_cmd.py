@@ -46,7 +46,10 @@ def _now() -> str:
 
 @discover_and_apply_app.command()
 def discover_and_apply_cmd(
-    board: str = typer.Option(None, "--board", help="Single board to run (overrides policy's board list)"),
+    board: str = typer.Option(
+        None, "--board",
+        help="Single browser board to run; API sources in config/sources.json are always polled.",
+    ),
     workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
 ) -> None:
     try:
@@ -141,6 +144,10 @@ def discover_and_apply_cmd(
             })
 
     if not boards and (not entries or len(unavailable) == len(entries)):
+        # Joined with an explicit \n, not a space: rich's 80-column wrap would
+        # otherwise be free to break "careeros browser login" mid-phrase,
+        # which would fail an unchanged Phase 9c assertion on that exact
+        # substring. Do not "clean this up" back to a single sentence.
         rprint(
             "[red]No authorized board sessions and no reachable API sources.\n"
             "Run: careeros browser login --board <name>, or check config/sources.json[/red]"
@@ -174,6 +181,11 @@ def discover_and_apply_cmd(
             ))
             saved_count += 1
         else:
+            runtime.record_activity(runtime.new_event(
+                "job_merged", "discover-and-apply",
+                "Job saved from " + p["source_board"] + ": " + p["company"] + " — " + p["title"],
+                entity_type="job", entity_id=outcome.job.id,
+            ))
             duplicate_count += 1
 
     # Two sources can surface the same posting in one run; both discovery

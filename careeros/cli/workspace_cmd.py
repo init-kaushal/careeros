@@ -2,6 +2,7 @@ import json
 import typer
 from rich import print as rprint
 from careeros.config import GlobalConfig
+from careeros.config_sources import KNOWN_SOURCES
 from careeros.core.models import Profile, Skills
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import open_workspace
@@ -93,16 +94,18 @@ def validate_cmd(workspace: str = typer.Option(None, "--workspace", help="Worksp
     if storage.exists("config/sources.json"):
         try:
             raw = json.loads(storage.read("config/sources.json").decode())
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             raw = {}
-        inert = [
-            str(item.get("source", "?"))
-            for item in raw.get("sources", [])
-            if isinstance(item, dict) and not item.get("board")
-        ]
-        for name in inert:
-            rprint("[yellow]NOTE[/yellow] config/sources.json: '" + name
-                   + "' entry is inert (no board slug)")
+        for item in raw.get("sources", []):
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("source", "?"))
+            if not item.get("board"):
+                rprint("[yellow]NOTE[/yellow] config/sources.json: '" + name
+                       + "' entry is inert (no board slug)")
+            elif item.get("source") not in KNOWN_SOURCES:
+                rprint("[yellow]NOTE[/yellow] config/sources.json: '" + name
+                       + "' entry is inert (no connector for this source)")
 
     activity_files = sorted(p for p in storage.list("activity/") if p.endswith(".jsonl"))
     for log_path in activity_files[-1:]:

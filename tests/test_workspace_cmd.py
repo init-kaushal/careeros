@@ -75,3 +75,35 @@ def test_validate_reports_inert_source_entries(seeded_workspace):
     result = runner.invoke(app, ["workspace", "validate", "--workspace", str(ws_path)])
     assert "inert (no board slug)" in result.output
     assert result.exit_code == 0   # inert entries are a note, not an error
+
+
+def test_validate_reports_unknown_source_connector(seeded_workspace):
+    # Review MINOR 8: an entry with a `board` but a typo'd/unsupported
+    # `source` is silently dropped by config_sources.load_board_entries.
+    # onboard takes free-text `source:board:Company`, so this is the more
+    # likely misconfiguration — validate should surface it too, still as a
+    # NOTE that doesn't fail the command.
+    ws_path, _ = seeded_workspace
+    storage = LocalFilesystemStorage(str(ws_path))
+    storage.atomic_write("config/sources.json", json.dumps({"sources": [
+        {"source": "greenhosue", "board": "stripe", "company": "Stripe"},
+    ]}).encode())
+    runner = CliRunner()
+    result = runner.invoke(app, ["workspace", "validate", "--workspace", str(ws_path)])
+    normalized = " ".join(result.output.split())
+    assert "inert (no connector for this source)" in normalized
+    assert "greenhosue" in normalized
+    assert result.exit_code == 0
+
+
+def test_validate_handles_non_utf8_sources_json_without_crashing(seeded_workspace):
+    # Review MINOR 9: validate only caught json.JSONDecodeError, so a
+    # non-UTF-8 config/sources.json crashed it with a raw traceback instead
+    # of the graceful handling config_sources.py already has.
+    ws_path, _ = seeded_workspace
+    (ws_path / "config").mkdir(exist_ok=True)
+    (ws_path / "config" / "sources.json").write_bytes(b"\xff\xfe\x00\x01not utf8")
+    runner = CliRunner()
+    result = runner.invoke(app, ["workspace", "validate", "--workspace", str(ws_path)])
+    assert "Traceback" not in result.output
+    assert result.exit_code == 0

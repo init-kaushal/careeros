@@ -331,4 +331,4 @@ def search_cmd(
             entity_type="job", entity_id=outcome.job.id,
         ))
 
-    rprint("[green]Saved " + str(saved) + " job(s)[/green], Duplicates: " + str(duplicates))
+    rprint("[green]Saved " + str(saved) + " job(s), Duplicates: " + str(duplicates) + "[/green]")

@@ -155,7 +155,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Tests run fully offline — no API calls, no network, no real browser. 409 tests, every
+Tests run fully offline — no API calls, no network, no real browser. Every
 LLM/browser/SMTP call mocked at the boundary.
 
 ## Status

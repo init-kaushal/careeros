@@ -12,6 +12,10 @@ _SOURCES_PATH = "config/sources.json"
 
 _BUILDERS = {"greenhouse": GreenhouseSource, "lever": LeverSource}
 
+# Public so `workspace validate` can report a typo'd source name without
+# reaching into this module's private connector registry.
+KNOWN_SOURCES = frozenset(_BUILDERS)
+
 
 @dataclass(frozen=True)
 class BoardEntry:

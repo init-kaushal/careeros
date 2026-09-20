@@ -34,10 +34,10 @@ Every phase below follows the same process the first eight did: brainstorming (q
 **Status: shipped.** All three parts landed (9a policy engine, 9b content sanitization,
 9c browser isolation) and the `discover-and-apply` opt-in gate has been removed.
 
-**Inherited by Phase 10:** deduplication is a stopgap matching exact case-insensitive
+**Inherited by Phase 10:** deduplication was a stopgap matching exact case-insensitive
 `(company, title)`. A posting re-listed under a variant title ("Senior SRE" vs "Senior Site
-Reliability Engineer") still creates a second record and can be applied to twice. Phase 10's
-canonical-URL fingerprinting closes this.
+Reliability Engineer") still created a second record and could be applied to twice. Phase 10's
+canonical-URL fingerprinting closed this.
 
 ---
 
