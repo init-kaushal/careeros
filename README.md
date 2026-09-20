@@ -55,7 +55,7 @@ an append-only audit trail.
 - **`careeros browser status`** — which boards are currently authorized, and where the profile lives.
 - **`careeros job add / list / show / update / note / search`** — manage saved jobs directly.
 - **`careeros browse --board <linkedin|indeed|wellfound|url>`** — browser-driven job search using
-  your own logged-in session, LLM-scored against your profile, save the ones you want.
+  the dedicated CareerOS profile, LLM-scored against your profile, save the ones you want.
 
 **Applying**
 - **`careeros apply --job <id>`** — generates a role-specific cover letter (with an
@@ -151,7 +151,7 @@ Eight phases shipped, in order:
 
 1. **Workspace core** — onboarding, profile extraction, `StorageProvider` protocol, export/import
 2. **Job pipeline** — job schema, LLM-assisted scoring against your profile
-3. **Browser search** — `browse`, scraping LinkedIn/Indeed/Wellfound via your own session
+3. **Browser search** — `browse`, scraping LinkedIn/Indeed/Wellfound via a dedicated CareerOS profile
 4. **Auto-apply** — cover letter generation, platform-specific form fillers, approval-gated submit
 5. **Agent interoperability** — `AgentRuntime` seam (`LocalRuntime`, and the interface a future
    agent-embedded runtime plugs into) so every command's approval logic is runtime-agnostic

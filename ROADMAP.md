@@ -6,7 +6,7 @@ Eight phases shipped. See `README.md` for the full command reference; this is th
 
 1. **Workspace core** — onboarding, profile extraction, `StorageProvider` protocol, export/import
 2. **Job pipeline** — job schema, LLM-assisted scoring against your profile
-3. **Browser search** — `browse`, scraping LinkedIn/Indeed/Wellfound via your own session
+3. **Browser search** — `browse`, scraping LinkedIn/Indeed/Wellfound via a dedicated CareerOS profile
 4. **Auto-apply** — cover letter generation, platform-specific form fillers, approval-gated submit
 5. **Agent interoperability** — `AgentRuntime` seam (`LocalRuntime`, and a `ClaudeCodeRuntime` exercised so far only by an internal test — see Phase 12) so approval logic is runtime-agnostic
 6. **Automation** — `discover-and-apply` for unattended, scheduled runs with a score-threshold policy

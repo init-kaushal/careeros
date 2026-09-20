@@ -168,7 +168,7 @@ compatibility.
 
 Once your workspace exists, CareerOS covers the rest of the job search:
 
-- `careeros browse --board linkedin` — search and score jobs through your own browser session
+- `careeros browse --board linkedin` — search and score jobs through the dedicated CareerOS profile
 - `careeros apply --job <id>` — generate a cover letter and fill the real application form
 - `careeros discover-and-apply` — run unattended from cron, auto-applying above a score threshold
 - `careeros research company --job <id>` / `research people --job <id>` / `research compensation --job <id>`
