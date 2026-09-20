@@ -3,7 +3,7 @@ import pytest
 
 @pytest.mark.integration
 def test_linkedin_search_returns_results():
-    """Requires Chrome with active LinkedIn session. Run: pytest -m integration"""
+    """Requires `careeros browser login --board linkedin` to have been run. Run: pytest -m integration"""
     from careeros.browser.driver import launch_browser
     from careeros.browser.scrapers.linkedin import LinkedInScraper
     scraper = LinkedInScraper()
@@ -17,7 +17,7 @@ def test_linkedin_search_returns_results():
 
 @pytest.mark.integration
 def test_indeed_search_returns_results():
-    """Requires Chrome with active Indeed session. Run: pytest -m integration"""
+    """Requires `careeros browser login --board indeed` to have been run. Run: pytest -m integration"""
     from careeros.browser.driver import launch_browser
     from careeros.browser.scrapers.indeed import IndeedScraper
     scraper = IndeedScraper()

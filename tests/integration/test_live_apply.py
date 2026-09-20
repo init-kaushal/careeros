@@ -2,9 +2,9 @@
 Integration tests for live browser apply flow.
 
 These tests require:
-- Chrome browser with an active session
+- `careeros browser login --board <name>` to have been run for the relevant board
 - Real Greenhouse/Lever job URLs (set via env vars CAREEROS_TEST_GREENHOUSE_URL, CAREEROS_TEST_LEVER_URL)
-- Valid ATS credentials/login session in the browser
+- Valid ATS credentials/login session in the isolated CareerOS browser profile
 
 Run with: pytest -m integration
 """
@@ -31,7 +31,7 @@ def test_lever_filler_can_handle_live_url():
 @pytest.mark.integration
 def test_greenhouse_fill_live():
     """
-    Live browser test — requires Chrome with an active session and a real Greenhouse job URL.
+    Live browser test — requires `careeros browser login --board <name>` and a real Greenhouse job URL.
     Set CAREEROS_TEST_GREENHOUSE_URL env var to the apply URL before running.
     Run with: pytest -m integration
     """
@@ -60,7 +60,7 @@ def test_greenhouse_fill_live():
 @pytest.mark.integration
 def test_lever_fill_live():
     """
-    Live browser test — requires Chrome with an active session and a real Lever job URL.
+    Live browser test — requires `careeros browser login --board <name>` and a real Lever job URL.
     Set CAREEROS_TEST_LEVER_URL env var to the apply URL before running.
     Run with: pytest -m integration
     """

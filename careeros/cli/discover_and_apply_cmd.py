@@ -64,6 +64,10 @@ def discover_and_apply_cmd(
         rprint("[red]No profile found. Run 'careeros onboard' first.[/red]")
         raise typer.Exit(1)
 
+    if board is not None and board not in BOARDS:
+        rprint("[red]Unknown board '" + board + "'. Valid: " + ", ".join(BOARDS) + "[/red]")
+        raise typer.Exit(1)
+
     skills = Skills.load_or_empty(runtime.storage)
     goals = Goals.load_or_empty(runtime.storage)
     boards = [board] if board else policy.boards
@@ -90,10 +94,7 @@ def discover_and_apply_cmd(
     discovered: list[dict] = []
     now = _now()
     for b in boards:
-        scraper = SCRAPERS.get(b)
-        if scraper is None:
-            rprint("[yellow]Unknown board '" + b + "', skipping.[/yellow]")
-            continue
+        scraper = SCRAPERS[b]
         try:
             with launch_browser(headless=True) as (_, page):
                 try:

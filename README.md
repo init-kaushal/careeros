@@ -147,7 +147,7 @@ LLM/browser/SMTP call mocked at the boundary.
 
 ## Status
 
-Eight phases shipped, in order:
+Nine phases shipped, in order:
 
 1. **Workspace core** — onboarding, profile extraction, `StorageProvider` protocol, export/import
 2. **Job pipeline** — job schema, LLM-assisted scoring against your profile
@@ -158,6 +158,8 @@ Eight phases shipped, in order:
 6. **Automation** — `discover-and-apply` for unattended, scheduled runs with a score-threshold policy
 7. **People + outreach** — company/people research, role-aware drafting, approval-gated email send
 8. **Compensation research** — evidence-backed comp data with an honest confidence rating
+9. **Policy engine, content sanitization, browser isolation** — deterministic pre-approval policy,
+   untrusted-content delimiters, and a dedicated browser profile
 
 All workspace I/O goes through the `StorageProvider` protocol, so storage backends can be
 swapped without touching business logic. Every meaningful action — both outcomes of any

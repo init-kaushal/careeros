@@ -2,7 +2,7 @@
 
 ## Where we are
 
-Eight phases shipped. See `README.md` for the full command reference; this is the one-line version:
+Nine phases shipped. See `README.md` for the full command reference; this is the one-line version:
 
 1. **Workspace core** — onboarding, profile extraction, `StorageProvider` protocol, export/import
 2. **Job pipeline** — job schema, LLM-assisted scoring against your profile
@@ -12,6 +12,7 @@ Eight phases shipped. See `README.md` for the full command reference; this is th
 6. **Automation** — `discover-and-apply` for unattended, scheduled runs with a score-threshold policy
 7. **People + outreach** — company/people research, role-aware drafting, approval-gated email send
 8. **Compensation research** — evidence-backed comp data with an honest confidence rating
+9. **Policy engine, content sanitization, browser isolation** — deterministic pre-approval policy, untrusted-content delimiters, and a dedicated browser profile
 
 The original design (`docs/superpowers/specs/2026-09-18-careeros-design.md`) sketched Phases 0-6 up front; what actually got built diverged from that numbering as real constraints surfaced (browser scraping replaced planned API connectors in Phase 3, People+Outreach moved from Phase 3 to Phase 7, compensation research moved from Phase 2 to Phase 8). That original doc also named several things under Phases 2, 4, and 5 that were never built when those phases shipped. This roadmap picks up exactly those gaps, plus the interoperability and outreach surface area intentionally deferred along the way.
 

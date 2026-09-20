@@ -158,6 +158,26 @@ class TestDiscoverAndApplyCmd:
         assert "already in use" in result.output
         assert "Traceback" not in result.output
 
+    def test_unknown_board_override_errors_with_valid_list(self, tmp_path):
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        result = runner.invoke(
+            discover_and_apply_app, ["--board", "nonsense", "--workspace", ws_path]
+        )
+        assert result.exit_code == 1
+        assert "Unknown board 'nonsense'" in result.output
+        assert "linkedin" in result.output
+
+        activity_dir = tmp_path / "activity"
+        logs = sorted(activity_dir.glob("*.jsonl")) if activity_dir.exists() else []
+        events = [
+            json.loads(line)
+            for log in logs
+            for line in log.read_text().strip().split("\n")
+            if line
+        ]
+        assert not any(e["event_type"] == "session_unauthorized" for e in events)
+
     def test_interviewing_job_with_applied_at_is_not_reapplied(self, tmp_path):
         # Review finding: dedup previously keyed "already_applied" off
         # stage == "applied", so a job advanced to interviewing/offer/closed
