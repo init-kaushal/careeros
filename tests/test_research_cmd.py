@@ -33,7 +33,9 @@ class TestResearchCompany:
 
     def test_researches_and_saves_company(self, tmp_path):
         ws_path = _setup_workspace(tmp_path)
-        with patch("careeros.cli.research_cmd.launch_browser") as mock_browser, \
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.research_cmd.launch_browser") as mock_browser, \
              patch("careeros.cli.research_cmd.fetch_jd_text", return_value="Acme Corp page content"), \
              patch("careeros.cli.research_cmd.extract_company_info", return_value={"industry": "Software", "size": "51-200", "notes": "Series B"}):
             mock_browser.return_value.__enter__ = MagicMock(return_value=(MagicMock(), MagicMock()))
@@ -63,7 +65,9 @@ class TestResearchPeople:
         mock_scraper.search.return_value = [
             {"name": "Jane Doe", "title": "Engineering Manager", "linkedin_url": "https://linkedin.com/in/jane"},
         ]
-        with patch("careeros.cli.research_cmd.PeopleSearchScraper", return_value=mock_scraper), \
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.research_cmd.PeopleSearchScraper", return_value=mock_scraper), \
              patch("careeros.cli.research_cmd.launch_browser") as mock_browser, \
              patch("careeros.cli.research_cmd.classify_person_role", return_value="em"):
             mock_browser.return_value.__enter__ = MagicMock(return_value=(MagicMock(), MagicMock()))
@@ -131,3 +135,47 @@ class TestResearchCompensation:
         point = CompensationDataPoint.model_validate_json(storage.read(comp_files[0]).decode())
         assert point.confidence == "low"
         assert point.base_min is None
+
+
+class TestResearchSessionPreflight:
+    def test_research_people_requires_a_linkedin_session(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path)
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": False}), \
+             patch("careeros.cli.research_cmd.launch_browser") as mock_browser:
+            result = runner.invoke(
+                research_app, ["people", "--job", "acme-sre-abc1", "--workspace", ws_path]
+            )
+        assert result.exit_code == 1
+        assert "careeros browser login --board linkedin" in result.output
+        mock_browser.assert_not_called()
+
+    def test_research_company_requires_a_linkedin_session(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path)
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": False}), \
+             patch("careeros.cli.research_cmd.launch_browser") as mock_browser:
+            result = runner.invoke(
+                research_app, ["company", "--job", "acme-sre-abc1", "--workspace", ws_path]
+            )
+        assert result.exit_code == 1
+        mock_browser.assert_not_called()
+
+    def test_research_compensation_needs_no_session(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path)
+        with patch("careeros.cli.preflight.check_board_sessions") as cbs, \
+             patch("careeros.cli.research_cmd.launch_browser") as mock_browser, \
+             patch("careeros.cli.research_cmd.fetch_jd_text", return_value="page"), \
+             patch("careeros.cli.research_cmd.extract_compensation_data",
+                   return_value={"base_min": None, "base_max": None, "bonus": None,
+                                 "equity": None, "confidence": "low"}):
+            mock_browser.return_value.__enter__ = MagicMock(
+                return_value=(MagicMock(), MagicMock())
+            )
+            mock_browser.return_value.__exit__ = MagicMock(return_value=False)
+            result = runner.invoke(
+                research_app,
+                ["compensation", "--job", "acme-sre-abc1", "--workspace", ws_path],
+            )
+        assert result.exit_code == 0
+        cbs.assert_not_called()

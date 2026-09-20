@@ -7,8 +7,9 @@ import urllib.parse
 import typer
 from rich import print as rprint
 
-from careeros.browser.driver import fetch_jd_text, launch_browser
+from careeros.browser.driver import BrowserProfileBusy, fetch_jd_text, launch_browser
 from careeros.browser.scrapers.people_search import PeopleSearchScraper
+from careeros.cli.preflight import require_board_session
 from careeros.config import GlobalConfig
 from careeros.core.ids import make_company_id, make_compensation_id, make_person_id
 from careeros.core.models import Company, CompensationDataPoint, Job, Person, Preferences
@@ -55,11 +56,16 @@ def company(
     company_id = make_company_id(job_obj.company)
     company_search_url = "https://www.linkedin.com/search/results/companies/?keywords=" + urllib.parse.quote(job_obj.company)
 
+    require_board_session("linkedin")
+
     try:
         with launch_browser(headless=True) as (_, page):
             page_content = fetch_jd_text(page, company_search_url)
     except ImportError:
         rprint("[red]Playwright is not installed.[/red]")
+        raise typer.Exit(1)
+    except BrowserProfileBusy as exc:
+        rprint("[red]" + str(exc) + "[/red]")
         raise typer.Exit(1)
 
     info = extract_company_info(page_content)
@@ -97,6 +103,8 @@ def people(
     company_id = make_company_id(job_obj.company)
     scraper = PeopleSearchScraper()
 
+    require_board_session("linkedin")
+
     try:
         with launch_browser(headless=True) as (_, page):
             try:
@@ -106,6 +114,9 @@ def people(
                 results = []
     except ImportError:
         rprint("[red]Playwright is not installed.[/red]")
+        raise typer.Exit(1)
+    except BrowserProfileBusy as exc:
+        rprint("[red]" + str(exc) + "[/red]")
         raise typer.Exit(1)
 
     found = 0
@@ -163,6 +174,9 @@ def compensation(
             page_content = fetch_jd_text(page, url)
     except ImportError:
         rprint("[red]Playwright is not installed.[/red]")
+        raise typer.Exit(1)
+    except BrowserProfileBusy as exc:
+        rprint("[red]" + str(exc) + "[/red]")
         raise typer.Exit(1)
 
     data = extract_compensation_data(page_content)

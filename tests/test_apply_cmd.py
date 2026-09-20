@@ -297,3 +297,51 @@ class TestApplyCmdFailurePaths:
             runner.invoke(apply_app, ["acme-sre-abc1", "--model", "gpt-4o"])
         call_kwargs = mock_gen.call_args[1]
         assert call_kwargs.get("model") == "gpt-4o"
+
+    def test_linkedin_apply_requires_a_linkedin_session(self, tmp_path):
+        from careeros.browser.fillers.linkedin import LinkedInFiller
+
+        runtime = _mock_runtime(tmp_path)
+        job = _make_job(url="https://www.linkedin.com/jobs/view/1")
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+             patch("careeros.cli.apply_cmd.Job.load", return_value=job), \
+             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Dear team"), \
+             patch("careeros.cli.apply_cmd.FILLERS", [LinkedInFiller()]), \
+             patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": False}), \
+             patch("careeros.cli.apply_cmd.launch_browser") as mock_browser, \
+             patch("careeros.cli.apply_cmd.Prompt.ask", side_effect=["a"]):
+            result = runner.invoke(apply_app, ["acme-sre-abc1"])
+
+        assert result.exit_code == 1
+        assert "careeros browser login --board linkedin" in result.output
+        mock_browser.assert_not_called()
+
+    def test_greenhouse_apply_needs_no_session(self, tmp_path):
+        from careeros.browser.fillers.greenhouse import GreenhouseFiller
+
+        runtime = _mock_runtime(tmp_path)
+        job = _make_job(url="https://boards.greenhouse.io/acme/jobs/1")
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+             patch("careeros.cli.apply_cmd.Job.load", return_value=job), \
+             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Dear team"), \
+             patch("careeros.cli.apply_cmd.FILLERS", [GreenhouseFiller()]), \
+             patch("careeros.cli.preflight.check_board_sessions") as cbs, \
+             patch("careeros.cli.apply_cmd.launch_browser") as mock_browser, \
+             patch("careeros.cli.apply_cmd.Prompt.ask", side_effect=["a"]):
+            mock_browser.return_value.__enter__ = MagicMock(
+                return_value=(MagicMock(), MagicMock())
+            )
+            mock_browser.return_value.__exit__ = MagicMock(return_value=False)
+            runner.invoke(apply_app, ["acme-sre-abc1"])
+
+        cbs.assert_not_called()
+        mock_browser.assert_called()

@@ -6,7 +6,7 @@ import typer
 from rich import print as rprint
 
 from careeros.browser.boards import BOARDS
-from careeros.browser.driver import fetch_jd_text, launch_browser
+from careeros.browser.driver import BrowserProfileBusy, fetch_jd_text, launch_browser
 from careeros.browser.session import check_board_sessions
 from careeros.cli.apply_cmd import FILLERS
 from careeros.config import GlobalConfig
@@ -104,6 +104,9 @@ def discover_and_apply_cmd(
                     discovered.append({**posting, "score": result["score"], "jd_text": jd_text})
         except ImportError:
             rprint("[red]Playwright is not installed.[/red]")
+            raise typer.Exit(1)
+        except BrowserProfileBusy as exc:
+            rprint("[red]" + str(exc) + "[/red]")
             raise typer.Exit(1)
 
     # Minimal dedup: match on (company, title) case-insensitively against jobs already

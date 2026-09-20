@@ -8,11 +8,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from careeros.browser.driver import launch_browser
+from careeros.browser.driver import BrowserProfileBusy, launch_browser
 from careeros.browser.fillers.generic import GenericFiller
 from careeros.browser.fillers.greenhouse import GreenhouseFiller
 from careeros.browser.fillers.lever import LeverFiller
 from careeros.browser.fillers.linkedin import LinkedInFiller
+from careeros.cli.preflight import require_board_session
 from careeros.config import GlobalConfig
 from careeros.core.models import Goals, Job, PolicyConfig, Profile, Skills
 from careeros.core.policy_engine import PolicyEngine
@@ -144,6 +145,11 @@ def apply_cmd(
         rprint("[red]No filler available for this URL.[/red]")
         raise typer.Exit(1)
 
+    # Only LinkedIn Easy Apply needs a session; Greenhouse, Lever, and the
+    # generic fallback all work signed-out.
+    if isinstance(filler, LinkedInFiller):
+        require_board_session("linkedin")
+
     # Final approval
     result = runtime.request_approval(ActionProposal(
         action="apply_to_job",
@@ -161,6 +167,9 @@ def apply_cmd(
             success = filler.fill(page, job, profile, cover_letter, cover_letter_path, resume_path)
     except ImportError:
         rprint("[red]Playwright not installed. Run: pip install playwright && playwright install chrome[/red]")
+        raise typer.Exit(1)
+    except BrowserProfileBusy as exc:
+        rprint("[red]" + str(exc) + "[/red]")
         raise typer.Exit(1)
     except Exception as exc:
         rprint("[red]Browser error: " + str(exc) + ". Stage not updated.[/red]")

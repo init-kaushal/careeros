@@ -9,8 +9,9 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from careeros.browser.boards import BOARDS
-from careeros.browser.driver import fetch_jd_text, launch_browser
+from careeros.browser.driver import BrowserProfileBusy, fetch_jd_text, launch_browser
 from careeros.browser.scrapers.generic import GenericScraper
+from careeros.cli.preflight import require_board_session
 from careeros.config import GlobalConfig
 from careeros.core.job_id import make_job_id
 from careeros.core.models import Goals, Job, Profile, Skills
@@ -57,6 +58,9 @@ def browse_cmd(
         rprint("[red]Provide --url when using --board url.[/red]")
         raise typer.Exit(1)
 
+    if board != "url":
+        require_board_session(board)
+
     try:
         runtime = open_local_runtime(_get_storage(workspace))
     except FileNotFoundError:
@@ -87,10 +91,19 @@ def browse_cmd(
             for posting in postings:
                 jd_text = fetch_jd_text(page, posting["url"])
                 result = score_job(jd_text, profile, skills)
-                scored.append({**posting, "score": result["score"], "reasoning": result["reasoning"]})
+                scored.append({
+                    **posting,
+                    "score": result["score"],
+                    # score_job returns the raw parsed model JSON and coerces only
+                    # "score"; a model that omits "reasoning" must not abort the run.
+                    "reasoning": result.get("reasoning", ""),
+                })
     except ImportError:
         rprint("[red]Playwright is not installed.[/red]")
         rprint("Run: [bold]pip install playwright && playwright install chrome[/bold]")
+        raise typer.Exit(1)
+    except BrowserProfileBusy as exc:
+        rprint("[red]" + str(exc) + "[/red]")
         raise typer.Exit(1)
 
     filtered = [p for p in scored if p["score"] >= min_score]

@@ -49,7 +49,9 @@ class TestBrowseEndToEnd:
         mock_scraper = MagicMock()
         mock_scraper.search.return_value = _mock_postings()
 
-        with patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True, "indeed": True, "wellfound": True}), \
+             patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.browse_cmd.SCRAPERS", {"linkedin": mock_scraper}), \
              patch("careeros.cli.browse_cmd.fetch_jd_text", return_value="jd text"), \
              patch("careeros.cli.browse_cmd.score_job", return_value=_mock_score()):
@@ -63,7 +65,9 @@ class TestBrowseEndToEnd:
         mock_scraper = MagicMock()
         mock_scraper.search.return_value = [_mock_postings()[0]]
 
-        with patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True, "indeed": True, "wellfound": True}), \
+             patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.browse_cmd.SCRAPERS", {"linkedin": mock_scraper}), \
              patch("careeros.cli.browse_cmd.fetch_jd_text", return_value="jd"), \
              patch("careeros.cli.browse_cmd.score_job", return_value=_mock_score()):
@@ -81,7 +85,9 @@ class TestBrowseEndToEnd:
         mock_scraper.search.return_value = _mock_postings()
 
         scores = [_mock_score(score=90), _mock_score(score=40)]
-        with patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True, "indeed": True, "wellfound": True}), \
+             patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.browse_cmd.SCRAPERS", {"linkedin": mock_scraper}), \
              patch("careeros.cli.browse_cmd.fetch_jd_text", return_value="jd"), \
              patch("careeros.cli.browse_cmd.score_job", side_effect=scores):
@@ -99,7 +105,9 @@ class TestBrowseEndToEnd:
         mock_scraper = MagicMock()
         mock_scraper.search.return_value = [_mock_postings()[0]]
 
-        with patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True, "indeed": True, "wellfound": True}), \
+             patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.browse_cmd.SCRAPERS", {"linkedin": mock_scraper}), \
              patch("careeros.cli.browse_cmd.fetch_jd_text", return_value="jd"), \
              patch("careeros.cli.browse_cmd.score_job", return_value=_mock_score(score=20)):
@@ -116,7 +124,9 @@ class TestBrowseEndToEnd:
         mock_scraper = MagicMock()
         mock_scraper.search.return_value = _mock_postings()
 
-        with patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True, "indeed": True, "wellfound": True}), \
+             patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.browse_cmd.SCRAPERS", {"linkedin": mock_scraper}), \
              patch("careeros.cli.browse_cmd.fetch_jd_text", return_value="jd"), \
              patch("careeros.cli.browse_cmd.score_job", return_value=_mock_score()):
@@ -136,7 +146,9 @@ class TestBrowseEndToEnd:
             calls.append(headless)
             yield MagicMock(), MagicMock()
 
-        with patch("careeros.cli.browse_cmd.launch_browser", capturing_launch), \
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True, "indeed": True, "wellfound": True}), \
+             patch("careeros.cli.browse_cmd.launch_browser", capturing_launch), \
              patch("careeros.cli.browse_cmd.SCRAPERS", {"linkedin": mock_scraper}), \
              patch("careeros.cli.browse_cmd.fetch_jd_text", return_value=""), \
              patch("careeros.cli.browse_cmd.score_job", return_value=_mock_score()):
@@ -149,7 +161,9 @@ class TestBrowseEndToEnd:
         mock_scraper = MagicMock()
         mock_scraper.search.return_value = [_mock_postings()[0]]
 
-        with patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True, "indeed": True, "wellfound": True}), \
+             patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.browse_cmd.SCRAPERS", {"linkedin": mock_scraper}), \
              patch("careeros.cli.browse_cmd.fetch_jd_text", return_value="jd"), \
              patch("careeros.cli.browse_cmd.score_job", return_value=_mock_score()):
@@ -168,7 +182,9 @@ class TestBrowseEndToEnd:
         mock_indeed = MagicMock()
         mock_indeed.search.return_value = []
 
-        with patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True, "indeed": True, "wellfound": True}), \
+             patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.browse_cmd.SCRAPERS", {"linkedin": mock_linkedin, "indeed": mock_indeed}), \
              patch("careeros.cli.browse_cmd.fetch_jd_text", return_value=""), \
              patch("careeros.cli.browse_cmd.score_job", return_value=_mock_score()):
@@ -184,7 +200,9 @@ class TestBrowseDuplicateIndex:
         mock_scraper = MagicMock()
         mock_scraper.search.return_value = _mock_postings()
 
-        with patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True, "indeed": True, "wellfound": True}), \
+             patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.browse_cmd.SCRAPERS", {"linkedin": mock_scraper}), \
              patch("careeros.cli.browse_cmd.fetch_jd_text", return_value="jd"), \
              patch("careeros.cli.browse_cmd.score_job", return_value=_mock_score()), \
@@ -199,7 +217,9 @@ class TestBrowseDuplicateIndex:
 class TestBrowseErrorHandling:
     def test_playwright_not_installed_prints_install_instructions(self, tmp_path):
         ws = _setup_workspace(tmp_path)
-        with patch("careeros.cli.browse_cmd.launch_browser", side_effect=ImportError("playwright")):
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True, "indeed": True, "wellfound": True}), \
+             patch("careeros.cli.browse_cmd.launch_browser", side_effect=ImportError("playwright")):
             result = runner.invoke(browse_app, ["--board", "linkedin", "--workspace", ws])
         assert "playwright install" in result.output.lower() or "pip install playwright" in result.output
 
@@ -211,7 +231,9 @@ class TestBrowseErrorHandling:
 
     def test_no_workspace_exits_1(self):
         from careeros.config import GlobalConfig
-        with patch.object(GlobalConfig, "load", return_value=GlobalConfig(workspace_path=None)):
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True, "indeed": True, "wellfound": True}), \
+             patch.object(GlobalConfig, "load", return_value=GlobalConfig(workspace_path=None)):
             result = runner.invoke(browse_app, ["--board", "linkedin"])
         assert result.exit_code == 1
 
@@ -220,7 +242,9 @@ class TestBrowseErrorHandling:
         mock_scraper = MagicMock()
         mock_scraper.search.side_effect = Exception("network error")
 
-        with patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True, "indeed": True, "wellfound": True}), \
+             patch("careeros.cli.browse_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.browse_cmd.SCRAPERS", {"linkedin": mock_scraper}), \
              patch("careeros.cli.browse_cmd.fetch_jd_text", return_value=""), \
              patch("careeros.cli.browse_cmd.score_job", return_value=_mock_score()):
@@ -228,3 +252,67 @@ class TestBrowseErrorHandling:
 
         assert result.exit_code == 0
         assert "No jobs found" in result.output or "warning" in result.output.lower() or "error" in result.output.lower()
+
+    def test_unauthorized_board_blocks_before_launching_a_browser(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path)
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": False}), \
+             patch("careeros.cli.browse_cmd.launch_browser") as mock_browser:
+            result = runner.invoke(
+                browse_app, ["--board", "linkedin", "--workspace", ws_path]
+            )
+        assert result.exit_code == 1
+        assert "careeros browser login --board linkedin" in result.output
+        mock_browser.assert_not_called()
+
+    def test_board_url_needs_no_session(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path)
+        mock_page = MagicMock()
+        with patch("careeros.cli.preflight.check_board_sessions") as cbs, \
+             patch("careeros.cli.browse_cmd.launch_browser", _mock_launch(mock_page)), \
+             patch("careeros.cli.browse_cmd.GenericScraper") as gs, \
+             patch("careeros.cli.browse_cmd.fetch_jd_text", return_value="jd"), \
+             patch("careeros.cli.browse_cmd.score_job", return_value=_mock_score()), \
+             patch("careeros.cli.browse_cmd.Prompt.ask", return_value="q"):
+            gs.return_value.search.return_value = _mock_postings()
+            result = runner.invoke(
+                browse_app,
+                ["--board", "url", "--url", "https://x.test/jobs", "--workspace", ws_path],
+            )
+        assert result.exit_code == 0
+        cbs.assert_not_called()
+
+    def test_score_result_without_reasoning_does_not_crash(self, tmp_path):
+        # Review finding #2: score_job returns the raw parsed model JSON and
+        # coerces only "score", so a model omitting "reasoning" aborted the
+        # entire run with KeyError after all page loads and LLM spend.
+        ws_path = _setup_workspace(tmp_path)
+        mock_page = MagicMock()
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.browse_cmd.launch_browser", _mock_launch(mock_page)), \
+             patch("careeros.cli.browse_cmd.SCRAPERS") as scrapers, \
+             patch("careeros.cli.browse_cmd.fetch_jd_text", return_value="jd"), \
+             patch("careeros.cli.browse_cmd.score_job", return_value={"score": 85}), \
+             patch("careeros.cli.browse_cmd.Prompt.ask", return_value="q"):
+            scrapers.__getitem__.return_value.search.return_value = _mock_postings()
+            result = runner.invoke(
+                browse_app, ["--board", "linkedin", "--workspace", ws_path]
+            )
+        assert result.exit_code == 0
+        assert "KeyError" not in result.output
+
+    def test_locked_profile_reports_a_plain_message(self, tmp_path):
+        from careeros.browser.driver import BrowserProfileBusy
+
+        ws_path = _setup_workspace(tmp_path)
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.browse_cmd.launch_browser",
+                   side_effect=BrowserProfileBusy("already in use by another CareerOS process")):
+            result = runner.invoke(
+                browse_app, ["--board", "linkedin", "--workspace", ws_path]
+            )
+        assert result.exit_code == 1
+        assert "already in use" in result.output
+        assert "Traceback" not in result.output
