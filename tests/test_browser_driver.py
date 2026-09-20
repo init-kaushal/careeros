@@ -134,3 +134,23 @@ def test_unrelated_launch_error_is_not_swallowed(tmp_path, monkeypatch):
             with launch_browser(headless=True):
                 pass
     assert not isinstance(excinfo.value, BrowserProfileBusy)
+
+
+def test_port_collision_is_not_mistaken_for_a_profile_lock(tmp_path, monkeypatch):
+    # "Address already in use" is a port/IPC collision, not a profile lock.
+    # Misclassifying it as BrowserProfileBusy would hide the real cause from
+    # the CLI handler and tell the user to close a browser that isn't the problem.
+    monkeypatch.setattr(
+        "careeros.browser.driver.get_careeros_profile_path", lambda: str(tmp_path / "p")
+    )
+    fake = MagicMock()
+    fake.__enter__.return_value.chromium.launch_persistent_context.side_effect = Exception(
+        "bind() returned an error: Address already in use"
+    )
+    fake.__exit__.return_value = False
+    with patch("playwright.sync_api.sync_playwright", return_value=fake):
+        with pytest.raises(Exception) as excinfo:
+            with launch_browser(headless=True):
+                pass
+    assert not isinstance(excinfo.value, BrowserProfileBusy)
+    assert "Address already in use" in str(excinfo.value)

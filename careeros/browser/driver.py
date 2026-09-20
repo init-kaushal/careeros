@@ -18,7 +18,6 @@ class BrowserProfileBusy(RuntimeError):
 _LOCK_MARKERS = (
     "processsingleton",
     "singletonlock",
-    "already in use",
     "profile appears to be in use",
 )
 
