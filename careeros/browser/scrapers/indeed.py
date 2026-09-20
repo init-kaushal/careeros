@@ -13,6 +13,7 @@ _LOCATION = re.compile(r'class="companyLocation"[^>]*>([^<]+)')
 
 _BASE_URL = "https://www.indeed.com/jobs?q="
 _INDEED_BASE = "https://www.indeed.com"
+_MAX_PAGES = 20
 
 
 class IndeedScraper:
@@ -43,7 +44,9 @@ class IndeedScraper:
         page.goto(url, timeout=30000)
         page.wait_for_selector(".job_seen_beacon", timeout=15000)
         results = []
-        while len(results) < limit:
+        for _ in range(_MAX_PAGES):
+            if len(results) >= limit:
+                break
             cards = page.locator(".job_seen_beacon").all()
             for card in cards[len(results):]:
                 try:

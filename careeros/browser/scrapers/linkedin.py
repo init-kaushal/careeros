@@ -13,6 +13,7 @@ _COMPANY = re.compile(r'class="[^"]*\bjob-card-container__company-name\b[^"]*"[^
 _LOCATION = re.compile(r'class="[^"]*\bjob-card-container__metadata-item\b[^"]*"[^>]*>([^<]+)')
 
 _BASE_URL = "https://www.linkedin.com/jobs/search/?keywords="
+_MAX_PAGES = 20
 
 
 class LinkedInScraper:
@@ -42,7 +43,9 @@ class LinkedInScraper:
         page.goto(url, timeout=30000)
         page.wait_for_selector(".job-card-container", timeout=15000)
         results = []
-        while len(results) < limit:
+        for _ in range(_MAX_PAGES):
+            if len(results) >= limit:
+                break
             cards = page.locator(".job-card-container").all()
             prev_count = len(results)
             for card in cards[len(results):]:

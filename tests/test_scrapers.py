@@ -129,6 +129,31 @@ class TestWellfoundScraper:
         results = scraper.search(page, "sre", 1)
         assert results[0]["url"] == "https://wellfound.com/jobs/42"
 
+    def test_search_terminates_when_extraction_always_fails_on_growing_dom(self):
+        # Regression for an unbounded loop: if every card's extraction raises
+        # (e.g. markup changed) while the DOM keeps reporting more cards on
+        # each scroll, the loop must still terminate via the page cap.
+        from careeros.browser.scrapers.wellfound import WellfoundScraper
+        scraper = WellfoundScraper()
+        page = MagicMock()
+        page.url = "https://wellfound.com/jobs?q=sre"
+
+        broken_card = MagicMock()
+        broken_card.locator.side_effect = Exception("markup changed")
+
+        call_count = {"n": 0}
+
+        def growing_cards():
+            call_count["n"] += 1
+            return [broken_card] * call_count["n"]
+
+        page.locator.return_value.all.side_effect = growing_cards
+
+        results = scraper.search(page, "sre", limit=100)
+        assert results == []
+        # bounded by _MAX_PAGES, not by limit or by lack of DOM growth
+        assert call_count["n"] < 1000
+
 
 class TestGenericScraper:
     def test_parse_listings_extracts_job_pattern_hrefs(self):

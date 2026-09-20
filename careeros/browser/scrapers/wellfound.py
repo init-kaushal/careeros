@@ -13,6 +13,7 @@ _COMPANY = re.compile(r'class="[^"]*\bjob-listing__company\b[^"]*"[^>]*>([^<]+)'
 _LOCATION = re.compile(r'class="[^"]*\bjob-listing__location\b[^"]*"[^>]*>([^<]+)')
 
 _BASE_URL = "https://wellfound.com/jobs?q="
+_MAX_PAGES = 20
 
 
 class WellfoundScraper:
@@ -41,7 +42,9 @@ class WellfoundScraper:
         page.wait_for_selector(".job-listing", timeout=15000)
         results = []
         prev_count = 0
-        while len(results) < limit:
+        for _ in range(_MAX_PAGES):
+            if len(results) >= limit:
+                break
             cards = page.locator(".job-listing").all()
             for card in cards[len(results):]:
                 try:
