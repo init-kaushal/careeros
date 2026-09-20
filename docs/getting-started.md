@@ -128,6 +128,20 @@ CareerOS unpacks the zip to a new directory and makes it your active workspace.
 The workspace is self-contained. Version-control it, back it up, or copy it between machines
 without touching the CareerOS install.
 
+### Sign in to your job boards
+
+CareerOS drives a dedicated browser profile, separate from your everyday Chrome, so a
+scheduled run never holds sessions for anything but the boards you authorized. Sign in once
+per board:
+
+```bash
+careeros browser login --board linkedin
+```
+
+A browser window opens at the board's login page. Sign in as normal — CareerOS detects the
+session and closes the window. Check what's authorized any time with `careeros browser status`.
+Re-run `login` whenever a session expires.
+
 ## Common questions
 
 **Can I use a different workspace directory?**
@@ -138,7 +152,7 @@ wizard asks. CareerOS stores the active workspace path in `~/.config/careeros/co
 Your resume and job data are sent to your configured LLM provider for extraction, scoring, and
 drafting (cover letters, outreach messages, research summaries) — never to a CareerOS-run server,
 since there isn't one. `browse`, `apply`, `discover-and-apply`, and `research` drive Playwright
-against your own logged-in Chrome session rather than calling a scraping API. `outreach send` is
+against a dedicated CareerOS browser profile rather than calling a scraping API. `outreach send` is
 the only command that reaches a third party directly, by SMTP, and only after you approve it.
 
 **Can I run multiple workspaces?**

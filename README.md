@@ -49,6 +49,10 @@ an append-only audit trail.
   in a format any agent runtime that speaks the CareerOS manifest can read.
 
 **Job discovery + scoring**
+- **`careeros browser login --board <linkedin|indeed|wellfound>`** — sign in to a job board in
+  the isolated CareerOS profile. Opens a real browser window; CareerOS detects the completed
+  sign-in and closes it. Your credentials are never seen or stored by CareerOS.
+- **`careeros browser status`** — which boards are currently authorized, and where the profile lives.
 - **`careeros job add / list / show / update / note / search`** — manage saved jobs directly.
 - **`careeros browse --board <linkedin|indeed|wellfound|url>`** — browser-driven job search using
   your own logged-in session, LLM-scored against your profile, save the ones you want.
@@ -122,8 +126,10 @@ your career data without needing CareerOS installed.
   (via [LiteLLM](https://docs.litellm.ai/)): Anthropic, OpenAI, Ollama (free, local), Groq,
   Mistral, Google, and 100+ more.
 - [Playwright](https://playwright.dev/) with Chrome, for `browse`, `apply`, `discover-and-apply`,
-  and `research` — these drive your own logged-in browser session rather than an API, so there's
-  no separate account to connect. `pip install playwright && playwright install chrome`.
+  and `research`. These drive a **dedicated CareerOS browser profile**, not your everyday Chrome
+  profile — so an unattended run never holds your banking or email sessions. Sign in to each board
+  once with `careeros browser login --board <name>`.
+  `pip install playwright && playwright install chrome`.
 - SMTP credentials (`CAREEROS_SMTP_HOST/PORT/USER/PASSWORD` env vars) only if you use
   `careeros outreach send` — read from the environment at send time, never written to your
   workspace.
