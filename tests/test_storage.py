@@ -1,3 +1,5 @@
+import stat
+
 import pytest
 from careeros.storage.filesystem import LocalFilesystemStorage
 
@@ -6,6 +8,24 @@ def test_write_and_read(tmp_path):
     storage = LocalFilesystemStorage(str(tmp_path))
     storage.write("foo/bar.txt", b"hello")
     assert storage.read("foo/bar.txt") == b"hello"
+
+
+def test_write_sets_owner_only_permissions(tmp_path):
+    storage = LocalFilesystemStorage(str(tmp_path))
+    storage.write("foo/bar.txt", b"hello")
+    mode = stat.S_IMODE((tmp_path / "foo" / "bar.txt").stat().st_mode)
+    assert mode == 0o600
+
+
+def test_list_works_when_root_is_reached_through_a_symlink(tmp_path):
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    symlink_root = tmp_path / "link"
+    symlink_root.symlink_to(real_dir)
+
+    storage = LocalFilesystemStorage(str(symlink_root))
+    storage.write("jobs/a.json", b"{}")
+    assert storage.list("jobs") == ["jobs/a.json"]
 
 
 def test_write_creates_parent_dirs(tmp_path):

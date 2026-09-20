@@ -5,12 +5,17 @@ from pathlib import Path
 
 class LocalFilesystemStorage:
     def __init__(self, root: str) -> None:
-        self._root = Path(root)
+        # Resolved once here (not re-resolved per call) so every comparison against
+        # self._root — including list()'s relative_to() — uses the same symlink-free
+        # basis. Without this, a root reached through a symlink (e.g. /tmp on macOS,
+        # or any home directory behind a symlink) made list() raise ValueError, since
+        # _resolve() below returns fully-resolved paths but self._root stayed unresolved.
+        self._root = Path(root).resolve()
 
     def _resolve(self, path: str) -> Path:
         resolved = (self._root / path).resolve()
         try:
-            resolved.relative_to(self._root.resolve())
+            resolved.relative_to(self._root)
         except ValueError:
             raise ValueError(f"Path '{path}' escapes workspace root")
         return resolved
@@ -22,6 +27,7 @@ class LocalFilesystemStorage:
         full = self._resolve(path)
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_bytes(data)
+        full.chmod(0o600)
 
     def atomic_write(self, path: str, data: bytes) -> None:
         full = self._resolve(path)
