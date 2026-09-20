@@ -58,7 +58,8 @@ class TestBrowseEndToEnd:
             result = runner.invoke(browse_app, ["--board", "linkedin", "--workspace", ws], input="1\n")
 
         assert result.exit_code == 0
-        assert "Saved 1 job" in result.output
+        assert "Saved 1 job(s)" in result.output
+        assert "Duplicates: 0" in result.output
 
     def test_job_written_to_workspace(self, tmp_path):
         ws = _setup_workspace(tmp_path)
@@ -211,7 +212,40 @@ class TestBrowseDuplicateIndex:
 
         assert result.exit_code == 0
         assert mock_save.call_count == 1
-        assert "Saved 1 job" in result.output
+        assert "Saved 1 job(s)" in result.output
+        assert "Duplicates: 0" in result.output
+
+
+class TestBrowseJobStoreDedup:
+    def test_saving_the_same_listing_twice_creates_one_record(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path)
+        storage = LocalFilesystemStorage(ws_path)
+        mock_page = MagicMock()
+        for _ in range(2):
+            with patch("careeros.cli.preflight.check_board_sessions",
+                       return_value={"linkedin": True}), \
+                 patch("careeros.cli.browse_cmd.launch_browser", _mock_launch(mock_page)), \
+                 patch("careeros.cli.browse_cmd.SCRAPERS") as scrapers, \
+                 patch("careeros.cli.browse_cmd.fetch_jd_text", return_value="jd"), \
+                 patch("careeros.cli.browse_cmd.score_job", return_value=_mock_score()), \
+                 patch("careeros.cli.browse_cmd.Prompt.ask", return_value="1"):
+                scrapers.__getitem__.return_value.search.return_value = _mock_postings()
+                runner.invoke(browse_app, ["--board", "linkedin", "--workspace", ws_path])
+        assert len(Job.list_all(storage)) == 1
+
+    def test_browse_reports_duplicates(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path)
+        mock_page = MagicMock()
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.browse_cmd.launch_browser", _mock_launch(mock_page)), \
+             patch("careeros.cli.browse_cmd.SCRAPERS") as scrapers, \
+             patch("careeros.cli.browse_cmd.fetch_jd_text", return_value="jd"), \
+             patch("careeros.cli.browse_cmd.score_job", return_value=_mock_score()), \
+             patch("careeros.cli.browse_cmd.Prompt.ask", return_value="1"):
+            scrapers.__getitem__.return_value.search.return_value = _mock_postings()
+            result = runner.invoke(browse_app, ["--board", "linkedin", "--workspace", ws_path])
+        assert "Duplicates: 0" in result.output
 
 
 class TestBrowseErrorHandling:

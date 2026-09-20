@@ -13,11 +13,12 @@ from careeros.browser.driver import BrowserProfileBusy, fetch_jd_text, launch_br
 from careeros.browser.scrapers.generic import GenericScraper
 from careeros.cli.preflight import require_board_session
 from careeros.config import GlobalConfig
-from careeros.core.job_id import make_job_id
-from careeros.core.models import Goals, Job, Profile, Skills
+from careeros.core.job_store import JobStore
+from careeros.core.models import Goals, Profile, Skills
 from careeros.runtime.factory import open_local_runtime
 from careeros.skills.browse_query import job_query_from_profile
 from careeros.skills.job_score import score_job
+from careeros.sources.base import job_from_posting, posting_from_scrape
 from careeros.storage.filesystem import LocalFilesystemStorage
 
 browse_app = typer.Typer(name="browse", help="Search job boards using your browser session.")
@@ -129,8 +130,11 @@ def browse_cmd(
         return
 
     saved = 0
+    duplicates = 0
+    skipped = 0
     seen_indices: set[int] = set()
     now = _now()
+    store = JobStore(runtime.storage)
     for part in picks_str.split():
         if not part.isdigit():
             continue
@@ -139,24 +143,21 @@ def browse_cmd(
             continue
         seen_indices.add(idx)
         p = filtered[idx]
-        job_id = make_job_id(p["company"], p["title"])
-        job = Job(
-            id=job_id,
-            source=p["source_board"],
-            url=p["url"],
-            company=p["company"],
-            title=p["title"],
-            location=p.get("location"),
-            stage="saved",
-            created_at=now,
-            updated_at=now,
-        )
-        job.save(runtime.storage)
+        try:
+            posting = posting_from_scrape(p)
+        except ValueError as exc:
+            rprint("[yellow]Warning: skipping listing, " + str(exc) + "[/yellow]")
+            skipped += 1
+            continue
+        outcome = store.save_new(job_from_posting(posting, now))
         runtime.record_activity(runtime.new_event(
-            "job_added", "browse",
+            "job_added" if outcome.created else "job_merged", "browse",
             "Job saved from " + p["source_board"] + ": " + p["company"] + " — " + p["title"],
-            entity_type="job", entity_id=job_id,
+            entity_type="job", entity_id=outcome.job.id,
         ))
-        saved += 1
+        if outcome.created:
+            saved += 1
+        else:
+            duplicates += 1
 
-    rprint(f"[green]Saved {saved} job(s)[/green]")
+    rprint("[green]Saved " + str(saved) + " job(s)[/green], Duplicates: " + str(duplicates))
