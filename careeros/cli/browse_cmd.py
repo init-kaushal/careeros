@@ -131,7 +131,6 @@ def browse_cmd(
 
     saved = 0
     duplicates = 0
-    skipped = 0
     seen_indices: set[int] = set()
     now = _now()
     store = JobStore(runtime.storage)
@@ -147,7 +146,6 @@ def browse_cmd(
             posting = posting_from_scrape(p)
         except ValueError as exc:
             rprint("[yellow]Warning: skipping listing, " + str(exc) + "[/yellow]")
-            skipped += 1
             continue
         outcome = store.save_new(job_from_posting(posting, now))
         runtime.record_activity(runtime.new_event(

@@ -247,6 +247,31 @@ class TestBrowseJobStoreDedup:
             result = runner.invoke(browse_app, ["--board", "linkedin", "--workspace", ws_path])
         assert "Duplicates: 0" in result.output
 
+    def test_bad_card_is_skipped_and_the_rest_of_the_batch_still_saves(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path)
+        storage = LocalFilesystemStorage(ws_path)
+        mock_page = MagicMock()
+        postings = [
+            {"source_board": "linkedin", "title": "Bad Listing", "company": "",
+             "location": "SF", "url": "https://example.com/jobs/bad"},
+            {"source_board": "linkedin", "title": "Platform Engineer", "company": "Beta",
+             "location": "Remote", "url": "https://example.com/jobs/good"},
+        ]
+        with patch("careeros.cli.preflight.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.browse_cmd.launch_browser", _mock_launch(mock_page)), \
+             patch("careeros.cli.browse_cmd.SCRAPERS") as scrapers, \
+             patch("careeros.cli.browse_cmd.fetch_jd_text", return_value="jd"), \
+             patch("careeros.cli.browse_cmd.score_job", return_value=_mock_score()), \
+             patch("careeros.cli.browse_cmd.Prompt.ask", return_value="1 2"):
+            scrapers.__getitem__.return_value.search.return_value = postings
+            result = runner.invoke(browse_app, ["--board", "linkedin", "--workspace", ws_path])
+
+        jobs = Job.list_all(storage)
+        assert len(jobs) == 1
+        assert jobs[0].company == "Beta"
+        assert "skipping listing" in result.output
+
 
 class TestBrowseErrorHandling:
     def test_playwright_not_installed_prints_install_instructions(self, tmp_path):
