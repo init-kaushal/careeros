@@ -9,6 +9,9 @@ from careeros.config import GlobalConfig
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import open_workspace
 
+_MAX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024  # 500MB — generous for a personal workspace export
+_MAX_COMPRESSION_RATIO = 100  # a legitimate JSON/text workspace won't compress much beyond this
+
 
 def export_cmd(
     output: str | None = typer.Option(None, "--output", "-o", help="Output zip path"),
@@ -55,10 +58,18 @@ def import_workspace_cmd(
 
     dest_path.mkdir(parents=True)
     with zipfile.ZipFile(source_path, "r") as zf:
-        for name in zf.namelist():
-            if name.startswith('/') or '..' in name.split('/'):
-                rprint(f"[red]Unsafe zip entry: {name}[/red]")
+        total_uncompressed = 0
+        for info in zf.infolist():
+            if info.filename.startswith('/') or '..' in info.filename.split('/'):
+                rprint(f"[red]Unsafe zip entry: {info.filename}[/red]")
                 raise typer.Exit(1)
+            total_uncompressed += info.file_size
+            if info.compress_size > 0 and info.file_size / info.compress_size > _MAX_COMPRESSION_RATIO:
+                rprint(f"[red]Zip entry '{info.filename}' has a suspicious compression ratio.[/red]")
+                raise typer.Exit(1)
+        if total_uncompressed > _MAX_UNCOMPRESSED_BYTES:
+            rprint("[red]Zip would extract to more than 500MB — refusing.[/red]")
+            raise typer.Exit(1)
         zf.extractall(dest_path)
 
     try:

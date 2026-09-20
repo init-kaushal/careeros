@@ -83,3 +83,26 @@ def test_onboard_missing_resume_exits(tmp_path, monkeypatch):
     ws_path = str(tmp_path / "ws")
     result = runner.invoke(app, ["onboard"], input=f"{ws_path}\n/nonexistent/resume.md\n")
     assert result.exit_code != 0
+
+
+def test_onboard_oversized_resume_exits(tmp_path, monkeypatch):
+    import careeros.cli.onboard as onboard_module
+    monkeypatch.setattr(onboard_module, "_MAX_RESUME_BYTES", 10)
+    monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
+    big_resume = tmp_path / "big_resume.md"
+    big_resume.write_text("x" * 1000)
+    runner = CliRunner()
+    ws_path = str(tmp_path / "ws")
+    result = runner.invoke(app, ["onboard"], input=f"{ws_path}\n{big_resume}\n")
+    assert result.exit_code != 0
+    assert "too large" in result.output.lower()
+
+
+def test_onboard_non_utf8_resume_does_not_crash(tmp_path, mock_extraction, monkeypatch):
+    monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
+    binary_resume = tmp_path / "resume.bin"
+    binary_resume.write_bytes(b"\xff\xfe\x00Alice Johnson\x00\xff")
+    runner = CliRunner()
+    ws_path = str(tmp_path / "ws")
+    result, _ = _run_onboard(runner, tmp_path, binary_resume)
+    assert result.exit_code == 0, result.output

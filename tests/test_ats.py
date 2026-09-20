@@ -114,6 +114,14 @@ def test_fetch_lever_404_raises():
             fetch_lever("unknown-company")
 
 
+def test_get_json_reads_bounded_response_size():
+    from careeros.sources.ats import _MAX_RESPONSE_BYTES
+    mock_resp = _mock_urlopen(GH_FIXTURE)
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        fetch_greenhouse("acme")
+    mock_resp.read.assert_called_once_with(_MAX_RESPONSE_BYTES)
+
+
 def test_description_capped_at_4000():
     long_content = "<p>" + "x" * 5000 + "</p>"
     fixture = {"jobs": [{**GH_FIXTURE["jobs"][0], "content": long_content}]}

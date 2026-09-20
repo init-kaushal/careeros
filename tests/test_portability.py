@@ -82,6 +82,38 @@ def test_import_nonexistent_zip_fails(tmp_path):
     assert result.exit_code != 0
 
 
+def test_import_rejects_suspicious_compression_ratio(tmp_path, monkeypatch):
+    import careeros.cli.portability as portability_module
+    monkeypatch.setattr(portability_module, "_MAX_COMPRESSION_RATIO", 2)
+
+    zip_path = tmp_path / "bomb.zip"
+    highly_compressible = b"\x00" * 100_000
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", highly_compressible)
+
+    runner = CliRunner()
+    dest = tmp_path / "dest"
+    result = runner.invoke(app, ["import", str(zip_path), "--dest", str(dest)])
+    assert result.exit_code != 0
+    assert not (dest / "manifest.json").exists()
+
+
+def test_import_rejects_excessive_total_uncompressed_size(tmp_path, monkeypatch):
+    import careeros.cli.portability as portability_module
+    monkeypatch.setattr(portability_module, "_MAX_UNCOMPRESSED_BYTES", 10)
+    monkeypatch.setattr(portability_module, "_MAX_COMPRESSION_RATIO", 1_000_000)
+
+    zip_path = tmp_path / "large.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", b"{}" * 100)
+
+    runner = CliRunner()
+    dest = tmp_path / "dest"
+    result = runner.invoke(app, ["import", str(zip_path), "--dest", str(dest)])
+    assert result.exit_code != 0
+    assert not (dest / "manifest.json").exists()
+
+
 def test_import_existing_dest_fails(workspace_with_profile):
     tmp_path, ws_path, _ = workspace_with_profile
     output = str(tmp_path / "backup.zip")

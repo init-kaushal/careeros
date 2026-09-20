@@ -12,6 +12,8 @@ from careeros.workspace.manager import init_workspace
 import json
 import uuid
 
+_MAX_RESUME_BYTES = 10 * 1024 * 1024  # 10MB — generous for any real resume as text
+
 
 def onboard_cmd(
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Path for new workspace"),
@@ -43,8 +45,11 @@ def onboard_cmd(
     if not resume_file.exists():
         rprint(f"[red]File not found: {resume_file}[/red]")
         raise typer.Exit(1)
+    if resume_file.stat().st_size > _MAX_RESUME_BYTES:
+        rprint("[red]Resume file is too large (max 10MB). If this is a PDF, convert it to text first.[/red]")
+        raise typer.Exit(1)
 
-    resume_text = resume_file.read_text()
+    resume_text = resume_file.read_text(encoding="utf-8", errors="replace")
     runtime.storage.atomic_write("resumes/master.md", resume_text.encode())
     runtime.record_activity(runtime.new_event(
         "resume_imported", "import", "Resume imported from " + resume_path_str, entity_type="resume"

@@ -27,11 +27,14 @@ def _strip_html(html: str) -> str:
     return stripper.get_text()
 
 
+_MAX_RESPONSE_BYTES = 10 * 1024 * 1024  # 10MB — generous for a job board listing response
+
+
 def _get_json(url: str) -> object:
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "careeros/0.1"})
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode())
+            return json.loads(resp.read(_MAX_RESPONSE_BYTES).decode())
     except urllib.error.HTTPError as e:
         if e.code == 404:
             raise ATSFetchError("not_found")
