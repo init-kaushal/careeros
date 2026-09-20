@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from careeros.cli.outreach_cmd import outreach_app, people_app
-from careeros.core.models import Company, Job, OutreachMessage, Person, Profile
+from careeros.core.models import Company, Job, OutreachMessage, Person, PolicyConfig, Profile
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace
 
@@ -141,6 +141,22 @@ class TestOutreachSend:
         assert message.sent_at is not None
         # A re-send must be surfaced to the human approving it, not silent.
         assert "already sent" in result.output.lower()
+
+    def test_policy_blocked_company_exits_1_and_does_not_send(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path)
+        storage = LocalFilesystemStorage(ws_path)
+        PolicyConfig(blocked_companies=["Acme Corp"]).save(storage)
+        with patch("careeros.cli.outreach_cmd.generate_outreach_message") as mock_gen, \
+             patch("careeros.cli.outreach_cmd.send_email") as mock_send:
+            result = runner.invoke(outreach_app, ["send", "--job", JOB_ID, "--person", PERSON_ID, "--workspace", ws_path])
+
+        assert result.exit_code == 1
+        assert "blocked by policy" in result.output.lower()
+        mock_gen.assert_not_called()
+        mock_send.assert_not_called()
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        log_content = storage.read("activity/" + today + ".jsonl").decode()
+        assert "policy_blocked" in log_content
 
 
 class TestMarkReferralRequested:

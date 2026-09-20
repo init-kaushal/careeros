@@ -10,7 +10,8 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 
 from careeros.config import GlobalConfig
-from careeros.core.models import Company, Goals, Job, OutreachMessage, Person, Profile
+from careeros.core.models import Company, Goals, Job, OutreachMessage, Person, PolicyConfig, Profile
+from careeros.core.policy_engine import PolicyEngine
 from careeros.mailer import send_email
 from careeros.runtime.base import ActionProposal
 from careeros.runtime.factory import open_local_runtime
@@ -78,6 +79,17 @@ def send(
         company_obj = Company.load(runtime.storage, person_obj.company_id)
     except (FileNotFoundError, ValueError):
         rprint("[red]Job, person, or company not found.[/red]")
+        raise typer.Exit(1)
+
+    policy_engine = PolicyEngine(PolicyConfig.load(runtime.storage))
+    policy_result = policy_engine.check_job(job_obj)
+    if policy_result.blocked:
+        runtime.record_activity(runtime.new_event(
+            "policy_blocked", "outreach",
+            "Blocked by policy (" + policy_result.rule + "): " + job_obj.company + " — " + job_obj.title,
+            status="failed", entity_type="job", entity_id=job_obj.id,
+        ))
+        rprint("[red]Blocked by policy (" + policy_result.rule + "). Edit config/policies.json to change this.[/red]")
         raise typer.Exit(1)
 
     profile = Profile.load_or_empty(runtime.storage)
