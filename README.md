@@ -28,7 +28,11 @@ careeros onboard
 ```
 
 The wizard asks where to create your workspace, then extracts your profile from your resume using
-whichever model you configured. Your data is written locally — nothing leaves your machine after onboarding.
+whichever model you configured. Your data is always written to a directory you control, never to a
+CareerOS-run server — but onboarding is not the only place your data reaches a third party: job
+scoring, cover letter and outreach drafting, and company/people/compensation research all send
+relevant profile and job data to whichever LLM provider you configured. Run everything through
+`CAREEROS_MODEL=ollama/...` if you want zero data leaving your machine at any point.
 
 ## What it does
 

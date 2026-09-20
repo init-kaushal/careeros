@@ -6,8 +6,10 @@ your workspace lives wherever you put it. Framework updates (`git pull`) never t
 ## Prerequisites
 
 - Python 3.11 or later (`python3 --version`)
-- An API key for your preferred LLM provider — used only during onboarding for profile extraction.
-  Everything else works offline. Supported via [LiteLLM](https://docs.litellm.ai/):
+- An API key for your preferred LLM provider — used during onboarding for profile extraction, and
+  again by job scoring, cover letter/outreach drafting, and company/people/compensation research.
+  Use `CAREEROS_MODEL=ollama/...` if you want every one of those calls to stay on your machine.
+  Supported via [LiteLLM](https://docs.litellm.ai/):
   - **Anthropic Claude** (default): `ANTHROPIC_API_KEY`
   - **OpenAI**: `OPENAI_API_KEY` + `CAREEROS_MODEL=gpt-4o-mini`
   - **Ollama** (free, local): no key — just run `ollama serve` + `CAREEROS_MODEL=ollama/llama3.2`

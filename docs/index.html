@@ -305,8 +305,8 @@
   <section id="how-it-works">
     <span class="kicker"><svg class="icon" width="15" height="15"><use href="#i-doc"/></svg>How it works</span>
     <h2 class="sec-title">From resume to structured workspace in minutes</h2>
-    <p class="sec-lede">Three commands. Your data never leaves your machine after onboarding.
-      Framework updates pull cleanly — they never touch the workspace you own.</p>
+    <p class="sec-lede">Three commands to get a portable workspace running. Your data always
+      lives in a directory you own, and framework updates pull cleanly — they never touch it.</p>
 
     <div class="pipeline" aria-hidden="true">
       <div class="pnode">
@@ -350,8 +350,10 @@
         <div>
           <h3><svg class="icon" width="19" height="19"><use href="#i-bulb"/></svg>Run the onboarding wizard</h3>
           <p><code>careeros onboard</code> asks where to create your workspace, then asks for your resume
-            or any text describing your background. It calls Claude Haiku once to extract
-            skills, titles, and goals — then writes the result locally. That's the only network call.</p>
+            or any text describing your background. It calls your configured LLM once to extract
+            skills, titles, and goals, then writes the result locally. It's not the <em>only</em>
+            network call CareerOS ever makes — scoring, drafting, and research each call the model
+            too — but every one of them is a call you configured, never a CareerOS-run server.</p>
         </div>
       </div>
       <div class="step">
