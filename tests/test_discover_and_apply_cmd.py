@@ -635,6 +635,7 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="jd"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job",
                    return_value={"score": 95, "reasoning": "great"}), \
+             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
             scrapers.__getitem__.return_value.search.return_value = [
                 _posting(title="Senior SRE", url="https://linkedin.test/1")
@@ -645,13 +646,19 @@ class TestDiscoverAndApplyCmd:
         assert "Duplicates: 1" in result.output
 
     def test_cross_source_same_job_resolves_to_one_record(self, tmp_path):
-        # The ROADMAP's exit condition, asserted directly.
+        # The ROADMAP's exit condition, asserted directly. Titles deliberately
+        # differ ("Senior Site Reliability Engineer" on Greenhouse vs "Senior
+        # SRE" on LinkedIn) so this exercises the fuzzy company+title tier's
+        # abbreviation normalization across two boards — the realistic
+        # cross-source case the old exact (company, title) stopgap could not
+        # collapse.
         policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5,
                                   boards=["linkedin"])
         ws_path = _setup_workspace(tmp_path, policy=policy)
         storage = LocalFilesystemStorage(ws_path)
         JobStore(storage).save_new(Job(
-            id="acme-sre-aaaa", source="greenhouse", company="Acme", title="Senior SRE",
+            id="acme-sre-aaaa", source="greenhouse", company="Acme",
+            title="Senior Site Reliability Engineer",
             url="https://boards.greenhouse.io/acme/jobs/1",
             created_at=_NOW, updated_at=_NOW,
         ))
@@ -663,7 +670,35 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.score_job",
                    return_value={"score": 10, "reasoning": "meh"}):
             scrapers.__getitem__.return_value.search.return_value = [
-                _posting(title="Senior SRE", url="https://www.linkedin.com/jobs/view/7")
+                _posting(company="Acme", title="Senior SRE", url="https://www.linkedin.com/jobs/view/7")
+            ]
+            runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+        assert len(Job.list_all(storage)) == 1
+
+    def test_url_tier_alone_resolves_unrelated_looking_postings_to_one_record(self, tmp_path):
+        # Pins the FIRST tier of is_same_posting independently of the fuzzy
+        # company+title tier: two records with entirely different company
+        # and title, whose URLs canonicalize equal once a tracking param is
+        # stripped, must still resolve to one record.
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5,
+                                  boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        storage = LocalFilesystemStorage(ws_path)
+        JobStore(storage).save_new(Job(
+            id="acme-sre-aaaa", source="linkedin", company="Acme", title="Senior SRE",
+            url="https://boards.greenhouse.io/acme/jobs/1",
+            created_at=_NOW, updated_at=_NOW,
+        ))
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS") as scrapers, \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="jd"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job",
+                   return_value={"score": 10, "reasoning": "meh"}):
+            scrapers.__getitem__.return_value.search.return_value = [
+                _posting(company="Globex", title="Staff Widget Designer",
+                         url="https://boards.greenhouse.io/acme/jobs/1?utm_source=li")
             ]
             runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
         assert len(Job.list_all(storage)) == 1
