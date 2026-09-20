@@ -62,3 +62,16 @@ def test_validate_fails_bad_activity_line(seeded_workspace):
     runner = CliRunner()
     result = runner.invoke(app, ["workspace", "validate", "--workspace", str(ws_path)])
     assert result.exit_code != 0
+
+
+def test_validate_reports_inert_source_entries(seeded_workspace):
+    ws_path, _ = seeded_workspace
+    storage = LocalFilesystemStorage(str(ws_path))
+    storage.atomic_write("config/sources.json", json.dumps({"sources": [
+        {"source": "greenhouse", "mode": "SEARCH_ONLY"},
+        {"source": "greenhouse", "board": "stripe", "company": "Stripe"},
+    ]}).encode())
+    runner = CliRunner()
+    result = runner.invoke(app, ["workspace", "validate", "--workspace", str(ws_path)])
+    assert "inert (no board slug)" in result.output
+    assert result.exit_code == 0   # inert entries are a note, not an error

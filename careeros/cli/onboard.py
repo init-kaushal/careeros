@@ -101,13 +101,20 @@ def onboard_cmd(
 
     # Step 5: job sources
     rprint("\n[bold]Job Sources[/bold]")
-    rprint("Which sources may CareerOS search? Available: greenhouse, linkedin, lever, naukri")
-    sources_raw = Prompt.ask("Sources (comma-separated)", default="greenhouse")
-    sources = [
-        {"source": s.strip(), "mode": "SEARCH_ONLY"}
-        for s in sources_raw.split(",")
-        if s.strip()
-    ]
+    rprint("API job boards to poll, as source:board:Company triples.")
+    rprint("Available sources: greenhouse, lever. Example: greenhouse:stripe:Stripe")
+    sources_raw = Prompt.ask("Sources (comma-separated, or press enter to skip)", default="")
+    sources = []
+    for chunk in sources_raw.split(","):
+        parts = [p.strip() for p in chunk.split(":")]
+        if len(parts) < 2 or not parts[0] or not parts[1]:
+            continue
+        sources.append({
+            "source": parts[0],
+            "board": parts[1],
+            "company": parts[2] if len(parts) > 2 and parts[2] else parts[1],
+            "mode": "SEARCH_ONLY",
+        })
     runtime.storage.atomic_write("config/sources.json", json.dumps({"sources": sources}, indent=2).encode())
 
     # Step 6: goals (optional)

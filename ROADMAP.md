@@ -2,7 +2,7 @@
 
 ## Where we are
 
-Nine phases shipped. See `README.md` for the full command reference; this is the one-line version:
+Ten phases shipped. See `README.md` for the full command reference; this is the one-line version:
 
 1. **Workspace core** — onboarding, profile extraction, `StorageProvider` protocol, export/import
 2. **Job pipeline** — job schema, LLM-assisted scoring against your profile
@@ -13,6 +13,7 @@ Nine phases shipped. See `README.md` for the full command reference; this is the
 7. **People + outreach** — company/people research, role-aware drafting, approval-gated email send
 8. **Compensation research** — evidence-backed comp data with an honest confidence rating
 9. **Policy engine, content sanitization, browser isolation** — deterministic pre-approval policy, untrusted-content delimiters, and a dedicated browser profile
+10. **Job source connectors + deduplication** — `JobSource` connectors for Greenhouse and Lever, and a dedup engine behind a single `JobStore` creation seam that all four job-creation paths route through
 
 The original design (`docs/superpowers/specs/2026-09-18-careeros-design.md`) sketched Phases 0-6 up front; what actually got built diverged from that numbering as real constraints surfaced (browser scraping replaced planned API connectors in Phase 3, People+Outreach moved from Phase 3 to Phase 7, compensation research moved from Phase 2 to Phase 8). That original doc also named several things under Phases 2, 4, and 5 that were never built when those phases shipped. This roadmap picks up exactly those gaps, plus the interoperability and outreach surface area intentionally deferred along the way.
 
@@ -48,6 +49,14 @@ canonical-URL fingerprinting closes this.
 - A `JobSource` connector Protocol, parallel to the existing `Scraper` Protocol but for API-based sources (not browser-driven)
 - A first real connector: Greenhouse's public job board API (search-only, no auth required for public boards) — a second, non-scraping discovery path that's more reliable than the browser scraper for companies that use Greenhouse
 - A deduplication engine: company + title + location + canonical-URL fingerprinting, checked before any new `Job` record is written — from any source, on any run — so a posting already saved gets updated in place instead of duplicated
+
+**Status: shipped.** `JobSource` connectors for Greenhouse and Lever, and a dedup engine
+behind a single `JobStore` creation seam that all four job-creation paths route through.
+
+**Known limitation:** dedup matches on canonical URL, else normalized company + title +
+location. A location worded differently on two boards ("Remote" vs "San Francisco, CA")
+still produces two records — an accepted trade for never silently collapsing two genuinely
+different roles into one.
 
 **Exit condition:** the same job posted on both LinkedIn and a Greenhouse-hosted board resolves to one `Job` record, not two; running `discover-and-apply` twice against an unchanged set of postings produces zero new applications on the second run.
 

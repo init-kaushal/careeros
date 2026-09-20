@@ -56,6 +56,8 @@ an append-only audit trail.
 - **`careeros job add / list / show / update / note / search`** — manage saved jobs directly.
 - **`careeros browse --board <linkedin|indeed|wellfound|url>`** — browser-driven job search using
   the dedicated CareerOS profile, LLM-scored against your profile, save the ones you want.
+- **`careeros job search --source <greenhouse|lever> --company <slug>`** — search a company's
+  public ATS board directly, no browser required. Deduplicates against jobs you already have.
 
 **Applying**
 - **`careeros apply --job <id>`** — generates a role-specific cover letter (with an
@@ -65,6 +67,8 @@ an append-only audit trail.
 - **`careeros discover-and-apply`** — the unattended version: run from cron/launchd, it discovers
   jobs across your configured boards and auto-applies to anything scoring above a threshold you
   set, capped per run, with a full activity trail for every save and every apply.
+  It also polls any API boards configured in `config/sources.json`, so discovery does not
+  depend on browser scraping alone.
 
 **People + outreach**
 - **`careeros research company / people --job <id>`** — browser-driven research on a job's company
@@ -102,6 +106,15 @@ CareerOS uses a two-directory model: the framework (this repo) and your workspac
 
 The workspace is self-contained. You can copy it, version-control it, or hand it to
 another tool without touching CareerOS.
+
+`config/sources.json` lists API job boards to poll:
+
+```json
+{"sources": [{"source": "greenhouse", "board": "stripe", "company": "Stripe", "mode": "SEARCH_ONLY"}]}
+```
+
+`board` is the company's slug on that ATS; `company` is the display name used for
+deduplication. Entries without a `board` are inert — `careeros workspace validate` reports them.
 
 ## Agent portability
 
@@ -147,7 +160,7 @@ LLM/browser/SMTP call mocked at the boundary.
 
 ## Status
 
-Nine phases shipped, in order:
+Ten phases shipped, in order:
 
 1. **Workspace core** — onboarding, profile extraction, `StorageProvider` protocol, export/import
 2. **Job pipeline** — job schema, LLM-assisted scoring against your profile
@@ -160,14 +173,16 @@ Nine phases shipped, in order:
 8. **Compensation research** — evidence-backed comp data with an honest confidence rating
 9. **Policy engine, content sanitization, browser isolation** — deterministic pre-approval policy,
    untrusted-content delimiters, and a dedicated browser profile
+10. **Job source connectors + deduplication** — `JobSource` connectors for Greenhouse and Lever,
+    and a dedup engine behind a single `JobStore` creation seam that all four job-creation paths
+    route through
 
 All workspace I/O goes through the `StorageProvider` protocol, so storage backends can be
 swapped without touching business logic. Every meaningful action — both outcomes of any
 approval decision, not just the success path — writes to the append-only activity log.
 
-See [ROADMAP.md](ROADMAP.md) for what's planned next: job source connectors + dedup, deep
-resume intelligence and per-job resume variants, a deterministic policy engine, a second real
-`AgentRuntime`, and outreach expansion.
+See [ROADMAP.md](ROADMAP.md) for what's planned next: deep resume intelligence and per-job
+resume variants, a second real `AgentRuntime`, and outreach expansion.
 
 ## License
 
