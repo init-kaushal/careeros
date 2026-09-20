@@ -46,13 +46,6 @@ class LinkedInFiller:
             except Exception:
                 pass
 
-            try:
-                phone_input = page.locator('input[id*="phone" i]').first
-                if phone_input.is_visible() and not phone_input.input_value():
-                    phone_input.fill("")
-            except Exception:
-                pass
-
             # Resume upload step
             try:
                 file_input = page.locator('input[type="file"]').first

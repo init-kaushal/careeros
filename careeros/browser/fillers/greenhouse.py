@@ -53,10 +53,21 @@ class GreenhouseFiller:
             pass
 
         # Submit
+        submit_locator = page.locator('input[type="submit"], button[type="submit"]').first
         try:
-            page.locator('input[type="submit"], button[type="submit"]').first.click()
-            page.wait_for_timeout(5000)
+            submit_locator.click()
         except Exception:
             return False
 
-        return True
+        # Verification: a caught exception here does NOT mean the submission
+        # failed — the click already fired. If the submit control is still
+        # visible after waiting, the form likely rejected the submission
+        # (validation error) rather than being replaced by a confirmation
+        # page; treat that as the one signal we have that nothing went through.
+        try:
+            page.wait_for_timeout(5000)
+            submit_still_present = submit_locator.is_visible()
+        except Exception:
+            submit_still_present = False
+
+        return not submit_still_present
