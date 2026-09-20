@@ -30,3 +30,18 @@ def test_extract_company_info_handles_malformed_json():
     with patch("careeros.skills.company_research.litellm.completion", return_value=mock_resp):
         result = extract_company_info("some content")
     assert result["industry"] is None
+
+
+def test_extract_company_info_sends_system_and_wrapped_user_message():
+    from careeros.skills.company_research import extract_company_info
+    mock_resp = MagicMock()
+    mock_resp.choices[0].message.content = '{"industry": "Software", "size": "51-200", "notes": null}'
+    with patch("careeros.skills.company_research.litellm.completion", return_value=mock_resp) as mock_llm:
+        extract_company_info("Acme Corp page content here")
+    messages = mock_llm.call_args.kwargs["messages"]
+    assert len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert "Extract structured facts" in messages[0]["content"]
+    assert messages[1]["role"] == "user"
+    assert "<untrusted_content>" in messages[1]["content"]
+    assert "Acme Corp page content here" in messages[1]["content"]

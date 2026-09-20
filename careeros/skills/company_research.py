@@ -1,6 +1,7 @@
 import json
 import os
 import litellm
+from careeros.skills.sanitize import wrap_untrusted
 
 DEFAULT_LLM_MODEL = "claude-haiku-4-5-20251001"
 _CONTENT_CAP = 4000
@@ -14,8 +15,6 @@ Return ONLY valid JSON — no markdown, no explanation.
   "size": "<employee count range, e.g. '51-200', or null if unknown>",
   "notes": "<1-2 sentences of other relevant context, or null>"
 }
-
-Page content:
 """
 
 _FAILURE = {"industry": None, "size": None, "notes": None}
@@ -31,12 +30,15 @@ def _parse_json(text: str) -> dict:
 
 def extract_company_info(page_content: str, model: str | None = None) -> dict:
     effective_model = model or os.environ.get("CAREEROS_MODEL", DEFAULT_LLM_MODEL)
-    prompt = _EXTRACT_INSTRUCTIONS + page_content[:_CONTENT_CAP]
+    user_text = "Page content:\n" + wrap_untrusted(page_content[:_CONTENT_CAP])
     try:
         resp = litellm.completion(
             model=effective_model,
             max_tokens=256,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": _EXTRACT_INSTRUCTIONS},
+                {"role": "user", "content": user_text},
+            ],
         )
         result = _parse_json(resp.choices[0].message.content)
         return {

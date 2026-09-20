@@ -46,3 +46,20 @@ def test_extract_compensation_data_handles_thin_page_content():
         result = extract_compensation_data("")
     assert result["base_min"] is None
     assert result["confidence"] == "low"
+
+
+def test_extract_compensation_data_sends_system_and_wrapped_user_message():
+    from careeros.skills.compensation_research import extract_compensation_data
+    mock_resp = MagicMock()
+    mock_resp.choices[0].message.content = (
+        '{"base_min": 180000, "base_max": 220000, "bonus": null, "equity": null, "confidence": "medium"}'
+    )
+    with patch("careeros.skills.compensation_research.litellm.completion", return_value=mock_resp) as mock_llm:
+        extract_compensation_data("Senior SRE at Acme Corp: $180K-$220K base")
+    messages = mock_llm.call_args.kwargs["messages"]
+    assert len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert "Extract structured compensation facts" in messages[0]["content"]
+    assert messages[1]["role"] == "user"
+    assert "<untrusted_content>" in messages[1]["content"]
+    assert "Senior SRE at Acme Corp: $180K-$220K base" in messages[1]["content"]
