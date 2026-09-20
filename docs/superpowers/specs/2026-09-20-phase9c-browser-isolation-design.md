@@ -28,6 +28,10 @@ third and last part of Phase 9.
 - `careeros browser status` — which boards are authorized
 - A board registry consolidating the board list that currently exists in four places
 - Per-board session pre-flight in `discover-and-apply`, `browse`, `apply`, and `research`
+- Lifting the `discover-and-apply` opt-in gate, completing Phase 9
+- One adjacent fix: `browse_cmd.py:96` reads `result["reasoning"]` directly, which raises
+  `KeyError` and aborts a whole browse run whenever the model returns a score without a
+  reasoning field. One line, in a file this phase already modifies.
 
 **Out (deferred, not forgotten):**
 
@@ -44,7 +48,9 @@ third and last part of Phase 9.
   needs a probe URL and a logged-in selector per board, which puts session correctness
   back on the markup treadmill that Phase 10 exists to get off. Revisit only if silent
   revocation proves common in practice.
-- Lifting the `discover-and-apply` opt-in gate. See **Gate** below.
+- `GenericFiller.can_handle()` returning `True` unconditionally, which makes
+  `discover-and-apply`'s `no_filler_available` branch unreachable. Real, but it changes
+  filler dispatch — a separate concern from browser isolation, deserving its own review.
 
 **Not in the workspace.** The profile lives outside it. `careeros export` rglobs the
 whole workspace into an unencrypted zip (`portability.py:30`), so a profile inside it
@@ -245,19 +251,30 @@ merely had Chrome open. It is now CareerOS-vs-CareerOS and is currently uncaught
 
 ## Gate
 
-**The `discover-and-apply` opt-in gate stays up.** The ROADMAP says it lifts once all three
-Phase 9 parts land, but `_GATE_WARNING` cites two hazards and only one is Phase 9's:
+**The `discover-and-apply` opt-in gate comes down**, completing Phase 9 as the ROADMAP
+specifies. Both hazards `_GATE_WARNING` names are addressed on this base:
 
-- prompt-injectable score with no policy layer → **fixed** by 9a + 9b
-- no deduplication, so a scheduled run re-submits to the same employer every run →
-  **Phase 10**
+| Hazard in the warning text | Status |
+|---|---|
+| Prompt-injectable score, no deterministic policy layer | Fixed — 9a's `PolicyEngine`, 9b's `wrap_untrusted()` |
+| No dedup, so a scheduled run re-submits to the same employer every run | Fixed — `discover_and_apply_cmd.py:124-167` matches case-insensitive `(company, title)` against existing jobs, reuses the existing `job_id`, and excludes `already_applied` from `eligible` |
 
-Shipping an ungated unattended command that still re-applies to the same employer on every
-cron run would trade a fixed critical finding for a live one. So 9c rewrites
-`_GATE_WARNING` to drop the now-false injection and policy language and cite only the
-remaining dedup hazard, and updates the ROADMAP's Phase 9 exit condition to say the gate
-lifts after Phase 10. `--i-accept-the-risk` and `CAREEROS_ALLOW_UNSAFE_AUTOMATION` are
-unchanged.
+The second one also depended on a filler fix that landed alongside it: the fillers now
+separate the submit click from its verification, with an explicit note that an exception
+during verification does not imply the submission failed. Without that, a
+successful-but-unconfirmed submit would leave `stage` un-updated and the job eligible
+again on the next run — a hole straight through the dedup stopgap.
+
+Removed: `_GATE_WARNING`, `_GATE_ENV_VAR`, the `CAREEROS_ALLOW_UNSAFE_AUTOMATION`
+environment check, the `--i-accept-the-risk` option, and the
+"Running with unsafe automation accepted" banner.
+
+**Residual risk, accepted and recorded.** Dedup matches on exact `(company, title)`, so a
+posting re-listed under a variant title ("Senior SRE" vs "Senior Site Reliability
+Engineer") still creates a new record and can be applied to a second time. That is a far
+smaller exposure than "every cron run," and Phase 10's canonical-URL fingerprinting closes
+it. The ROADMAP's Phase 10 entry should name this explicitly as the gap it inherits,
+rather than leaving it implied.
 
 `config/policies.json` population is 9a's business and is not revisited here.
 
@@ -290,7 +307,12 @@ patch at the caller's import site.
   applies, and `research compensation` all proceed without any session.
 - `tests/test_discover_and_apply_cmd.py` — an unauthorized board is skipped while
   authorized boards still run; `session_unauthorized` is logged at `status="failed"`; the
-  summary names unauthorized boards; all-unauthorized exits non-zero.
+  summary names unauthorized boards; all-unauthorized exits non-zero. Gate removal: the
+  command runs with neither `--i-accept-the-risk` nor `CAREEROS_ALLOW_UNSAFE_AUTOMATION`
+  set; the existing tests asserting the gate blocks are deleted, not skipped.
+- `tests/test_browse_cmd.py` — a `score_job` result lacking `reasoning` no longer raises;
+  the listing renders with an empty reasoning rather than aborting the run. This test
+  fails on the current code, which is the point of adding it.
 
 Existing tests that patch `launch_browser` at the caller's import site keep working
 unchanged. Tests that assert on the live Chrome path are updated, not deleted.
