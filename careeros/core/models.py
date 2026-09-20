@@ -161,6 +161,21 @@ class AutomationPolicy(BaseModel):
         return cls.model_validate_json(storage.read("config/automation_policy.json").decode())
 
 
+class PolicyConfig(BaseModel):
+    blocked_companies: list[str] = []
+    min_salary: int | None = None
+    blocked_locations: list[str] = []
+
+    def save(self, storage: StorageProvider) -> None:
+        storage.atomic_write("config/policies.json", self.model_dump_json(indent=2).encode())
+
+    @classmethod
+    def load(cls, storage: StorageProvider) -> "PolicyConfig":
+        if not storage.exists("config/policies.json"):
+            return cls()
+        return cls.model_validate_json(storage.read("config/policies.json").decode())
+
+
 class Company(BaseModel):
     id: str
     name: str
