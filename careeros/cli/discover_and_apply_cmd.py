@@ -10,7 +10,7 @@ from careeros.browser.driver import BrowserProfileBusy, fetch_jd_text, launch_br
 from careeros.browser.session import check_board_sessions
 from careeros.cli.apply_cmd import FILLERS
 from careeros.config import GlobalConfig
-from careeros.core.job_id import make_job_id
+from careeros.core.job_store import JobStore
 from careeros.core.models import AutomationPolicy, Goals, Job, PolicyConfig, Profile, Skills
 from careeros.core.policy_engine import PolicyEngine
 from careeros.runtime.base import ActionProposal
@@ -18,6 +18,7 @@ from careeros.runtime.factory import open_automation_runtime
 from careeros.skills.browse_query import job_query_from_profile
 from careeros.skills.cover_letter import generate_cover_letter
 from careeros.skills.job_score import score_job
+from careeros.sources.base import job_from_posting, posting_from_scrape
 from careeros.storage.filesystem import LocalFilesystemStorage
 
 discover_and_apply_app = typer.Typer(help="Unattended discover + auto-apply for scheduled runs.")
@@ -114,50 +115,38 @@ def discover_and_apply_cmd(
             rprint("[red]" + str(exc) + "[/red]")
             raise typer.Exit(1)
 
-    # Minimal dedup: match on (company, title) case-insensitively against jobs already
-    # in the workspace. This is a stopgap ahead of Phase 10's canonical-URL fingerprint
-    # engine — it prevents the most damaging case (re-submitting a real application to
-    # the same employer on every cron run) without claiming to solve cross-board dedup.
-    existing_jobs = Job.list_all(runtime.storage)
-    existing_by_key = {(j.company.strip().lower(), j.title.strip().lower()): j for j in existing_jobs}
-
+    store = JobStore(runtime.storage)
     saved_count = 0
     duplicate_count = 0
     for p in discovered:
-        key = (p["company"].strip().lower(), p["title"].strip().lower())
-        existing = existing_by_key.get(key)
-        if existing is not None:
-            p["job_id"] = existing.id
-            p["already_applied"] = existing.applied_at is not None
-            duplicate_count += 1
+        try:
+            posting = posting_from_scrape(p)
+        except ValueError as exc:
+            runtime.record_activity(runtime.new_event(
+                "posting_unusable", "discover-and-apply",
+                "Skipped an unusable posting from " + str(p.get("source_board", "?"))
+                + ": " + str(exc),
+                status="failed", entity_type="job",
+            ))
             continue
-
-        job_id = make_job_id(p["company"], p["title"])
-        job = Job(
-            id=job_id,
-            source=p["source_board"],
-            url=p["url"],
-            company=p["company"],
-            title=p["title"],
-            location=p.get("location"),
-            description=p["jd_text"],
-            stage="saved",
-            created_at=now,
-            updated_at=now,
-        )
-        job.save(runtime.storage)
-        runtime.record_activity(runtime.new_event(
-            "job_added", "discover-and-apply",
-            "Job saved from " + p["source_board"] + ": " + p["company"] + " — " + p["title"],
-            entity_type="job", entity_id=job_id,
-        ))
-        saved_count += 1
-        p["job_id"] = job_id
-        p["already_applied"] = False
-        existing_by_key[key] = job
+        job = job_from_posting(posting, now)
+        job = job.model_copy(update={"description": p["jd_text"]})
+        outcome = store.save_new(job)
+        p["job_id"] = outcome.job.id
+        p["already_applied"] = outcome.job.applied_at is not None
+        if outcome.created:
+            runtime.record_activity(runtime.new_event(
+                "job_added", "discover-and-apply",
+                "Job saved from " + p["source_board"] + ": " + p["company"] + " — " + p["title"],
+                entity_type="job", entity_id=outcome.job.id,
+            ))
+            saved_count += 1
+        else:
+            duplicate_count += 1
 
     eligible = sorted(
-        [p for p in discovered if p["score"] >= policy.auto_apply_min_score and not p.get("already_applied")],
+        [p for p in discovered
+         if p.get("job_id") and p["score"] >= policy.auto_apply_min_score and not p.get("already_applied")],
         key=lambda p: p["score"], reverse=True,
     )
 

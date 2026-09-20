@@ -7,11 +7,13 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from careeros.cli.discover_and_apply_cmd import discover_and_apply_app
+from careeros.core.job_store import JobStore
 from careeros.core.models import AutomationPolicy, Job, PolicyConfig, Profile, Skill, Skills
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace
 
 runner = CliRunner()
+_NOW = "2026-09-20T00:00:00+00:00"
 
 
 def _setup_workspace(tmp_path, policy: AutomationPolicy | None = None, with_resume: bool = True):
@@ -593,3 +595,106 @@ class TestDiscoverAndApplyCmd:
         assert result.exit_code == 1
         assert "already in use" in result.output
         assert mock_gen.call_count <= 1
+
+    def test_title_variant_rediscovery_does_not_create_a_second_record(self, tmp_path):
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5,
+                                  boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        storage = LocalFilesystemStorage(ws_path)
+        first = _posting(title="Senior SRE", url="https://linkedin.test/1")
+        second = _posting(title="Senior Site Reliability Engineer",
+                          url="https://greenhouse.test/9")
+        for postings in ([first], [second]):
+            with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                       return_value={"linkedin": True}), \
+                 patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
+                 patch("careeros.cli.discover_and_apply_cmd.SCRAPERS") as scrapers, \
+                 patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="jd"), \
+                 patch("careeros.cli.discover_and_apply_cmd.score_job",
+                       return_value={"score": 10, "reasoning": "meh"}):
+                scrapers.__getitem__.return_value.search.return_value = postings
+                runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+        assert len(Job.list_all(storage)) == 1
+
+    def test_already_applied_job_is_not_reapplied_after_rediscovery(self, tmp_path):
+        policy = AutomationPolicy(auto_apply_min_score=50, max_auto_applies_per_run=5,
+                                  boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        storage = LocalFilesystemStorage(ws_path)
+        JobStore(storage).save_new(Job(
+            id="acme-sre-aaaa", source="linkedin", company="Acme", title="Senior SRE",
+            url="https://linkedin.test/1", stage="applied", applied_at=_NOW,
+            created_at=_NOW, updated_at=_NOW,
+        ))
+        mock_filler = MagicMock()
+        mock_filler.can_handle.return_value = True
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS") as scrapers, \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="jd"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job",
+                   return_value={"score": 95, "reasoning": "great"}), \
+             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+            scrapers.__getitem__.return_value.search.return_value = [
+                _posting(title="Senior SRE", url="https://linkedin.test/1")
+            ]
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+        assert result.exit_code == 0
+        mock_filler.fill.assert_not_called()
+        assert "Duplicates: 1" in result.output
+
+    def test_cross_source_same_job_resolves_to_one_record(self, tmp_path):
+        # The ROADMAP's exit condition, asserted directly.
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5,
+                                  boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        storage = LocalFilesystemStorage(ws_path)
+        JobStore(storage).save_new(Job(
+            id="acme-sre-aaaa", source="greenhouse", company="Acme", title="Senior SRE",
+            url="https://boards.greenhouse.io/acme/jobs/1",
+            created_at=_NOW, updated_at=_NOW,
+        ))
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS") as scrapers, \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="jd"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job",
+                   return_value={"score": 10, "reasoning": "meh"}):
+            scrapers.__getitem__.return_value.search.return_value = [
+                _posting(title="Senior SRE", url="https://www.linkedin.com/jobs/view/7")
+            ]
+            runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+        assert len(Job.list_all(storage)) == 1
+
+    def test_unusable_posting_is_skipped_without_aborting_the_batch(self, tmp_path):
+        # Plan-defect guard: posting_from_scrape raises ValueError when a
+        # scraped dict's company is empty (a missed selector on the browser
+        # scraper's side). The bad card is FIRST here deliberately — an
+        # implementation that aborted the loop on the first failure would
+        # still pass a test where the bad card is last.
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5,
+                                  boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        storage = LocalFilesystemStorage(ws_path)
+        bad = _posting(company="", title="Bad Posting", url="https://boards.greenhouse.io/bad/1")
+        good = _posting(company="Acme", title="Senior SRE", url="https://boards.greenhouse.io/acme/jobs/2")
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS") as scrapers, \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="jd"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job",
+                   return_value={"score": 10, "reasoning": "meh"}):
+            scrapers.__getitem__.return_value.search.return_value = [bad, good]
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+
+        assert result.exit_code == 0
+        jobs = Job.list_all(storage)
+        assert len(jobs) == 1
+        assert jobs[0].title == "Senior SRE"
+        assert jobs[0].company == "Acme"
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        log_content = storage.read("activity/" + today + ".jsonl").decode()
+        assert "posting_unusable" in log_content
