@@ -1,3 +1,4 @@
+import json
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Iterator
@@ -36,30 +37,111 @@ def _mock_launch(mock_page=None):
     return _ctx
 
 
+def _mock_launch_counting(counter: list, mock_page=None):
+    """Same as _mock_launch, but appends to `counter` on each context entry."""
+    if mock_page is None:
+        mock_page = MagicMock()
+
+    @contextmanager
+    def _ctx(headless=False) -> Iterator:
+        counter.append(headless)
+        yield MagicMock(), mock_page
+
+    return _ctx
+
+
 def _posting(company="Acme", title="Senior SRE", url="https://boards.greenhouse.io/acme/jobs/1"):
     return {"source_board": "linkedin", "title": title, "company": company, "location": "SF", "url": url}
 
 
 class TestDiscoverAndApplyCmd:
-    def test_gated_without_opt_in_exits_1(self, tmp_path):
-        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
+    def test_runs_without_the_gate_flag(self, tmp_path):
+        # The gate is gone: neither --i-accept-the-risk nor the env var is needed.
+        policy = AutomationPolicy(
+            auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"]
+        )
         ws_path = _setup_workspace(tmp_path, policy=policy)
-        result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
-        assert result.exit_code == 1
-        assert "gated" in result.output.lower()
-
-    def test_gated_env_var_opt_in_bypasses_flag(self, tmp_path, monkeypatch):
-        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
-        ws_path = _setup_workspace(tmp_path, policy=policy)
-        monkeypatch.setenv("CAREEROS_ALLOW_UNSAFE_AUTOMATION", "1")
-        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[]))}), \
-             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()):
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job",
+                   return_value={"score": 10, "reasoning": "meh"}):
             result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
         assert result.exit_code == 0
+        assert "i-accept-the-risk" not in result.output
+        assert "unsafe automation" not in result.output.lower()
+
+    def test_removed_gate_flag_is_rejected(self, tmp_path):
+        policy = AutomationPolicy(
+            auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"]
+        )
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        result = runner.invoke(
+            discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"]
+        )
+        assert result.exit_code != 0
+
+    def test_unauthorized_board_is_skipped_and_logged(self, tmp_path):
+        policy = AutomationPolicy(
+            auto_apply_min_score=90, max_auto_applies_per_run=5,
+            boards=["linkedin", "indeed"],
+        )
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": False, "indeed": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job",
+                   return_value={"score": 10, "reasoning": "meh"}):
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert "Unauthorized boards: linkedin" in result.output
+
+        logs = sorted((tmp_path / "activity").glob("*.jsonl"))
+        events = [json.loads(line) for line in logs[-1].read_text().strip().split("\n") if line]
+        unauth = [e for e in events if e["event_type"] == "session_unauthorized"]
+        assert len(unauth) == 1
+        assert unauth[0]["entity_id"] == "linkedin"
+        assert unauth[0]["status"] == "failed"
+
+    def test_authorized_boards_still_run_when_another_is_unauthorized(self, tmp_path):
+        policy = AutomationPolicy(
+            auto_apply_min_score=90, max_auto_applies_per_run=5,
+            boards=["linkedin", "indeed"],
+        )
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        launches: list = []
+
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": False, "indeed": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser",
+                   _mock_launch_counting(launches)), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job",
+                   return_value={"score": 10, "reasoning": "meh"}):
+            runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+
+        # One board authorized -> exactly one discovery browser launch, headless.
+        assert launches == [True]
+
+    def test_all_boards_unauthorized_exits_non_zero(self, tmp_path):
+        policy = AutomationPolicy(
+            auto_apply_min_score=90, max_auto_applies_per_run=5,
+            boards=["linkedin", "indeed"],
+        )
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        launches: list = []
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": False, "indeed": False}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser",
+                   _mock_launch_counting(launches)):
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+        assert result.exit_code == 1
+        assert "careeros browser login" in result.output
+        assert launches == []
 
     def test_missing_policy_exits_1(self, tmp_path):
         ws_path = _setup_workspace(tmp_path, policy=None)
-        result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+        result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
         assert result.exit_code == 1
         assert "automation_policy" in result.output.lower()
 
@@ -69,12 +151,14 @@ class TestDiscoverAndApplyCmd:
         mock_filler = MagicMock()
         mock_filler.can_handle.return_value = True
 
-        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 50, "reasoning": "meh"}), \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
-            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
         mock_filler.fill.assert_not_called()
@@ -92,13 +176,15 @@ class TestDiscoverAndApplyCmd:
         mock_filler.platform = "Greenhouse"
         mock_page = MagicMock()
 
-        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
              patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
-            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
         mock_filler.fill.assert_called_once()
@@ -123,13 +209,15 @@ class TestDiscoverAndApplyCmd:
             _posting(company="Beta", title="Role Two", url="https://boards.greenhouse.io/beta/jobs/2"),
         ]
 
-        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=postings))}), \
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=postings))}), \
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
              patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
-            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
         assert mock_filler.fill.call_count == 1
@@ -146,13 +234,15 @@ class TestDiscoverAndApplyCmd:
         mock_filler.can_handle.return_value = True
         mock_page = MagicMock()
 
-        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
              patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value=""), \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
-            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
         mock_filler.fill.assert_not_called()
@@ -167,13 +257,15 @@ class TestDiscoverAndApplyCmd:
         mock_filler = MagicMock()
         mock_filler.can_handle.return_value = False
 
-        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
              patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
-            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
         storage = LocalFilesystemStorage(ws_path)
@@ -200,14 +292,16 @@ class TestDiscoverAndApplyCmd:
                 raise ValueError("simulated disk-full / corrupted write")
             return original_atomic_write(self, path, data)
 
-        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=postings))}), \
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=postings))}), \
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
              patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
              patch.object(LocalFilesystemStorage, "atomic_write", flaky_atomic_write), \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
-            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
         # Acme's cover-letter write raised inside the try/except — it must be skipped,
@@ -233,13 +327,15 @@ class TestDiscoverAndApplyCmd:
         mock_filler.platform = "Greenhouse"
         mock_page = MagicMock()
 
-        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
              patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
-            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
         storage = LocalFilesystemStorage(ws_path)
@@ -258,14 +354,16 @@ class TestDiscoverAndApplyCmd:
         mock_filler.platform = "Greenhouse"
         mock_page = MagicMock()
 
-        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
              patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
-            first = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
-            second = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+            first = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+            second = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert first.exit_code == 0
         assert second.exit_code == 0
@@ -284,13 +382,15 @@ class TestDiscoverAndApplyCmd:
         mock_filler = MagicMock()
         mock_filler.can_handle.return_value = True
 
-        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 50, "reasoning": "meh"}), \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
-            runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
-            second = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+            runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+            second = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert second.exit_code == 0
         storage = LocalFilesystemStorage(ws_path)
@@ -306,13 +406,15 @@ class TestDiscoverAndApplyCmd:
         mock_filler = MagicMock()
         mock_filler.can_handle.return_value = True
 
-        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
              patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter") as mock_gen, \
              patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
-            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
         mock_gen.assert_not_called()
@@ -328,10 +430,12 @@ class TestDiscoverAndApplyCmd:
         policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
         ws_path = _setup_workspace(tmp_path, policy=policy)
 
-        with patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[]))}), \
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[]))}), \
              patch("careeros.cli.discover_and_apply_cmd.launch_browser") as mock_browser:
             mock_browser.return_value.__enter__ = MagicMock(return_value=(MagicMock(), MagicMock()))
             mock_browser.return_value.__exit__ = MagicMock(return_value=False)
-            runner.invoke(discover_and_apply_app, ["--workspace", ws_path, "--i-accept-the-risk"])
+            runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         mock_browser.assert_called_with(headless=True)
