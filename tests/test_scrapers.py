@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import MagicMock
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -31,6 +32,40 @@ class TestLinkedInScraper:
         assert results[1]["title"] == "Platform Engineer"
         assert results[1]["company"] == "Beta Inc"
 
+    def test_search_resolves_relative_url_to_absolute(self):
+        from careeros.browser.scrapers.linkedin import LinkedInScraper
+        scraper = LinkedInScraper()
+        page = MagicMock()
+        page.url = "https://www.linkedin.com/jobs/search/?keywords=sre"
+
+        link = MagicMock()
+        link.inner_text.return_value = "Senior SRE"
+        link.get_attribute.return_value = "/jobs/view/123"
+
+        company_locator = MagicMock()
+        company_locator.first.inner_text.return_value = "Acme"
+
+        loc_locator = MagicMock()
+        loc_locator.first.count.return_value = 0
+
+        def card_locator(selector):
+            if "link" in selector:
+                m = MagicMock()
+                m.first = link
+                return m
+            if "company-name" in selector:
+                return company_locator
+            if "metadata-item" in selector:
+                return loc_locator
+            return MagicMock()
+
+        card = MagicMock()
+        card.locator.side_effect = card_locator
+        page.locator.return_value.all.return_value = [card]
+
+        results = scraper.search(page, "sre", 1)
+        assert results[0]["url"] == "https://www.linkedin.com/jobs/view/123"
+
 
 class TestIndeedScraper:
     def test_parse_listings_returns_normalized_dicts(self):
@@ -60,6 +95,40 @@ class TestWellfoundScraper:
         assert results[0]["company"] == "Acme Corp"
         assert "wellfound.com" in results[0]["url"]
 
+    def test_search_resolves_relative_url_to_absolute(self):
+        from careeros.browser.scrapers.wellfound import WellfoundScraper
+        scraper = WellfoundScraper()
+        page = MagicMock()
+        page.url = "https://wellfound.com/jobs?q=sre"
+
+        link = MagicMock()
+        link.inner_text.return_value = "Senior SRE"
+        link.get_attribute.return_value = "/jobs/42"
+
+        company_locator = MagicMock()
+        company_locator.first.inner_text.return_value = "Acme"
+
+        loc_locator = MagicMock()
+        loc_locator.first.count.return_value = 0
+
+        def card_locator(selector):
+            if "title" in selector:
+                m = MagicMock()
+                m.first = link
+                return m
+            if "company" in selector:
+                return company_locator
+            if "location" in selector:
+                return loc_locator
+            return MagicMock()
+
+        card = MagicMock()
+        card.locator.side_effect = card_locator
+        page.locator.return_value.all.return_value = [card]
+
+        results = scraper.search(page, "sre", 1)
+        assert results[0]["url"] == "https://wellfound.com/jobs/42"
+
 
 class TestGenericScraper:
     def test_parse_listings_extracts_job_pattern_hrefs(self):
@@ -83,3 +152,12 @@ class TestGenericScraper:
         from careeros.browser.scrapers.generic import GenericScraper
         html = "<html><body><a href='/about'>About</a></body></html>"
         assert GenericScraper().parse_listings(html) == []
+
+    def test_search_resolves_relative_url_to_absolute(self):
+        from careeros.browser.scrapers.generic import GenericScraper
+        scraper = GenericScraper()
+        page = MagicMock()
+        page.url = "https://example.com/careers"
+        page.content.return_value = '<a href="/jobs/eng-42">Engineer</a>'
+        results = scraper.search(page, "https://example.com/careers", 10)
+        assert results[0]["url"] == "https://example.com/jobs/eng-42"

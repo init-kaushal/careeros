@@ -65,7 +65,12 @@ def score_job(
             messages=[{"role": "user", "content": prompt}],
         )
         result = _parse_json(resp.choices[0].message.content)
-        result["score"] = int(result["score"])
-        return result
+        score = max(1, min(100, int(result["score"])))
+        return {
+            "score": score,
+            "reasoning": result.get("reasoning", ""),
+            "strengths": result.get("strengths", []),
+            "gaps": result.get("gaps", []),
+        }
     except Exception:
         return dict(_FAILURE)

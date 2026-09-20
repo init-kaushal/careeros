@@ -50,6 +50,7 @@ class LinkedInScraper:
                     link = card.locator("a.job-card-container__link").first
                     title = link.inner_text().strip()
                     href = link.get_attribute("href") or ""
+                    href = urllib.parse.urljoin(page.url, href)
                     href = href.split("?")[0]
                     company = card.locator(".job-card-container__company-name").first.inner_text().strip()
                     loc_el = card.locator(".job-card-container__metadata-item").first

@@ -48,6 +48,7 @@ class WellfoundScraper:
                     link = card.locator("a.job-listing__title").first
                     title = link.inner_text().strip()
                     href = link.get_attribute("href") or ""
+                    href = urllib.parse.urljoin(page.url, href)
                     company = card.locator(".job-listing__company").first.inner_text().strip()
                     loc_el = card.locator(".job-listing__location").first
                     location = loc_el.inner_text().strip() if loc_el.count() else None

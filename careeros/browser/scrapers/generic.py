@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import urllib.parse
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -34,4 +35,7 @@ class GenericScraper:
             html = page.content()
         except Exception:
             return []
-        return self.parse_listings(html)[:limit]
+        results = self.parse_listings(html)[:limit]
+        for r in results:
+            r["url"] = urllib.parse.urljoin(page.url, r["url"])
+        return results

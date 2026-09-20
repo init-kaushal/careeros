@@ -34,6 +34,25 @@ class TestScoreJob:
             result = score_job("SRE job posting", _make_profile(), _make_skills())
         assert result == {"score": 0, "reasoning": "Could not score.", "strengths": [], "gaps": []}
 
+    def test_missing_reasoning_key_does_not_raise(self):
+        from careeros.skills.job_score import score_job
+        mock_resp = MagicMock()
+        mock_resp.choices[0].message.content = '{"score": 85}'
+        with patch("litellm.completion", return_value=mock_resp):
+            result = score_job("SRE job posting", _make_profile(), _make_skills())
+        assert result["score"] == 85
+        assert result["reasoning"] == ""
+        assert result["strengths"] == []
+        assert result["gaps"] == []
+
+    def test_out_of_range_score_is_clamped(self):
+        from careeros.skills.job_score import score_job
+        mock_resp = MagicMock()
+        mock_resp.choices[0].message.content = '{"score": 150, "reasoning": "great", "strengths": [], "gaps": []}'
+        with patch("litellm.completion", return_value=mock_resp):
+            result = score_job("SRE job posting", _make_profile(), _make_skills())
+        assert result["score"] == 100
+
     def test_returns_fallback_on_bad_json(self):
         from careeros.skills.job_score import score_job
         mock_resp = MagicMock()
