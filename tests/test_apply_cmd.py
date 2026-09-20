@@ -4,7 +4,7 @@ from typer.testing import CliRunner
 
 from careeros.cli.apply_cmd import apply_app
 from careeros.config import GlobalConfig
-from careeros.core.models import Goals, Job, Profile, Skills
+from careeros.core.models import Goals, Job, PolicyConfig, Profile, Skills
 from careeros.runtime.base import ApprovalResult
 
 runner = CliRunner()
@@ -33,6 +33,7 @@ def _mock_runtime(tmp_path, resume_filename="resume.pdf", approved=True):
     storage.list.return_value = ["resumes/versions/" + resume_filename]
     storage.resolve.return_value = str(tmp_path / "resumes" / "versions" / resume_filename)
     storage.exists.return_value = True
+    storage.read.return_value = b"{}"
     runtime = MagicMock()
     runtime.storage = storage
     runtime.request_approval.return_value = ApprovalResult(approved=approved)
@@ -138,6 +139,30 @@ class TestApplyCmdFailurePaths:
             result = runner.invoke(apply_app, ["acme-sre-abc1"])
         assert result.exit_code == 1
         assert "resume" in result.output.lower()
+
+    def test_policy_blocked_company_exits_1_without_requesting_approval(self, tmp_path):
+        runtime = _mock_runtime(tmp_path)
+        job = _make_job()
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+             patch("careeros.cli.apply_cmd.Job.load", return_value=job), \
+             patch("careeros.cli.apply_cmd.PolicyConfig.load", return_value=PolicyConfig(blocked_companies=["Acme"])):
+            result = runner.invoke(apply_app, ["acme-sre-abc1"])
+        assert result.exit_code == 1
+        assert "blocked by policy" in result.output.lower()
+        runtime.request_approval.assert_not_called()
+
+    def test_policy_blocked_logs_policy_blocked_event(self, tmp_path):
+        runtime = _mock_runtime(tmp_path)
+        job = _make_job()
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+             patch("careeros.cli.apply_cmd.Job.load", return_value=job), \
+             patch("careeros.cli.apply_cmd.PolicyConfig.load", return_value=PolicyConfig(blocked_companies=["Acme"])):
+            runner.invoke(apply_app, ["acme-sre-abc1"])
+        runtime.record_activity.assert_called_once()
+        event_args = runtime.new_event.call_args
+        assert event_args[0][0] == "policy_blocked"
 
     def test_cover_letter_generation_failure_exits_1(self, tmp_path):
         runtime = _mock_runtime(tmp_path)

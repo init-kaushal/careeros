@@ -14,7 +14,8 @@ from careeros.browser.fillers.greenhouse import GreenhouseFiller
 from careeros.browser.fillers.lever import LeverFiller
 from careeros.browser.fillers.linkedin import LinkedInFiller
 from careeros.config import GlobalConfig
-from careeros.core.models import Goals, Job, Profile, Skills
+from careeros.core.models import Goals, Job, PolicyConfig, Profile, Skills
+from careeros.core.policy_engine import PolicyEngine
 from careeros.runtime.base import ActionProposal
 from careeros.runtime.factory import open_local_runtime
 from careeros.skills.cover_letter import generate_cover_letter
@@ -76,6 +77,18 @@ def apply_cmd(
 
     resume_file = resume_entries[-1]
     resume_path = runtime.storage.resolve(resume_file)
+
+    # Policy check (before any LLM call is spent preparing this application)
+    policy_engine = PolicyEngine(PolicyConfig.load(runtime.storage))
+    policy_result = policy_engine.check_job(job)
+    if policy_result.blocked:
+        runtime.record_activity(runtime.new_event(
+            "policy_blocked", "apply",
+            "Blocked by policy (" + policy_result.rule + "): " + job.company + " — " + job.title,
+            status="failed", entity_type="job", entity_id=job_id,
+        ))
+        rprint("[red]Blocked by policy (" + policy_result.rule + "). Edit config/policies.json to change this.[/red]")
+        raise typer.Exit(1)
 
     # Load profile data (after resume check so early failure avoids unnecessary I/O)
     profile = Profile.load_or_empty(runtime.storage)
