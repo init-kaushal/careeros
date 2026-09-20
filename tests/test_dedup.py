@@ -135,3 +135,24 @@ def test_identical_non_empty_locations_match():
     a = _job(location="Remote", url="https://a.test/1")
     b = _job(location="remote", url="https://b.test/2")
     assert is_same_posting(a, b)
+
+
+def test_punctuation_only_titles_do_not_match_each_other():
+    # normalize_title("!!!") and normalize_title("???") are both "".
+    # Empty normalization is absence of evidence, not identity.
+    a = _job(title="!!!", url="https://a.test/1")
+    b = _job(title="???", url="https://b.test/2")
+    assert not is_same_posting(a, b)
+
+
+def test_punctuation_only_company_does_not_match():
+    a = _job(company="...", title="Senior SRE", url="https://a.test/1")
+    b = _job(company="???", title="Senior SRE", url="https://b.test/2")
+    assert not is_same_posting(a, b)
+
+
+def test_url_tier_still_wins_when_the_title_normalizes_to_empty():
+    # The guard must not disable the URL tier: same posting, garbage title.
+    a = _job(title="!!!", url="https://x.test/1?utm_source=li")
+    b = _job(title="!!!", url="https://x.test/1")
+    assert is_same_posting(a, b)

@@ -71,9 +71,21 @@ def is_same_posting(candidate: Job, existing: Job) -> bool:
     if a_url and a_url == canonical_url(existing.url):
         return True
 
-    if _normalize_company(candidate.company) != _normalize_company(existing.company):
+    a_title = normalize_title(candidate.title)
+    b_title = normalize_title(existing.title)
+    a_company = _normalize_company(candidate.company)
+    b_company = _normalize_company(existing.company)
+
+    # An empty normalization is absence of evidence, not evidence of identity.
+    # Without this, two postings with punctuation-only or encoding-mangled
+    # titles would match each other — a false positive, which here means a
+    # real job is silently never applied to.
+    if not a_title or not b_title or not a_company or not b_company:
         return False
-    if normalize_title(candidate.title) != normalize_title(existing.title):
+
+    if a_company != b_company:
+        return False
+    if a_title != b_title:
         return False
 
     a_loc = normalize_location(candidate.location)
