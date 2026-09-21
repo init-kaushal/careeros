@@ -2,7 +2,7 @@ import json
 import pytest
 from pathlib import Path
 from typer.testing import CliRunner
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from careeros.cli.main import app
 from careeros.core.models import Profile, Skills
 from careeros.storage.filesystem import LocalFilesystemStorage
@@ -108,8 +108,11 @@ def test_onboard_non_utf8_resume_does_not_crash(tmp_path, mock_extraction, monke
     binary_resume.write_bytes(b"\xff\xfe\x00Alice Johnson\x00\xff")
     runner = CliRunner()
     ws_path = str(tmp_path / "ws")
-    result, _ = _run_onboard(runner, tmp_path, binary_resume)
+    result, ws_path = _run_onboard(runner, tmp_path, binary_resume)
     assert result.exit_code == 0, result.output
+    storage = LocalFilesystemStorage(ws_path)
+    profile = Profile.load(storage)
+    assert profile.name == "Alice Johnson"
 
 
 def test_onboard_writes_board_entries(tmp_path, resume_file, mock_extraction, monkeypatch):
@@ -199,3 +202,54 @@ def test_onboard_completes_when_nothing_verifies(tmp_path, resume_file, monkeypa
     assert result.exit_code == 0, result.output
     storage = LocalFilesystemStorage(ws_path)
     assert json.loads(storage.read("profile/skills.json").decode())["skills"] == []
+
+
+def test_onboard_warns_loudly_when_skill_extraction_errors(tmp_path, resume_file, monkeypatch):
+    # I2: an LLM/API failure is not the same outcome as "nothing verified"
+    # and onboard must say so clearly, with the retry command, rather than
+    # silently reporting zero skills.
+    monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
+    from careeros.core.models import Profile, Skills
+    from careeros.skills.resume_ingest import IngestResult
+
+    profile = Profile(name="Alice Johnson", title="Senior SRE")
+    errored = IngestResult(skills=Skills(), dropped=(), error="invalid api key")
+    runner = CliRunner()
+    with patch("careeros.cli.onboard.extract_basic_profile", return_value=profile), \
+         patch("careeros.cli.onboard.ingest_resume", return_value=errored):
+        result, ws_path = _run_onboard(runner, tmp_path, resume_file)
+
+    assert result.exit_code == 0, result.output
+    assert "invalid api key" in result.output
+    assert "careeros resume ingest" in result.output
+    storage = LocalFilesystemStorage(ws_path)
+    assert json.loads(storage.read("profile/skills.json").decode())["skills"] == []
+
+
+def test_onboard_survives_a_malformed_ingest_response_end_to_end(tmp_path, resume_file, monkeypatch):
+    # C1: ingest_resume must be total. {"skills": null} is a plausible
+    # model response when told to omit unsupportable skills, and `onboard`
+    # deliberately has no try/except around ingest_resume — it relies on the
+    # documented never-raises contract. This exercises that contract for
+    # real, through the actual parsing path, not a mocked IngestResult.
+    monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
+    from careeros.config import GlobalConfig
+
+    profile = Profile(name="Alice Johnson", title="Senior SRE", years_of_experience=8)
+    resp = MagicMock()
+    resp.choices = [MagicMock()]
+    resp.choices[0].message.content = json.dumps({"skills": None})
+
+    runner = CliRunner()
+    with patch("careeros.cli.onboard.extract_basic_profile", return_value=profile), \
+         patch("litellm.completion", return_value=resp):
+        result, ws_path = _run_onboard(runner, tmp_path, resume_file)
+
+    assert result.exit_code == 0, result.output
+    storage = LocalFilesystemStorage(ws_path)
+    assert (Path(ws_path) / "manifest.json").exists()
+    assert Profile.load(storage).name == "Alice Johnson"
+    assert json.loads(storage.read("profile/skills.json").decode())["skills"] == []
+    assert GlobalConfig.load().workspace_path == ws_path
+    # Re-usable: a completed workspace must open cleanly, not just exist.
+    open_workspace(storage)

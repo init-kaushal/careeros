@@ -26,6 +26,14 @@ def _get_storage(workspace_path: str | None) -> LocalFilesystemStorage:
     return LocalFilesystemStorage(config.workspace_path)
 
 
+def _record_failed(runtime, summary: str) -> None:
+    # So the audit trail covers every invocation, not just the ones that
+    # reached the model.
+    runtime.record_activity(runtime.new_event(
+        "resume_ingested", "ingest", summary, status="failed", entity_type="resume",
+    ))
+
+
 @resume_app.command()
 def ingest(
     path: str = typer.Argument(None, help="Resume file to ingest; defaults to the stored master"),
@@ -41,24 +49,32 @@ def ingest(
         rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
         raise typer.Exit(1)
 
+    # `new_resume_text` is set only when `path` names a file to adopt as the
+    # new master. It is deliberately not written to storage yet — see below.
+    new_resume_text: str | None = None
+    source_desc = _MASTER
     if path:
         source = Path(path).expanduser()
+        source_desc = str(source)
         if not source.exists():
-            rprint("[red]File not found: " + str(source) + "[/red]")
+            _record_failed(runtime, "File not found: " + source_desc)
+            rprint("[red]File not found: " + source_desc + "[/red]")
             raise typer.Exit(1)
         try:
-            text = source.read_text(encoding="utf-8")
+            new_resume_text = source.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError) as exc:
-            rprint("[red]Could not read " + str(source) + ": " + type(exc).__name__ + "[/red]")
+            _record_failed(runtime, "Could not read " + source_desc + ": " + type(exc).__name__)
+            rprint("[red]Could not read " + source_desc + ": " + type(exc).__name__ + "[/red]")
             raise typer.Exit(1)
-        runtime.storage.atomic_write(_MASTER, text.encode())
+        text = new_resume_text
     else:
         if not runtime.storage.exists(_MASTER):
+            _record_failed(runtime, "No resume at " + _MASTER)
             rprint("[red]No resume at " + _MASTER + ". Run 'careeros onboard' first.[/red]")
             raise typer.Exit(1)
         text = runtime.storage.read(_MASTER).decode()
 
-    rprint("Ingesting " + _MASTER + "...")
+    rprint("Ingesting " + source_desc + "...")
     result = ingest_resume(text, _MASTER, model=model)
 
     verified = len(result.skills.skills)
@@ -66,7 +82,7 @@ def ingest(
 
     runtime.record_activity(runtime.new_event(
         "resume_ingested", "ingest",
-        "Ingested " + _MASTER + ": " + str(verified) + " verified, "
+        "Ingested " + source_desc + ": " + str(verified) + " verified, "
         + str(len(result.dropped)) + " dropped",
         status=status, entity_type="resume",
     ))
@@ -77,9 +93,22 @@ def ingest(
                + "[/yellow]")
 
     if verified == 0:
-        rprint("[red]No skills could be verified against " + _MASTER
-               + ". Your existing " + _SKILLS_PATH + " was left unchanged.[/red]")
+        if result.error:
+            rprint("[red]Skill extraction failed: " + result.error + ". Your existing "
+                   + _SKILLS_PATH + " and " + _MASTER + " were left unchanged.[/red]")
+        else:
+            rprint("[red]No skills could be verified against " + source_desc
+                   + ". Your existing " + _SKILLS_PATH + " and " + _MASTER
+                   + " were left unchanged.[/red]")
         raise typer.Exit(1)
+
+    # Only now that ingestion produced at least one verified skill do we
+    # commit to replacing the stored master resume. Writing it earlier —
+    # before knowing ingestion worked — would leave any skill retained from
+    # a previous run with Evidence.line citing a file that no longer
+    # contains the quoted text.
+    if new_resume_text is not None:
+        runtime.storage.atomic_write(_MASTER, new_resume_text.encode())
 
     result.skills.save(runtime.storage)
     rprint("[green]Stored " + str(verified) + " evidence-backed skill(s).[/green]")

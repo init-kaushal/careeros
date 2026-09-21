@@ -3,6 +3,7 @@ import typer
 from rich import print as rprint
 from rich.prompt import Confirm, Prompt
 
+from careeros.cli.resume_cmd import _MASTER
 from careeros.config import GlobalConfig
 from careeros.core.models import Goals, Preferences, Profile
 from careeros.runtime.local import LocalRuntime
@@ -51,7 +52,7 @@ def onboard_cmd(
         raise typer.Exit(1)
 
     resume_text = resume_file.read_text(encoding="utf-8", errors="replace")
-    runtime.storage.atomic_write("resumes/master.md", resume_text.encode())
+    runtime.storage.atomic_write(_MASTER, resume_text.encode())
     runtime.record_activity(runtime.new_event(
         "resume_imported", "import", "Resume imported from " + resume_path_str, entity_type="resume"
     ))
@@ -63,7 +64,7 @@ def onboard_cmd(
     # or empty result is the honest outcome of that guarantee, not a failure.
     rprint("\nExtracting profile from resume...")
     profile = extract_basic_profile(resume_text)
-    ingested = ingest_resume(resume_text, "resumes/master.md")
+    ingested = ingest_resume(resume_text, _MASTER)
     skills = ingested.skills
 
     rprint("\n[bold]Extracted profile:[/bold]")
@@ -71,7 +72,14 @@ def onboard_cmd(
     rprint(f"  Title:      {profile.title or '(not found)'}")
     rprint(f"  Experience: {profile.years_of_experience or '?'} years")
     rprint(f"  Skills:     {len(skills.skills)} verified")
-    if ingested.dropped:
+    if ingested.error:
+        # Onboard has no existing data to protect, so it always finishes —
+        # but a failed LLM call is not the same as "nothing verified," and
+        # the user needs to know skill extraction never actually ran.
+        rprint("[bold red]  Skill extraction failed: " + ingested.error + "[/bold red]")
+        rprint("[yellow]  Your profile was created without skills. Once your API key or "
+               "network access is working, run 'careeros resume ingest' to retry.[/yellow]")
+    elif ingested.dropped:
         rprint("[yellow]  Dropped " + str(len(ingested.dropped))
                + " skill(s) with no verifiable quote: "
                + ", ".join(ingested.dropped) + "[/yellow]")

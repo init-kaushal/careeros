@@ -140,3 +140,94 @@ def test_successful_ingestion_logs_status_success(tmp_path):
     events = [json.loads(l) for l in logs[-1].read_text().strip().split("\n") if l]
     ingested = [e for e in events if e["event_type"] == "resume_ingested"]
     assert ingested[-1]["status"] == "success"
+
+
+def test_zero_verified_ingest_with_a_path_leaves_previous_master_intact(tmp_path):
+    # I1: the new resume must not overwrite the stored master until ingestion
+    # is known to have produced something to save. Otherwise skills retained
+    # from a prior run cite a file that no longer contains their quote.
+    ws, storage = _workspace(tmp_path)
+    original_master = storage.read("resumes/master.md").decode()
+    new_resume = tmp_path / "updated.md"
+    new_resume.write_text("SKILLS\nRust, Zig\n")
+    with patch("careeros.cli.resume_cmd.ingest_resume",
+               return_value=_result(names=(), dropped=("Rust", "Zig"))):
+        result = runner.invoke(app, ["resume", "ingest", str(new_resume), "--workspace", ws])
+    assert result.exit_code == 1
+    assert storage.read("resumes/master.md").decode() == original_master
+    assert "left unchanged" in result.output
+
+
+def test_successful_ingest_with_a_path_does_replace_master(tmp_path):
+    ws, storage = _workspace(tmp_path)
+    new_resume = tmp_path / "updated.md"
+    new_resume.write_text("SKILLS\nRust, Zig\n")
+    with patch("careeros.cli.resume_cmd.ingest_resume", return_value=_result(names=("Rust",))):
+        result = runner.invoke(app, ["resume", "ingest", str(new_resume), "--workspace", ws])
+    assert result.exit_code == 0
+    assert storage.read("resumes/master.md").decode() == "SKILLS\nRust, Zig\n"
+
+
+def test_llm_error_is_reported_distinctly_and_exits_non_zero(tmp_path):
+    from careeros.core.models import Skills
+    from careeros.skills.resume_ingest import IngestResult
+
+    ws, _ = _workspace(tmp_path)
+    err_result = IngestResult(skills=Skills(), dropped=(), error="invalid api key")
+    with patch("careeros.cli.resume_cmd.ingest_resume", return_value=err_result):
+        result = runner.invoke(app, ["resume", "ingest", "--workspace", ws])
+    assert result.exit_code == 1
+    assert "invalid api key" in result.output
+
+
+def test_llm_error_does_not_overwrite_existing_skills(tmp_path):
+    from careeros.core.models import Skills
+    from careeros.skills.resume_ingest import IngestResult
+
+    ws, storage = _workspace(tmp_path)
+    with patch("careeros.cli.resume_cmd.ingest_resume", return_value=_result(names=("Python",))):
+        runner.invoke(app, ["resume", "ingest", "--workspace", ws])
+    before = storage.read("profile/skills.json").decode()
+
+    err_result = IngestResult(skills=Skills(), dropped=(), error="network timeout")
+    with patch("careeros.cli.resume_cmd.ingest_resume", return_value=err_result):
+        result = runner.invoke(app, ["resume", "ingest", "--workspace", ws])
+
+    assert result.exit_code == 1
+    assert storage.read("profile/skills.json").decode() == before
+
+
+def test_missing_path_records_a_failed_activity_event(tmp_path):
+    ws, _ = _workspace(tmp_path)
+    result = runner.invoke(app, ["resume", "ingest", str(tmp_path / "nope.md"), "--workspace", ws])
+    assert result.exit_code == 1
+    logs = sorted((tmp_path / "activity").glob("*.jsonl"))
+    events = [json.loads(l) for l in logs[-1].read_text().strip().split("\n") if l]
+    ingested = [e for e in events if e["event_type"] == "resume_ingested"]
+    assert len(ingested) == 1
+    assert ingested[-1]["status"] == "failed"
+
+
+def test_missing_default_resume_records_a_failed_activity_event(tmp_path):
+    storage = LocalFilesystemStorage(str(tmp_path))
+    init_workspace(storage)
+    result = runner.invoke(app, ["resume", "ingest", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    logs = sorted((tmp_path / "activity").glob("*.jsonl"))
+    events = [json.loads(l) for l in logs[-1].read_text().strip().split("\n") if l]
+    ingested = [e for e in events if e["event_type"] == "resume_ingested"]
+    assert len(ingested) == 1
+    assert ingested[-1]["status"] == "failed"
+
+
+def test_unreadable_path_records_a_failed_activity_event(tmp_path):
+    ws, _ = _workspace(tmp_path)
+    bad = tmp_path / "bad.md"
+    bad.write_bytes(b"\xff\xfe\x00not valid utf-8")
+    result = runner.invoke(app, ["resume", "ingest", str(bad), "--workspace", ws])
+    assert result.exit_code == 1
+    logs = sorted((tmp_path / "activity").glob("*.jsonl"))
+    events = [json.loads(l) for l in logs[-1].read_text().strip().split("\n") if l]
+    ingested = [e for e in events if e["event_type"] == "resume_ingested"]
+    assert len(ingested) == 1
+    assert ingested[-1]["status"] == "failed"
