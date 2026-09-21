@@ -9,10 +9,12 @@ from careeros.cli.apply_cmd import apply_app
 from careeros.cli.discover_and_apply_cmd import discover_and_apply_app
 from careeros.cli.research_cmd import research_app
 from careeros.cli.outreach_cmd import outreach_app, people_app
+from careeros.cli.resume_cmd import resume_app
 
 app = typer.Typer(name="careeros", help="CareerOS — your career, your data.")
 app.command("onboard")(onboard_cmd)
 app.add_typer(workspace_app, name="workspace")
+app.add_typer(resume_app, name="resume")
 app.add_typer(job_app, name="job")
 app.add_typer(browse_app, name="browse")
 app.add_typer(browser_app, name="browser")
