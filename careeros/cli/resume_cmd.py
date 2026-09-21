@@ -13,6 +13,7 @@ from careeros.storage.filesystem import LocalFilesystemStorage
 resume_app = typer.Typer(name="resume", help="Ingest and inspect your resume.")
 
 _MASTER = "resumes/master.md"
+_SKILLS_PATH = "profile/skills.json"
 
 
 def _get_storage(workspace_path: str | None) -> LocalFilesystemStorage:
@@ -61,13 +62,13 @@ def ingest(
     result = ingest_resume(text, _MASTER, model=model)
 
     verified = len(result.skills.skills)
-    result.skills.save(runtime.storage)
+    status = "success" if verified else "failed"
 
     runtime.record_activity(runtime.new_event(
         "resume_ingested", "ingest",
         "Ingested " + _MASTER + ": " + str(verified) + " verified, "
         + str(len(result.dropped)) + " dropped",
-        entity_type="resume",
+        status=status, entity_type="resume",
     ))
 
     if result.dropped:
@@ -76,7 +77,9 @@ def ingest(
                + "[/yellow]")
 
     if verified == 0:
-        rprint("[red]No skills could be verified against " + _MASTER + ".[/red]")
+        rprint("[red]No skills could be verified against " + _MASTER
+               + ". Your existing " + _SKILLS_PATH + " was left unchanged.[/red]")
         raise typer.Exit(1)
 
+    result.skills.save(runtime.storage)
     rprint("[green]Stored " + str(verified) + " evidence-backed skill(s).[/green]")

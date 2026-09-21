@@ -102,3 +102,41 @@ def test_requires_a_workspace(tmp_path, monkeypatch):
     result = runner.invoke(app, ["resume", "ingest"])
     assert result.exit_code == 1
     assert "No workspace configured" in result.output
+
+
+def test_failed_ingestion_does_not_destroy_existing_skills(tmp_path):
+    # ingest_resume never raises; it returns an empty result on any LLM or
+    # parse failure. A transient blip must not wipe a populated skills.json.
+    ws, storage = _workspace(tmp_path)
+    with patch("careeros.cli.resume_cmd.ingest_resume", return_value=_result(names=("Python",))):
+        runner.invoke(app, ["resume", "ingest", "--workspace", ws])
+    before = storage.read("profile/skills.json").decode()
+
+    with patch("careeros.cli.resume_cmd.ingest_resume",
+               return_value=_result(names=(), dropped=())):
+        result = runner.invoke(app, ["resume", "ingest", "--workspace", ws])
+
+    assert result.exit_code == 1
+    assert storage.read("profile/skills.json").decode() == before
+    assert "left unchanged" in result.output
+
+
+def test_failed_ingestion_logs_status_failed(tmp_path):
+    ws, _ = _workspace(tmp_path)
+    with patch("careeros.cli.resume_cmd.ingest_resume",
+               return_value=_result(names=(), dropped=("Rust",))):
+        runner.invoke(app, ["resume", "ingest", "--workspace", ws])
+    logs = sorted((tmp_path / "activity").glob("*.jsonl"))
+    events = [json.loads(l) for l in logs[-1].read_text().strip().split("\n") if l]
+    ingested = [e for e in events if e["event_type"] == "resume_ingested"]
+    assert ingested[-1]["status"] == "failed"
+
+
+def test_successful_ingestion_logs_status_success(tmp_path):
+    ws, _ = _workspace(tmp_path)
+    with patch("careeros.cli.resume_cmd.ingest_resume", return_value=_result(names=("Python",))):
+        runner.invoke(app, ["resume", "ingest", "--workspace", ws])
+    logs = sorted((tmp_path / "activity").glob("*.jsonl"))
+    events = [json.loads(l) for l in logs[-1].read_text().strip().split("\n") if l]
+    ingested = [e for e in events if e["event_type"] == "resume_ingested"]
+    assert ingested[-1]["status"] == "success"
