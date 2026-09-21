@@ -4,9 +4,10 @@ from rich import print as rprint
 from rich.prompt import Confirm, Prompt
 
 from careeros.config import GlobalConfig
-from careeros.core.models import Goals, Preferences, Profile, Skills
+from careeros.core.models import Goals, Preferences, Profile
 from careeros.runtime.local import LocalRuntime
 from careeros.skills.profile_extract import extract_basic_profile
+from careeros.skills.resume_ingest import ingest_resume
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace
 import json
@@ -56,16 +57,24 @@ def onboard_cmd(
     ))
 
     # Step 3: profile extraction — extract_basic_profile never raises; on any
-    # failure it returns an empty Profile()/Skills(), same sentinel pattern
-    # every other skill in this codebase uses.
+    # failure it returns an empty Profile(), same sentinel pattern every other
+    # skill in this codebase uses. Skills come from ingest_resume, the one
+    # extractor that verifies each skill's quote against the resume; a sparse
+    # or empty result is the honest outcome of that guarantee, not a failure.
     rprint("\nExtracting profile from resume...")
-    profile, skills = extract_basic_profile(resume_text)
+    profile = extract_basic_profile(resume_text)
+    ingested = ingest_resume(resume_text, "resumes/master.md")
+    skills = ingested.skills
 
     rprint("\n[bold]Extracted profile:[/bold]")
     rprint(f"  Name:       {profile.name or '(not found)'}")
     rprint(f"  Title:      {profile.title or '(not found)'}")
     rprint(f"  Experience: {profile.years_of_experience or '?'} years")
-    rprint(f"  Skills:     {len(skills.skills)} found")
+    rprint(f"  Skills:     {len(skills.skills)} verified")
+    if ingested.dropped:
+        rprint("[yellow]  Dropped " + str(len(ingested.dropped))
+               + " skill(s) with no verifiable quote: "
+               + ", ".join(ingested.dropped) + "[/yellow]")
 
     if not Confirm.ask("\nDoes this look right?", default=True):
         rprint("[yellow]Edit profile/profile.json in your workspace to correct it.[/yellow]")

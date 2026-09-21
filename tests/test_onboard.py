@@ -23,9 +23,13 @@ def resume_file(tmp_path):
 
 @pytest.fixture
 def mock_extraction():
+    from careeros.skills.resume_ingest import IngestResult
+
     profile = Profile(name="Alice Johnson", title="Senior SRE", years_of_experience=8)
     skills = Skills(skills=[])
-    with patch("careeros.cli.onboard.extract_basic_profile", return_value=(profile, skills)):
+    ingested = IngestResult(skills=skills, dropped=())
+    with patch("careeros.cli.onboard.extract_basic_profile", return_value=profile), \
+         patch("careeros.cli.onboard.ingest_resume", return_value=ingested):
         yield
 
 
@@ -151,3 +155,47 @@ def test_onboard_no_longer_offers_naukri(tmp_path, resume_file,
     result, _ = _run_onboard(runner, tmp_path, resume_file,
                              sources="greenhouse:stripe:Stripe")
     assert "naukri" not in result.output
+
+
+def test_onboard_uses_evidence_backed_ingestion_for_skills(tmp_path, resume_file, monkeypatch):
+    monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
+    from careeros.core.models import Evidence, Profile, Skill, Skills
+    from careeros.skills.resume_ingest import IngestResult
+
+    profile = Profile(name="Alice Johnson", title="Senior SRE", years_of_experience=8)
+    ingested = IngestResult(
+        skills=Skills(skills=[Skill(
+            name="Kubernetes",
+            source="resumes/master.md",
+            evidence=Evidence(quote="Kubernetes", line=1, source_file="resumes/master.md"),
+        )]),
+        dropped=("Rust",),
+    )
+    runner = CliRunner()
+    with patch("careeros.cli.onboard.extract_basic_profile", return_value=profile), \
+         patch("careeros.cli.onboard.ingest_resume", return_value=ingested):
+        result, ws_path = _run_onboard(runner, tmp_path, resume_file)
+
+    assert result.exit_code == 0, result.output
+    storage = LocalFilesystemStorage(ws_path)
+    raw = json.loads(storage.read("profile/skills.json").decode())
+    assert raw["skills"][0]["evidence"]["quote"] == "Kubernetes"
+
+
+def test_onboard_completes_when_nothing_verifies(tmp_path, resume_file, monkeypatch):
+    # A sparse profile is the honest outcome of the guarantee; it must not
+    # be a fatal one.
+    monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
+    from careeros.core.models import Profile, Skills
+    from careeros.skills.resume_ingest import IngestResult
+
+    profile = Profile(name="Alice Johnson", title="Senior SRE")
+    empty = IngestResult(skills=Skills(), dropped=("Rust", "Go"))
+    runner = CliRunner()
+    with patch("careeros.cli.onboard.extract_basic_profile", return_value=profile), \
+         patch("careeros.cli.onboard.ingest_resume", return_value=empty):
+        result, ws_path = _run_onboard(runner, tmp_path, resume_file)
+
+    assert result.exit_code == 0, result.output
+    storage = LocalFilesystemStorage(ws_path)
+    assert json.loads(storage.read("profile/skills.json").decode())["skills"] == []

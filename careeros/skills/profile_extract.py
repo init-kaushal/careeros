@@ -1,7 +1,7 @@
 import json
 import os
 import litellm
-from careeros.core.models import Profile, Skill, Skills
+from careeros.core.models import Profile
 
 DEFAULT_LLM_MODEL = "claude-haiku-4-5-20251001"
 _CONTENT_CAP = 4000
@@ -25,16 +25,6 @@ Use null for any field not found.
 Resume:
 """
 
-_SKILLS_INSTRUCTIONS = """\
-Extract the top technical skills from this resume as JSON.
-Return ONLY valid JSON — no markdown, no explanation.
-Limit to 20 most prominent skills.
-
-{"skills": [{"name": "<skill name>", "level": "<beginner|intermediate|advanced|expert or null>", "source": "resume"}]}
-
-Resume:
-"""
-
 
 def _parse_json(text: str) -> dict:
     text = text.strip()
@@ -47,7 +37,13 @@ def _parse_json(text: str) -> dict:
 def extract_basic_profile(
     resume_text: str,
     model: str | None = None,
-) -> tuple[Profile, Skills]:
+) -> Profile:
+    """Extract identity fields from a resume.
+
+    Skills are NOT extracted here — careeros.skills.resume_ingest.ingest_resume
+    owns those, because a skill needs verified evidence and this does not
+    produce any.
+    """
     effective_model = model or os.environ.get("CAREEROS_MODEL", DEFAULT_LLM_MODEL)
     capped_text = resume_text[:_CONTENT_CAP]
 
@@ -60,14 +56,6 @@ def extract_basic_profile(
         profile_data = _parse_json(profile_resp.choices[0].message.content)
         profile = Profile.model_validate(profile_data)
 
-        skills_resp = litellm.completion(
-            model=effective_model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": _SKILLS_INSTRUCTIONS + capped_text}],
-        )
-        skills_data = _parse_json(skills_resp.choices[0].message.content)
-        skills = Skills(skills=[Skill(**s) for s in skills_data.get("skills", [])])
-
-        return profile, skills
+        return profile
     except Exception:
-        return Profile(), Skills()
+        return Profile()
