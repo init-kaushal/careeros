@@ -27,6 +27,20 @@ class Profile(BaseModel):
         return cls.load(storage)
 
 
+class Evidence(BaseModel):
+    """Where a skill was found in a resume, verified to actually be there.
+
+    `quote` is verbatim source text whose presence was checked by
+    careeros.skills.resume_evidence.verify_quote; `line` is where it was
+    found. A Skill carrying Evidence is one the model could not have
+    invented.
+    """
+
+    quote: str
+    line: int
+    source_file: str
+
+
 class Skill(BaseModel):
     name: str
     category: str | None = None
@@ -34,6 +48,7 @@ class Skill(BaseModel):
     years: int | None = None
     source: str | None = None
     last_used: str | None = None
+    evidence: Evidence | None = None
 
 
 class Skills(BaseModel):
