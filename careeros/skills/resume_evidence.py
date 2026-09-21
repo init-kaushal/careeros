@@ -6,6 +6,12 @@ from __future__ import annotations
 # cites nothing.
 MAX_QUOTE_CHARS = 200
 
+# Characters that read as word-internal even though str.isalnum() says no.
+# Without this, "C" matches inside "C++", "R" inside "R&D", and "Go" inside
+# "go-to-market" — plausible skill names a model will actually propose, each
+# one a fabricated citation if allowed through.
+_WORD_INTERNAL = set("-+#&")
+
 
 def _normalize(text: str) -> str:
     """Collapse whitespace and fold case. Deliberately nothing else.
@@ -28,9 +34,13 @@ def _find_bounded(needle: str, haystack: str) -> int | None:
     """
     start = haystack.find(needle)
     while start != -1:
-        before_ok = start == 0 or not haystack[start - 1].isalnum()
+        before_ok = start == 0 or (
+            not haystack[start - 1].isalnum() and haystack[start - 1] not in _WORD_INTERNAL
+        )
         end = start + len(needle)
-        after_ok = end == len(haystack) or not haystack[end].isalnum()
+        after_ok = end == len(haystack) or (
+            not haystack[end].isalnum() and haystack[end] not in _WORD_INTERNAL
+        )
         if before_ok and after_ok:
             return start
         start = haystack.find(needle, start + 1)
@@ -50,6 +60,10 @@ def verify_quote(quote: str, source_text: str) -> int | None:
 
     needle = _normalize(quote)
     if not needle:
+        return None
+    if not any(ch.isalnum() for ch in needle):
+        # A quote with no alphanumeric content (e.g. a lone "-") matches
+        # almost anywhere and evidences nothing.
         return None
 
     lines = source_text.split("\n")

@@ -28,12 +28,13 @@ class Profile(BaseModel):
 
 
 class Evidence(BaseModel):
-    """Where a skill was found in a resume, verified to actually be there.
+    """Records that `quote` appeared verbatim in `source_file` at `line`,
+    as checked by careeros.skills.resume_evidence.verify_quote at ingest
+    time — whitespace collapsed and case folded, nothing else.
 
-    `quote` is verbatim source text whose presence was checked by
-    careeros.skills.resume_evidence.verify_quote; `line` is where it was
-    found. A Skill carrying Evidence is one the model could not have
-    invented.
+    That is the entire guarantee. It is not a guarantee that the skill
+    claim itself is accurate, nor that the source file still contains the
+    quote now: the file may have changed since ingestion ran.
     """
 
     quote: str

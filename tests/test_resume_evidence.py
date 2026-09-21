@@ -130,3 +130,36 @@ def test_span_starting_mid_word_is_rejected():
     # Previously this mis-attributed the line; now it does not verify at all.
     source = "alphabet betaword\ngammaword deltaword\n"
     assert verify_quote("aword gammaword", source) is None
+
+
+def test_bare_c_is_rejected_inside_cpp():
+    # "C" is a real skill name a model will propose; it must not verify off
+    # the tail end of "C++".
+    assert verify_quote("C", "Wrote C++ tooling") is None
+
+
+def test_bare_r_is_rejected_inside_r_and_d():
+    assert verify_quote("R", "Led R&D efforts") is None
+
+
+def test_go_is_rejected_inside_go_to_market():
+    assert verify_quote("Go", "Owned go-to-market strategy") is None
+
+
+def test_cpp_matches_when_it_is_the_whole_quote():
+    assert verify_quote("C++ tooling", "Wrote C++ tooling") == 1
+
+
+def test_csharp_matches_when_it_is_the_whole_quote():
+    assert verify_quote("C#", "Skilled in C# development") == 1
+
+
+def test_r_and_d_matches_when_it_is_the_whole_quote():
+    assert verify_quote("R&D", "Led R&D efforts") == 1
+
+
+def test_quote_with_no_alphanumeric_content_is_rejected():
+    # A lone "-" (or similar) matches almost anywhere in real resume text
+    # and evidences nothing.
+    assert verify_quote("-", "2018-2020: worked at MegaCorp") is None
+    assert verify_quote("--", "line one -- line two") is None
