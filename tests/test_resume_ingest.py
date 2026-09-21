@@ -136,6 +136,7 @@ def test_non_dict_payload_yields_empty_result_without_raising():
     with patch("litellm.completion", return_value=_resp("[1, 2, 3]")):
         result = ingest_resume(_RESUME, "resumes/master.md")
     assert result.skills.skills == []
+    assert result.dropped == ()
 
 
 def test_non_string_quote_is_dropped_not_fatal():
@@ -162,3 +163,85 @@ def test_a_later_verifiable_duplicate_is_kept_when_the_first_fails():
         result = ingest_resume(_RESUME, "resumes/master.md")
     assert [s.name for s in result.skills.skills] == ["Python"]
     assert result.dropped == ()
+
+
+def test_null_skills_payload_yields_empty_result_without_raising():
+    # A plausible model response when told to omit every skill it cannot
+    # support. {"skills": null} must not reach `for candidate in None`.
+    import json
+    payload = json.dumps({"skills": None})
+    with patch("litellm.completion", return_value=_resp(payload)):
+        result = ingest_resume(_RESUME, "resumes/master.md")
+    assert result.skills.skills == []
+    assert result.dropped == ()
+    assert result.error is None
+
+
+def test_non_list_skills_payload_yields_empty_result_without_raising():
+    import json
+    payload = json.dumps({"skills": "Python, Go"})
+    with patch("litellm.completion", return_value=_resp(payload)):
+        result = ingest_resume(_RESUME, "resumes/master.md")
+    assert result.skills.skills == []
+    assert result.dropped == ()
+
+
+def test_non_string_name_is_skipped_not_fatal():
+    # A candidate whose "name" is not a string must be skipped outright,
+    # never coerced with str() into a fabricated skill name, and must not
+    # take the rest of the batch down with it.
+    import json
+    payload = json.dumps({"skills": [
+        {"name": 123, "quote": "Python, Go, Kubernetes", "last_used": "2026"},
+        {"name": "Python", "quote": "Python, Go, Kubernetes", "last_used": "2026"},
+    ]})
+    with patch("litellm.completion", return_value=_resp(payload)):
+        result = ingest_resume(_RESUME, "resumes/master.md")
+    assert [s.name for s in result.skills.skills] == ["Python"]
+    assert result.dropped == ()
+
+
+def test_case_differing_duplicate_appears_in_exactly_one_list():
+    # verified_names must be compared on the same normalized form used for
+    # `seen`, or a duplicate differing only in case lands in both the
+    # stored skills and the dropped list.
+    import json
+    payload = json.dumps({"skills": [
+        {"name": "Python", "quote": "Expert in Python since 2009", "last_used": "2026"},
+        {"name": "python", "quote": "Python, Go, Kubernetes", "last_used": "2026"},
+    ]})
+    with patch("litellm.completion", return_value=_resp(payload)):
+        result = ingest_resume(_RESUME, "resumes/master.md")
+    stored_names = {s.name for s in result.skills.skills}
+    assert stored_names == {"python"}
+    assert result.dropped == ()
+
+
+def test_dict_last_used_does_not_raise_and_is_stringified():
+    # `last_used` is stored, not verified — totality must hold for any
+    # JSON-representable value the model puts there, not just strings.
+    import json
+    payload = json.dumps({"skills": [
+        {"name": "Python", "quote": "Python, Go, Kubernetes", "last_used": {"year": 2020}},
+    ]})
+    with patch("litellm.completion", return_value=_resp(payload)):
+        result = ingest_resume(_RESUME, "resumes/master.md")
+    assert [s.name for s in result.skills.skills] == ["Python"]
+    assert result.skills.skills[0].last_used == str({"year": 2020})
+
+
+def test_llm_call_failure_sets_the_error_field():
+    with patch("litellm.completion", side_effect=RuntimeError("bad api key")):
+        result = ingest_resume(_RESUME, "resumes/master.md")
+    assert result.skills.skills == []
+    assert result.dropped == ()
+    assert result.error == "bad api key"
+
+
+def test_unparseable_response_does_not_set_the_error_field():
+    # The LLM call succeeded; the model just answered with garbage. That is
+    # not the "API key or network is broken" failure mode `error` exists for.
+    with patch("litellm.completion", return_value=_resp("not json at all")):
+        result = ingest_resume(_RESUME, "resumes/master.md")
+    assert result.skills.skills == []
+    assert result.error is None
