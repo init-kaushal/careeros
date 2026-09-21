@@ -41,8 +41,13 @@ outreach, and compensation evidence — with every action gated by an approval s
 an append-only audit trail.
 
 **Workspace**
-- **`careeros onboard`** — interactive wizard that creates a workspace, extracts a structured
-  profile from your resume via LLM, and writes it to `profile/profile.json`.
+- **`careeros onboard`** — interactive wizard that creates a workspace, extracts a
+  structured profile from your resume via LLM, and writes it to `profile/profile.json`.
+  Skills are extracted separately and kept only when backed by a verified quote.
+- **`careeros resume ingest [path]`** — re-extract your skills from your resume, keeping
+  only those backed by a verbatim quote that is verified to appear in the file. Skills the
+  model could not evidence are dropped and named, rather than silently stored. Pass a path
+  to replace your stored master resume first.
 - **`careeros workspace status` / `workspace validate`** — workspace path, schema version,
   profile/skills/goals summary, activity counts; validate checks schema and data integrity.
 - **`careeros export` / `careeros import <path>`** — zip your entire workspace, or restore one,

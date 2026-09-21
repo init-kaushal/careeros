@@ -64,12 +64,20 @@ different roles into one.
 
 ## Phase 11 — Deep Resume Intelligence + Resume Variants
 
+**Status: 11a shipped.** Evidence-backed ingestion and `careeros resume ingest` are done:
+every stored skill carries a verbatim quote whose presence in the resume was
+deterministically verified, and a skill the model cannot evidence is dropped rather than
+stored. `onboard` uses the same extractor, so a stored skill means one thing.
+
+**11b — resume variants — remains.** It was split out because it needs a decision 11a did
+not: `apply` hands a file path to the ATS form uploader, so a tailored "variant" has to be
+an uploadable `.pdf`/`.docx`, and the project has no document renderer. That question gets
+its own spec rather than riding along with an extraction task.
+
 **Why:** `onboard`'s profile extraction is a quick, one-shot pass — good enough to bootstrap a workspace, but every downstream skill (job scoring, cover letters, outreach drafts) is only as good as that first extraction. And `apply` fills every application with the same static resume file regardless of the job, when a tailored variant would score better with both ATS keyword matching and a human reader.
 
 **What it builds:**
-- A deep resume ingestion skill, distinct from `onboard`'s basic extraction — evidence-backed: each extracted skill carries a source (which resume, which line/section) and a date, not just a bare string
 - Resume variant generation: given a job's description and the evidence-backed skill set, generate a job-tailored resume variant, stored under `resumes/versions/`, that `apply` can select instead of always using the same file
-- A `careeros resume ingest` command (or extending `onboard`) to run deep ingestion against an existing or updated resume without re-running the whole onboarding wizard
 
 **Exit condition:** `careeros apply --job <id>` picks a resume variant tailored to that job's description rather than always using the same file; `cat resumes/versions/<variant>.json` (or equivalent) shows which evidence backs which claim.
 
