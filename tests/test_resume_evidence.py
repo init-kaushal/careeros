@@ -108,3 +108,25 @@ def test_skill_without_evidence_still_loads():
     assert "evidence" not in legacy
     skill = Skill.model_validate_json(json.dumps(legacy))
     assert skill.evidence is None
+
+
+def test_short_quote_does_not_match_inside_a_longer_word():
+    # "Go" occurs in "Golang" as characters, but is not evidence of Go.
+    assert verify_quote("Go", "Experienced with Golang and distributed systems") is None
+    assert verify_quote("Java", "Skilled in JavaScript frameworks") is None
+
+
+def test_short_quote_matches_when_it_is_its_own_word():
+    assert verify_quote("Go", "Python, Go, Kubernetes") == 1
+
+
+def test_boundary_check_allows_adjacent_punctuation():
+    # A quote butting against a comma or parenthesis is still boundary-aligned.
+    assert verify_quote("Kubernetes", "Skills: Python, Kubernetes, Terraform") == 1
+    assert verify_quote("MegaCorp", "Engineer — MegaCorp (2018–present)") == 1
+
+
+def test_span_starting_mid_word_is_rejected():
+    # Previously this mis-attributed the line; now it does not verify at all.
+    source = "alphabet betaword\ngammaword deltaword\n"
+    assert verify_quote("aword gammaword", source) is None
