@@ -24,8 +24,9 @@ skill. Copy it character for character. Do not paraphrase, summarise, or
 construct a quote. If you cannot find a verbatim span for a skill, omit
 that skill entirely.
 
-"last_used" is the year the skill was most recently used, inferred from
-the role the evidence sits under, or null if unclear.
+"last_used" must be a JSON string containing the year the skill was most
+recently used, inferred from the role the evidence sits under, or null
+if unclear.
 
 {"skills": [{"name": "<skill>", "quote": "<verbatim span>", "last_used": "<year or null>"}]}
 """
@@ -69,11 +70,14 @@ def ingest_resume(
     except Exception:
         return IngestResult(skills=Skills(), dropped=())
 
+    # Ensure payload is a dict before trying to extract skills
+    candidates = payload.get("skills", []) if isinstance(payload, dict) else []
+
     verified: list[Skill] = []
     dropped: list[str] = []
     seen: set[str] = set()
 
-    for candidate in payload.get("skills", []):
+    for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
         name = (candidate.get("name") or "").strip()
@@ -83,20 +87,31 @@ def ingest_resume(
         if key in seen:
             continue
 
-        line = verify_quote(candidate.get("quote") or "", capped)
-        if line is None:
-            seen.add(key)
-            dropped.append(name)
+        try:
+            quote = candidate.get("quote")
+            if not isinstance(quote, str):
+                raise ValueError("quote is not a string")
+            line = verify_quote(quote, capped)
+            if line is None:
+                raise ValueError("quote did not verify")
+            last_used = candidate.get("last_used")
+            skill = Skill(
+                name=name,
+                last_used=str(last_used) if last_used is not None else None,
+                source=source_file,
+                evidence=Evidence(quote=quote, line=line, source_file=source_file),
+            )
+        except Exception:
+            # A malformed candidate is a dropped candidate, not a dead batch.
+            if name not in dropped:
+                dropped.append(name)
             continue
 
         seen.add(key)
-        verified.append(Skill(
-            name=name,
-            last_used=candidate.get("last_used"),
-            source=source_file,
-            evidence=Evidence(
-                quote=candidate["quote"], line=line, source_file=source_file,
-            ),
-        ))
+        verified.append(skill)
 
-    return IngestResult(skills=Skills(skills=verified), dropped=tuple(dropped))
+    # Remove from dropped any names that were eventually verified
+    verified_names = {s.name for s in verified}
+    final_dropped = tuple(d for d in dropped if d not in verified_names)
+
+    return IngestResult(skills=Skills(skills=verified), dropped=final_dropped)

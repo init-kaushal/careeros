@@ -119,3 +119,46 @@ def test_uses_system_plus_wrapped_user_messages():
     assert [m["role"] for m in messages] == ["system", "user"]
     assert "<untrusted_content>" in messages[1]["content"]
     assert "<untrusted_content>" not in messages[0]["content"]
+
+
+def test_numeric_last_used_does_not_raise_and_is_coerced():
+    import json
+    payload = json.dumps({"skills": [
+        {"name": "Python", "quote": "Python, Go, Kubernetes", "last_used": 2026}
+    ]})
+    with patch("litellm.completion", return_value=_resp(payload)):
+        result = ingest_resume(_RESUME, "resumes/master.md")
+    assert [s.name for s in result.skills.skills] == ["Python"]
+    assert result.skills.skills[0].last_used == "2026"
+
+
+def test_non_dict_payload_yields_empty_result_without_raising():
+    with patch("litellm.completion", return_value=_resp("[1, 2, 3]")):
+        result = ingest_resume(_RESUME, "resumes/master.md")
+    assert result.skills.skills == []
+
+
+def test_non_string_quote_is_dropped_not_fatal():
+    import json
+    payload = json.dumps({"skills": [
+        {"name": "Broken", "quote": ["not", "a", "string"], "last_used": "2026"},
+        {"name": "Python", "quote": "Python, Go, Kubernetes", "last_used": "2026"},
+    ]})
+    with patch("litellm.completion", return_value=_resp(payload)):
+        result = ingest_resume(_RESUME, "resumes/master.md")
+    assert [s.name for s in result.skills.skills] == ["Python"]
+    assert result.dropped == ("Broken",)
+
+
+def test_a_later_verifiable_duplicate_is_kept_when_the_first_fails():
+    # The first candidate for a name carrying a bad quote must not
+    # permanently exclude the name.
+    import json
+    payload = json.dumps({"skills": [
+        {"name": "Python", "quote": "Expert in Python since 2009", "last_used": "2026"},
+        {"name": "Python", "quote": "Python, Go, Kubernetes", "last_used": "2026"},
+    ]})
+    with patch("litellm.completion", return_value=_resp(payload)):
+        result = ingest_resume(_RESUME, "resumes/master.md")
+    assert [s.name for s in result.skills.skills] == ["Python"]
+    assert result.dropped == ()
