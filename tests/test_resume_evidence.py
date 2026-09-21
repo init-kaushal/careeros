@@ -146,6 +146,21 @@ def test_go_is_rejected_inside_go_to_market():
     assert verify_quote("Go", "Owned go-to-market strategy") is None
 
 
+def test_go_is_rejected_inside_a_snake_case_identifier():
+    # Identifiers land in resumes verbatim, and "_" is the same fabrication
+    # class as "-": a bare skill name matching inside a larger token.
+    assert verify_quote("Go", "Built go_to_market_dashboard") is None
+
+
+def test_bare_c_is_rejected_inside_a_snake_case_identifier():
+    assert verify_quote("C", "Maintained C_API bindings") is None
+
+
+def test_go_is_rejected_across_unicode_dashes():
+    # A resume exported from a word processor carries en-dashes, not hyphens.
+    assert verify_quote("Go", "Owned go\u2013to\u2013market strategy") is None
+
+
 def test_cpp_matches_when_it_is_the_whole_quote():
     assert verify_quote("C++ tooling", "Wrote C++ tooling") == 1
 

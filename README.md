@@ -105,8 +105,10 @@ CareerOS uses a two-directory model: the framework (this repo) and your workspac
   manifest.json               ← entry point for any agent runtime
   config.json                 ← workspace-level settings
   profile/
-    profile.json              ← structured profile data (goals, preferences)
+    profile.json              ← name, title, location, years of experience, summary
     skills.json               ← evidence-backed skills, each with a verified quote + line
+    goals.json                ← short- and long-term goals, non-negotiables, what you're open to
+    preferences.json          ← target titles, locations, compensation, work arrangement
   resumes/
     master.md                 ← your stored resume, read by `careeros resume ingest`
   activity/

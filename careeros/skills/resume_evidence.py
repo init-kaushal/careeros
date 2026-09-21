@@ -7,10 +7,12 @@ from __future__ import annotations
 MAX_QUOTE_CHARS = 200
 
 # Characters that read as word-internal even though str.isalnum() says no.
-# Without this, "C" matches inside "C++", "R" inside "R&D", and "Go" inside
-# "go-to-market" — plausible skill names a model will actually propose, each
-# one a fabricated citation if allowed through.
-_WORD_INTERNAL = set("-+#&")
+# Without this, "C" matches inside "C++", "R" inside "R&D", "Go" inside
+# "go-to-market", and "Go" inside "go_to_market_dashboard" — plausible skill
+# names a model will actually propose, each one a fabricated citation if
+# allowed through. The Unicode dashes are here because a resume exported from
+# a word processor has them in place of the ASCII hyphen.
+_WORD_INTERNAL = set("-+#&_\u2010\u2011\u2012\u2013\u2014")
 
 
 def _normalize(text: str) -> str:
