@@ -46,8 +46,10 @@ an append-only audit trail.
   Skills are extracted separately and kept only when backed by a verified quote.
 - **`careeros resume ingest [path]`** — re-extract your skills from your resume, keeping
   only those backed by a verbatim quote that is verified to appear in the file. Skills the
-  model could not evidence are dropped and named, rather than silently stored. Pass a path
-  to replace your stored master resume first.
+  model could not evidence are dropped and named, rather than silently stored. If nothing
+  verifies — including on an API or network failure — your existing `profile/skills.json`
+  is left untouched and the command exits non-zero, so a bad run is always safe to retry.
+  Pass a path to replace your stored master resume, but only once ingestion succeeds.
 - **`careeros workspace status` / `workspace validate`** — workspace path, schema version,
   profile/skills/goals summary, activity counts; validate checks schema and data integrity.
 - **`careeros export` / `careeros import <path>`** — zip your entire workspace, or restore one,
@@ -103,7 +105,10 @@ CareerOS uses a two-directory model: the framework (this repo) and your workspac
   manifest.json               ← entry point for any agent runtime
   config.json                 ← workspace-level settings
   profile/
-    profile.json              ← structured profile data (skills, goals, preferences)
+    profile.json              ← structured profile data (goals, preferences)
+    skills.json               ← evidence-backed skills, each with a verified quote + line
+  resumes/
+    master.md                 ← your stored resume, read by `careeros resume ingest`
   activity/
     2026-01-15.jsonl          ← append-only activity log, one event per line
   exports/                    ← created by `careeros export`
@@ -186,8 +191,8 @@ All workspace I/O goes through the `StorageProvider` protocol, so storage backen
 swapped without touching business logic. Every meaningful action — both outcomes of any
 approval decision, not just the success path — writes to the append-only activity log.
 
-See [ROADMAP.md](ROADMAP.md) for what's planned next: deep resume intelligence and per-job
-resume variants, a second real `AgentRuntime`, and outreach expansion.
+See [ROADMAP.md](ROADMAP.md) for what's planned next: per-job resume variants (evidence-backed
+resume ingestion itself has shipped), a second real `AgentRuntime`, and outreach expansion.
 
 ## License
 
