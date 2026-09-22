@@ -9,8 +9,15 @@ from careeros.core.models import (
     Company, Goals, Job, OutreachMessage, Person, PolicyConfig, Profile,
 )
 from careeros.core.policy_engine import PolicyEngine
-from careeros.operations.approvals import open_approval
-from careeros.operations.errors import DraftFailed, EntityNotFound, PolicyBlocked
+from careeros.mailer import send_email
+from careeros.operations.approvals import (
+    APPROVED, DECLINED, mark_executed, mark_failed, open_approval, payload_value,
+    require_state,
+)
+from careeros.operations.errors import (
+    ArtifactChanged, DraftFailed, EntityNotFound, MissingRecipient, PolicyBlocked,
+    SendFailed,
+)
 from careeros.runtime.base import AgentRuntime
 from careeros.skills.outreach_draft import generate_outreach_message
 
@@ -27,6 +34,13 @@ class OutreachProposal:
     recipient_email: str | None
     subject: str
     already_sent_at: str | None
+
+
+@dataclass(frozen=True)
+class OutreachResult:
+    message_id: str
+    recipient_name: str
+    sent_at: str
 
 
 def _now() -> str:
@@ -142,3 +156,83 @@ def propose_outreach_send(
         recipient_email=person.email, subject=subject_for(job),
         already_sent_at=already_sent_at,
     )
+
+
+def _load_for_execution(runtime: AgentRuntime, message_id: str, person_id: str):
+    try:
+        message = OutreachMessage.load(runtime.storage, message_id)
+        person = Person.load(runtime.storage, person_id)
+        job = Job.load(runtime.storage, message.job_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise EntityNotFound("Outreach message, person, or job not found.") from exc
+    return message, person, job
+
+
+def execute_outreach_send(
+    runtime: AgentRuntime, approval_id: str, *, action_label: str = "outreach",
+) -> OutreachResult:
+    """Send the email an approved approval authorized, and nothing else.
+
+    Drafts nothing and calls no LLM: the text that sends is read back from the
+    stored OutreachMessage and checked against the digest recorded when the
+    approval was created, so the bytes reviewed are the bytes transmitted.
+    """
+    approval = require_state(runtime.storage, approval_id, APPROVED)
+    message_id = payload_value(approval, "message_id")
+    person_id = payload_value(approval, "person_id")
+    expected_digest = payload_value(approval, "draft_sha256")
+
+    message, person, job = _load_for_execution(runtime, message_id, person_id)
+
+    if draft_digest(message.draft_text) != expected_digest:
+        raise ArtifactChanged("outreach/" + message_id + ".json")
+
+    if not person.email:
+        # Nothing has been attempted, so the approval stays approved: adding
+        # the address and retrying must still work without re-approving.
+        raise MissingRecipient(person_id, person.name)
+
+    try:
+        send_email(person.email, subject_for(job), message.draft_text)
+    except Exception as exc:
+        message.model_copy(update={"send_state": "failed"}).save(runtime.storage)
+        mark_failed(runtime, approval_id, type(exc).__name__)
+        runtime.record_activity(runtime.new_event(
+            "outreach_send_failed", action_label,
+            "Send failed for outreach to " + person.name + ": " + type(exc).__name__,
+            status="failed", entity_type="outreach_message", entity_id=message_id,
+        ))
+        raise SendFailed(str(exc)) from exc
+
+    sent_at = _now()
+    message.model_copy(update={"send_state": "sent", "sent_at": sent_at}).save(runtime.storage)
+    mark_executed(runtime, approval_id)
+    runtime.record_activity(runtime.new_event(
+        "outreach_sent", action_label, "Sent outreach to " + person.name,
+        entity_type="outreach_message", entity_id=message_id,
+    ))
+    return OutreachResult(
+        message_id=message_id, recipient_name=person.name, sent_at=sent_at
+    )
+
+
+def decline_outreach_send(
+    runtime: AgentRuntime, approval_id: str, *, action_label: str = "outreach",
+) -> None:
+    """Record that a declined approval's message will not be sent.
+
+    Lives here rather than inside resolve_approval because approvals.py is
+    deliberately action-agnostic — it knows approval states and nothing about
+    outreach messages. Callers branch on the decision they already hold.
+    """
+    approval = require_state(runtime.storage, approval_id, DECLINED)
+    message_id = payload_value(approval, "message_id")
+    person_id = payload_value(approval, "person_id")
+    message, person, _ = _load_for_execution(runtime, message_id, person_id)
+
+    message.model_copy(update={"send_state": "declined"}).save(runtime.storage)
+    runtime.record_activity(runtime.new_event(
+        "outreach_send_declined", action_label,
+        "Send declined for outreach to " + person.name,
+        entity_type="outreach_message", entity_id=message_id,
+    ))

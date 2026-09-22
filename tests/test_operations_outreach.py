@@ -147,3 +147,130 @@ class TestMakeMessageId:
 
     def test_slugifies_unsafe_values_instead_of_raising(self):
         assert "/" not in make_message_id("../../etc/passwd", "..")
+
+
+from careeros.operations.approvals import APPROVED, EXECUTED, FAILED, resolve_approval
+from careeros.operations.errors import (
+    ApprovalNotGranted, ArtifactChanged, MissingRecipient, SendFailed,
+)
+from careeros.operations.outreach import decline_outreach_send, execute_outreach_send
+from careeros.runtime.base import ApprovalResult
+
+
+def _approve(runtime, approval_id, reason="user said yes"):
+    return resolve_approval(
+        runtime, approval_id, ApprovalResult(approved=True, reason=reason),
+        action_label="outreach",
+    )
+
+
+class TestExecuteOutreachSend:
+    def test_sends_the_approved_draft_and_marks_everything_sent(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        with patch("careeros.operations.outreach.send_email") as mock_send:
+            result = execute_outreach_send(runtime, proposal.approval_id)
+
+        mock_send.assert_called_once_with(
+            "jane@acme.com", "Regarding Senior SRE at Acme Corp", DRAFT
+        )
+        assert result.recipient_name == "Jane Doe"
+        assert result.sent_at
+        message = OutreachMessage.load(runtime.storage, MESSAGE_ID)
+        assert message.send_state == "sent"
+        assert message.sent_at == result.sent_at
+        assert Approval.load(runtime.storage, proposal.approval_id).state == EXECUTED
+        assert "outreach_sent" in _log(runtime.storage)
+
+    @pytest.mark.parametrize("state", ["pending", "declined", "superseded", "failed"])
+    def test_refuses_any_state_but_approved(self, tmp_path, state):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        approval.model_copy(update={"state": state}).save(runtime.storage)
+        with patch("careeros.operations.outreach.send_email") as mock_send:
+            with pytest.raises(ApprovalNotGranted):
+                execute_outreach_send(runtime, proposal.approval_id)
+        mock_send.assert_not_called()
+
+    def test_refuses_to_execute_the_same_approval_twice(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        with patch("careeros.operations.outreach.send_email") as mock_send:
+            execute_outreach_send(runtime, proposal.approval_id)
+            with pytest.raises(ApprovalNotGranted):
+                execute_outreach_send(runtime, proposal.approval_id)
+        assert mock_send.call_count == 1
+
+    def test_refuses_when_the_draft_changed_after_approval(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        # Simulate an out-of-band edit that superseding cannot catch.
+        message = OutreachMessage.load(runtime.storage, MESSAGE_ID)
+        message.model_copy(update={"draft_text": "something else entirely"}).save(runtime.storage)
+
+        with patch("careeros.operations.outreach.send_email") as mock_send:
+            with pytest.raises(ArtifactChanged):
+                execute_outreach_send(runtime, proposal.approval_id)
+        mock_send.assert_not_called()
+
+    def test_refuses_without_a_recipient_email(self, tmp_path):
+        runtime = _runtime(tmp_path, with_email=False)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        with patch("careeros.operations.outreach.send_email") as mock_send:
+            with pytest.raises(MissingRecipient) as exc:
+                execute_outreach_send(runtime, proposal.approval_id)
+        assert exc.value.person_name == "Jane Doe"
+        mock_send.assert_not_called()
+        # The approval is left approved, not failed: nothing was attempted, so
+        # adding the address and retrying must still work.
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+
+    def test_smtp_failure_marks_the_message_and_approval_failed(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        with patch("careeros.operations.outreach.send_email",
+                   side_effect=RuntimeError("smtp down")):
+            with pytest.raises(SendFailed):
+                execute_outreach_send(runtime, proposal.approval_id)
+
+        assert OutreachMessage.load(runtime.storage, MESSAGE_ID).send_state == "failed"
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        assert approval.state == FAILED
+        assert approval.detail == "RuntimeError"
+        assert "outreach_send_failed" in _log(runtime.storage)
+
+    def test_a_malformed_payload_raises_rather_than_key_error(self, tmp_path):
+        from careeros.operations.errors import MalformedApproval
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        approval.model_copy(update={"payload": {}}).save(runtime.storage)
+        with pytest.raises(MalformedApproval):
+            execute_outreach_send(runtime, proposal.approval_id)
+
+
+class TestDeclineOutreachSend:
+    def test_marks_the_message_declined_and_logs(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        resolve_approval(runtime, proposal.approval_id,
+                         ApprovalResult(approved=False), action_label="outreach")
+        decline_outreach_send(runtime, proposal.approval_id)
+        assert OutreachMessage.load(runtime.storage, MESSAGE_ID).send_state == "declined"
+        assert "outreach_send_declined" in _log(runtime.storage)
+
+    def test_refuses_when_the_approval_was_not_declined(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        with pytest.raises(ApprovalNotGranted):
+            decline_outreach_send(runtime, proposal.approval_id)
