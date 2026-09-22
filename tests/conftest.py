@@ -54,3 +54,26 @@ def _guard_against_real_smtp():
         with patch("smtplib.SMTP_SSL", side_effect=AssertionError(
                 "test attempted a real SMTP connection")):
             yield
+
+
+@pytest.fixture(autouse=True)
+def _guard_against_real_browser():
+    """Prevent any test from launching a real browser.
+
+    `careeros/browser/driver.py`'s launch_browser does
+    `from playwright.sync_api import sync_playwright` inside the function
+    body, so it looks up the `sync_playwright` attribute on the
+    `playwright.sync_api` module fresh on every call — exactly the
+    call-time-lookup shape the SMTP guard above relies on. Patching
+    `playwright.sync_api.sync_playwright` therefore intercepts every call
+    regardless of how careeros.browser.driver imported it.
+
+    Without this, launch_browser opens real Chrome (channel="chrome")
+    against the real machine-global profile, which can carry the user's
+    real LinkedIn session, and GreenhouseFiller/LeverFiller auto-submit.
+    Per-test explicit patches of launch_browser or sync_playwright still
+    override this normally.
+    """
+    with patch("playwright.sync_api.sync_playwright", side_effect=AssertionError(
+            "test attempted to launch a real browser")):
+        yield
