@@ -12,6 +12,7 @@ from careeros.operations.approvals import (
 from careeros.operations.errors import (
     ApprovalNotGranted, ArtifactChanged, DraftFailed, EntityNotFound,
     MalformedApproval, MissingRecipient, PolicyBlocked, SendFailed,
+    WrongApprovalAction,
 )
 from careeros.operations.outreach import (
     decline_outreach_send, execute_outreach_send, make_message_id,
@@ -207,6 +208,25 @@ class TestExecuteOutreachSend:
             with pytest.raises(ApprovalNotGranted):
                 execute_outreach_send(runtime, proposal.approval_id, action_label="outreach")
         assert mock_send.call_count == 1
+
+    def test_refuses_an_approval_belonging_to_a_different_action(self, tmp_path):
+        # An approval id is an opaque cross-process string; nothing else
+        # would stop execute_outreach_send from acting on an approval
+        # minted by a different action (e.g. apply_to_job) except that
+        # their payload keys happen not to collide. Must be caught before
+        # any state change, including before mark_executed.
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        approval.model_copy(update={"action": "apply_to_job"}).save(runtime.storage)
+        with patch("careeros.operations.outreach.send_email") as mock_send:
+            with pytest.raises(WrongApprovalAction) as exc:
+                execute_outreach_send(runtime, proposal.approval_id, action_label="outreach")
+        assert exc.value.expected == "send_outreach"
+        assert exc.value.actual == "apply_to_job"
+        mock_send.assert_not_called()
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
 
     def test_refuses_when_the_draft_changed_after_approval(self, tmp_path):
         runtime = _runtime(tmp_path)

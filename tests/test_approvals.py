@@ -52,8 +52,8 @@ class TestApprovalModel:
 
 from careeros.operations.approvals import (
     APPROVED, DECLINED, EXECUTED, FAILED, PENDING, SUPERSEDED,
-    list_pending, mark_executed, mark_failed, open_approval, payload_value,
-    require_state, resolve_approval,
+    has_executed_approval, list_pending, mark_executed, mark_failed,
+    open_approval, payload_value, require_state, resolve_approval,
 )
 from careeros.operations.errors import ApprovalNotGranted, MalformedApproval
 from careeros.runtime.base import ApprovalResult
@@ -255,6 +255,54 @@ class TestApprovalStateIsConstrained:
         )
         with pytest.raises(ValidationError):
             Approval.load(storage, "bad")
+
+
+class TestHasExecutedApproval:
+    def test_true_when_an_executed_record_matches_action_and_entity(self, tmp_path):
+        storage = _storage(tmp_path)
+        Approval(
+            id="apply-to-job-acme-abc123", action="apply_to_job", summary="s",
+            state=EXECUTED, entity_id="acme-sre",
+            created_at="2026-09-22T00:00:00+00:00",
+        ).save(storage)
+        assert has_executed_approval(storage, "apply_to_job", "acme-sre") is True
+
+    def test_false_when_no_approval_exists(self, tmp_path):
+        storage = _storage(tmp_path)
+        assert has_executed_approval(storage, "apply_to_job", "acme-sre") is False
+
+    def test_false_when_the_matching_approval_is_not_executed(self, tmp_path):
+        storage = _storage(tmp_path)
+        Approval(
+            id="apply-to-job-acme-abc123", action="apply_to_job", summary="s",
+            state=APPROVED, entity_id="acme-sre",
+            created_at="2026-09-22T00:00:00+00:00",
+        ).save(storage)
+        assert has_executed_approval(storage, "apply_to_job", "acme-sre") is False
+
+    def test_false_when_the_executed_approval_is_a_different_action_or_entity(self, tmp_path):
+        storage = _storage(tmp_path)
+        Approval(
+            id="send-outreach-acme-abc123", action="send_outreach", summary="s",
+            state=EXECUTED, entity_id="acme-sre",
+            created_at="2026-09-22T00:00:00+00:00",
+        ).save(storage)
+        Approval(
+            id="apply-to-job-other-abc123", action="apply_to_job", summary="s",
+            state=EXECUTED, entity_id="other-job",
+            created_at="2026-09-22T00:00:00+00:00",
+        ).save(storage)
+        assert has_executed_approval(storage, "apply_to_job", "acme-sre") is False
+
+    def test_ignores_an_unparseable_record(self, tmp_path):
+        storage = _storage(tmp_path)
+        Approval(
+            id="apply-to-job-acme-abc123", action="apply_to_job", summary="s",
+            state=EXECUTED, entity_id="acme-sre",
+            created_at="2026-09-22T00:00:00+00:00",
+        ).save(storage)
+        storage.atomic_write("approvals/garbage.json", b"{not json")
+        assert has_executed_approval(storage, "apply_to_job", "acme-sre") is True
 
 
 class TestListPendingExceptionNarrowing:

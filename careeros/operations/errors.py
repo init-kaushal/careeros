@@ -88,6 +88,27 @@ class MalformedApproval(OperationError):
         self.key = key
 
 
+class WrongApprovalAction(OperationError):
+    """The approval id passed to an execute_* belongs to a different action.
+
+    Nothing else guards this: an execute_apply given an outreach approval id
+    (or vice versa) would otherwise be safe only by accident of the two
+    actions' payloads not sharing key names — the exact kind of mistake the
+    cross-process contract (a different, later process supplying an id it
+    did not mint) most invites. Raised before any state change, so a
+    transposed id never consumes the approval it names.
+    """
+
+    def __init__(self, approval_id: str, expected: str, actual: str) -> None:
+        super().__init__(
+            "Approval " + approval_id + " is a " + repr(actual)
+            + " approval, not " + repr(expected) + "."
+        )
+        self.approval_id = approval_id
+        self.expected = expected
+        self.actual = actual
+
+
 class ArtifactChanged(OperationError):
     def __init__(self, path: str) -> None:
         super().__init__(

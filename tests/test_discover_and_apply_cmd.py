@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 from careeros.cli.discover_and_apply_cmd import discover_and_apply_app
 from careeros.core.job_store import JobStore
 from careeros.core.models import (
+    Approval,
     AutomationPolicy,
     Evidence,
     Job,
@@ -278,6 +279,97 @@ class TestDiscoverAndApplyCmd:
         jobs = Job.list_all(storage)
         assert len(jobs) == 1
         assert jobs[0].stage == "applied"
+
+    def test_teardown_failure_after_success_prints_a_warning_not_an_error(self, tmp_path):
+        # The submission itself succeeds; only browser teardown fails
+        # afterward. execute_apply returns normally (ApplyResult with
+        # teardown_failed=True) rather than raising, so the run must still
+        # exit 0, count the job as applied, and surface a warning — not
+        # silently claim unqualified success while apply_teardown_failed
+        # sits unread in the activity log.
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        storage = LocalFilesystemStorage(ws_path)
+        mock_filler = MagicMock()
+        mock_filler.can_handle.return_value = True
+        mock_filler.fill.return_value = True
+        mock_filler.platform = "Greenhouse"
+
+        @contextmanager
+        def teardown_fails(headless=False):
+            yield MagicMock(), MagicMock()
+            raise RuntimeError("context.close() failed: profile lock held")
+
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser", teardown_fails):
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert "teardown failed" in result.output.lower()
+        # rich hard-wraps at the terminal width; collapse before matching.
+        assert "Teardown warnings: 1" in " ".join(result.output.split())
+        assert "profile lock held" not in result.output
+        jobs = Job.list_all(storage)
+        assert len(jobs) == 1
+        assert jobs[0].stage == "applied"
+
+    def test_executed_approval_with_unknown_outcome_is_skipped_and_logged(self, tmp_path):
+        # I-3: an executed apply_to_job approval whose job's applied_at was
+        # never recorded means the outcome is unknown — a BaseException
+        # during browser teardown after a successful submit, or a failure
+        # inside _mark_applied's save that followed one — not "never
+        # attempted". Re-attempting could resubmit an application that
+        # already went out, so this job must be skipped, logged distinctly,
+        # and never reach the filler.
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        storage = LocalFilesystemStorage(ws_path)
+        now = datetime.now(timezone.utc).isoformat()
+        Job(
+            id="acme-sre-existing", source="browse", url="https://boards.greenhouse.io/acme/jobs/1",
+            company="Acme", title="Senior SRE", stage="saved",
+            applied_at=None, created_at=now, updated_at=now,
+        ).save(storage)
+        Approval(
+            id="apply-to-job-acme-sre-existing-deadbe",
+            action="apply_to_job",
+            summary="Auto-apply to Acme — Senior SRE?",
+            state="executed",
+            entity_type="job", entity_id="acme-sre-existing",
+            payload={"job_id": "acme-sre-existing"},
+            created_at=now, executed_at=now,
+        ).save(storage)
+        mock_filler = MagicMock()
+        mock_filler.can_handle.return_value = True
+
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]):
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+
+        assert result.exit_code == 0
+        mock_filler.fill.assert_not_called()
+        jobs = Job.list_all(storage)
+        assert len(jobs) == 1
+        assert jobs[0].applied_at is None
+
+        logs = sorted((tmp_path / "activity").glob("*.jsonl"))
+        events = [json.loads(line) for line in logs[-1].read_text().strip().split("\n") if line]
+        unknown = [e for e in events if e["event_type"] == "apply_outcome_unknown"]
+        assert len(unknown) == 1
+        assert unknown[0]["entity_id"] == "acme-sre-existing"
+        assert unknown[0]["status"] == "failed"
 
     def test_missing_policy_exits_1(self, tmp_path):
         ws_path = _setup_workspace(tmp_path, policy=None)

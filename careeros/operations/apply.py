@@ -20,7 +20,7 @@ from careeros.operations.approvals import (
 from careeros.operations.errors import (
     ArtifactChanged, BoardSessionRequired, BrowserUnavailable, DraftFailed,
     EntityNotFound, FillIncomplete, MalformedApproval, NoFillerAvailable,
-    PolicyBlocked, ResumeNotFound,
+    PolicyBlocked, ResumeNotFound, WrongApprovalAction,
 )
 from careeros.runtime.base import AgentRuntime
 from careeros.skills.cover_letter import generate_cover_letter
@@ -53,6 +53,12 @@ class ApplyResult:
     title: str
     resume_storage_path: str
     applied_at: str
+    # True only on the teardown-anomaly path: the submission itself
+    # succeeded and the stage advanced normally, but browser teardown then
+    # failed and a durable apply_teardown_failed event was logged. Callers
+    # should surface this as a warning, not silently print unqualified
+    # success while that anomaly sits unread in the activity log.
+    teardown_failed: bool = False
 
 
 def _now() -> str:
@@ -200,14 +206,18 @@ def propose_apply(
 
 def _mark_applied(
     runtime: AgentRuntime, job: Job, job_id: str, resume_storage_path: str,
-    action_label: str,
+    action_label: str, *, teardown_failed: bool = False,
 ) -> ApplyResult:
     """Advance the job to stage="applied" and log job_applied, then return the result.
 
     Shared by the ordinary success path and by a teardown failure that
     happens after filler.fill already returned True: in both cases the
     application already went out, so the stored job record and the
-    activity log must say so identically either way.
+    activity log must say so identically either way. `teardown_failed` only
+    ever comes in True from the latter caller, which also logs its own
+    distinct apply_teardown_failed event — it is threaded through here
+    purely so the returned ApplyResult carries that signal onward to the
+    CLI callers.
     """
     applied_at = _now()
     job = job.model_copy(update={"stage": "applied", "applied_at": applied_at, "updated_at": applied_at})
@@ -221,6 +231,7 @@ def _mark_applied(
     return ApplyResult(
         job_id=job_id, company=job.company, title=job.title,
         resume_storage_path=resume_storage_path, applied_at=applied_at,
+        teardown_failed=teardown_failed,
     )
 
 
@@ -262,6 +273,12 @@ def execute_apply(
     job's URL between approval and execution cannot change what gets
     navigated to.
 
+    approval.action is checked against ACTION before anything else is read
+    off the payload, and before any state change: passing an outreach
+    approval id here would otherwise be safe only by accident of the two
+    actions' payload keys not colliding, which is exactly the mistake an
+    opaque cross-process approval id invites.
+
     The approval is consumed before the browser is launched: the external
     action happens with the approval already marked executed. This ordering
     defeats process death — a crash between the two writes leaves the
@@ -277,11 +294,12 @@ def execute_apply(
     case where the "error" is teardown failing after filler.fill already
     returned True. There, the application already went out; advancing the
     stage anyway (via the same path the ordinary success case uses) is what
-    stops the unattended discover-and-apply command, which only skips a
-    job once its stage has advanced, from re-proposing and resubmitting the
-    same application on its next run. That branch logs a distinct
-    apply_teardown_failed event and returns the ApplyResult normally rather
-    than raising: the caller's real question is "did the application go
+    stops the unattended discover-and-apply command, which skips a job once
+    its applied_at is set (equivalently, once _mark_applied has run — stage
+    and applied_at always advance together here), from re-proposing and
+    resubmitting the same application on its next run. That branch logs a
+    distinct apply_teardown_failed event and returns the ApplyResult normally
+    rather than raising: the caller's real question is "did the application go
     out", and it did, so this is an operational anomaly to record, not an
     application failure to raise.
 
@@ -302,6 +320,8 @@ def execute_apply(
     BrowserUnavailable raised back to the caller.
     """
     approval = require_state(runtime.storage, approval_id, APPROVED)
+    if approval.action != ACTION:
+        raise WrongApprovalAction(approval_id, ACTION, approval.action)
     job_id = payload_value(approval, "job_id")
     job_url = payload_value(approval, "job_url")
     cl_storage_path = payload_value(approval, "cover_letter_storage_path")
@@ -380,9 +400,12 @@ def execute_apply(
             # it did. Recording it as a distinct failed event rather than
             # raising is what stops the unattended discover-and-apply
             # command from re-proposing and resubmitting the same
-            # application on its next run, since that command only skips a
-            # job once its stage has advanced.
-            result = _mark_applied(runtime, job, job_id, resume_storage_path, action_label)
+            # application on its next run, since that command skips a job
+            # once its applied_at is set.
+            result = _mark_applied(
+                runtime, job, job_id, resume_storage_path, action_label,
+                teardown_failed=True,
+            )
             runtime.record_activity(runtime.new_event(
                 "apply_teardown_failed", action_label,
                 "Browser teardown failed after a successful submission for "

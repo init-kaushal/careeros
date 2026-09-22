@@ -50,6 +50,33 @@ def list_pending(storage: StorageProvider) -> list[Approval]:
     return sorted(pending, key=lambda a: a.created_at)
 
 
+def has_executed_approval(storage: StorageProvider, action: str, entity_id: str) -> bool:
+    """Is there an executed approval for this action against this entity?
+
+    Iterates approvals/ the same way list_pending does, and reuses its same
+    narrow exception handling: an unparseable record is skipped rather than
+    raised on, since one corrupt file must not hide a real executed record,
+    but an unexpected error is not swallowed, for the same reason list_pending
+    does not swallow one.
+
+    Exists for callers whose eligibility check needs to tell "outcome
+    unknown" (an executed approval whose action never advanced the entity's
+    own durable state) apart from "never attempted" — see
+    discover_and_apply_cmd's job-skip predicate.
+    """
+    for path in storage.list(_PREFIX):
+        if not path.endswith(_SUFFIX):
+            continue
+        approval_id = path[len(_PREFIX):-len(_SUFFIX)]
+        try:
+            approval = Approval.load(storage, approval_id)
+        except (ValueError, FileNotFoundError, ValidationError):
+            continue
+        if approval.state == EXECUTED and approval.action == action and approval.entity_id == entity_id:
+            return True
+    return False
+
+
 def require_state(storage: StorageProvider, approval_id: str, expected: str) -> Approval:
     """Load an approval, or raise if it is not in the state this step needs.
 

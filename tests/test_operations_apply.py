@@ -14,7 +14,7 @@ from careeros.operations.approvals import (
 from careeros.operations.errors import (
     ApprovalNotGranted, ArtifactChanged, BoardSessionRequired, BrowserUnavailable,
     DraftFailed, EntityNotFound, FillIncomplete, MalformedApproval, NoFillerAvailable,
-    PolicyBlocked, ResumeNotFound,
+    PolicyBlocked, ResumeNotFound, WrongApprovalAction,
 )
 from careeros.runtime.base import ApprovalResult
 from careeros.runtime.factory import open_local_runtime
@@ -133,6 +133,10 @@ class TestProposeApply:
             with pytest.raises(BrowserUnavailable) as exc:
                 _propose(runtime)
         assert exc.value.profile_busy is True
+        # The detail must carry through from the original exception, not
+        # get replaced by a generic message — the caller's plain-message
+        # reporting depends on this.
+        assert str(exc.value) == "already in use"
 
     def test_greenhouse_apply_never_checks_a_session(self, tmp_path):
         runtime = _runtime(tmp_path, url=GREENHOUSE_URL)
@@ -267,6 +271,28 @@ class TestExecuteApply:
         # The single-use proof: the form must not have been submitted twice,
         # not merely that the second call raised.
         assert filler.fill.call_count == 1
+
+    def test_refuses_an_approval_belonging_to_a_different_action(self, tmp_path):
+        # An approval id is an opaque cross-process string; nothing else
+        # would stop execute_apply from acting on an approval minted by a
+        # different action (e.g. send_outreach) except that their payload
+        # keys happen not to collide. Must be caught before any state
+        # change, including before mark_executed.
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        approval.model_copy(update={"action": "send_outreach"}).save(runtime.storage)
+        filler = _filler_mock()
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser", _ok_launch_browser):
+            with pytest.raises(WrongApprovalAction) as exc:
+                execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+        assert exc.value.expected == "apply_to_job"
+        assert exc.value.actual == "send_outreach"
+        filler.fill.assert_not_called()
+        # Not consumed: state is unchanged, not advanced to executed or failed.
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
 
     def test_refuses_when_the_cover_letter_changed_after_approval(self, tmp_path):
         runtime = _runtime(tmp_path)
@@ -574,6 +600,10 @@ class TestExecuteApply:
         filler.fill.assert_called_once()
         assert result.job_id == JOB_ID
         assert result.applied_at
+        # The result must carry the anomaly forward: a caller that only
+        # checks for a raised exception would otherwise print unqualified
+        # success while apply_teardown_failed sits unread in the log.
+        assert result.teardown_failed is True
 
         job = Job.load(runtime.storage, JOB_ID)
         assert job.stage == "applied"
@@ -589,6 +619,18 @@ class TestExecuteApply:
         # message can carry a profile path, so only its type name may land
         # in the log.
         assert "profile lock held" not in log
+
+    def test_ordinary_success_does_not_set_teardown_failed(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        filler = _filler_mock(fill_return=True)
+
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser", _ok_launch_browser):
+            result = execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+
+        assert result.teardown_failed is False
 
     def test_mark_executed_happens_before_the_browser_is_launched(self, tmp_path):
         """Verify the approval is consumed before the external action.

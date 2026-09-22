@@ -16,7 +16,7 @@ from careeros.operations.approvals import (
 )
 from careeros.operations.errors import (
     ArtifactChanged, DraftFailed, EntityNotFound, MissingRecipient, PolicyBlocked,
-    SendFailed,
+    SendFailed, WrongApprovalAction,
 )
 from careeros.runtime.base import AgentRuntime
 from careeros.skills.outreach_draft import generate_outreach_message
@@ -189,8 +189,16 @@ def execute_outreach_send(
     a retry cannot act on it a second time — and narrows, though it does not
     eliminate, the window for a second, concurrently racing executor (see
     require_state).
+
+    approval.action is checked against ACTION before anything else is read
+    off the payload, and before any state change: passing an apply approval
+    id here would otherwise be safe only by accident of the two actions'
+    payload keys not colliding, which is exactly the mistake an opaque
+    cross-process approval id invites.
     """
     approval = require_state(runtime.storage, approval_id, APPROVED)
+    if approval.action != ACTION:
+        raise WrongApprovalAction(approval_id, ACTION, approval.action)
     message_id = payload_value(approval, "message_id")
     person_id = payload_value(approval, "person_id")
     expected_digest = payload_value(approval, "draft_sha256")

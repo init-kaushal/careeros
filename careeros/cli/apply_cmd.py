@@ -121,3 +121,9 @@ def apply_cmd(
 
     rprint("[green]Applied to " + outcome.company + " — " + outcome.title
            + ". Stage updated to 'applied'.[/green]")
+    if outcome.teardown_failed:
+        rprint(
+            "[yellow]Warning: browser teardown failed after the submission "
+            "went through. See the activity log (apply_teardown_failed) "
+            "for details.[/yellow]"
+        )

@@ -169,6 +169,42 @@ class TestApplyCmdHappyPath:
         assert event_arg[0][0] == "job_applied"
 
 
+    def test_teardown_failure_after_success_prints_a_warning_not_an_error(self, tmp_path):
+        # The submission itself succeeds; only browser teardown fails
+        # afterward. execute_apply still returns normally (ApplyResult with
+        # teardown_failed=True) rather than raising, so this must exit 0
+        # and print a yellow warning alongside the green success line —
+        # not silently claim unqualified success.
+        runtime = _mock_runtime(tmp_path)
+        job = _make_job()
+        mock_page = MagicMock()
+        mock_filler = MagicMock()
+        mock_filler.can_handle.return_value = True
+        mock_filler.fill.return_value = True
+        mock_filler.platform = "Greenhouse"
+
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+             patch("careeros.operations.apply.Job.load", return_value=job), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter text"), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser") as mock_browser, \
+             patch("careeros.cli.apply_cmd.Prompt.ask", side_effect=["a"]):
+            mock_browser.return_value.__enter__ = MagicMock(return_value=(MagicMock(), mock_page))
+            mock_browser.return_value.__exit__ = MagicMock(
+                side_effect=RuntimeError("context.close() failed: profile lock held")
+            )
+            result = runner.invoke(apply_app, ["acme-sre-abc1"])
+
+        assert result.exit_code == 0
+        assert "Applied to" in result.output
+        assert "teardown failed" in result.output.lower()
+        assert "profile lock held" not in result.output
+
+
 class TestApplyCmdFailurePaths:
     def test_no_workspace_exits_1(self):
         with patch.object(GlobalConfig, "load", return_value=GlobalConfig(workspace_path=None)):
@@ -262,6 +298,20 @@ class TestApplyCmdFailurePaths:
             result = runner.invoke(apply_app, ["acme-sre-abc1"])
         assert result.exit_code == 0
         assert "aborted" in result.output.lower()
+
+        # Regression guard: quitting the review loop must actually decline
+        # the pending approval (the CLI calls resolve_approval with
+        # approved=False), not merely exit and print "Aborted." with the
+        # approval left pending. This was previously verified only
+        # dynamically by a reviewer, not by an assertion.
+        approval_writes = [
+            c for c in runtime.storage.atomic_write.call_args_list
+            if c.args[0].startswith("approvals/")
+        ]
+        assert approval_writes, "no approval was written"
+        last_approval_bytes = approval_writes[-1].args[1]
+        assert b'"declined"' in last_approval_bytes
+        assert b"aborted at review" in last_approval_bytes
 
     def test_user_declines_final_approval_exits_0(self, tmp_path):
         runtime = _mock_runtime(tmp_path, approved=False)

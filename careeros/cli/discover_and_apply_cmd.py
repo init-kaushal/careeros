@@ -11,8 +11,8 @@ from careeros.browser.session import check_board_sessions
 from careeros.config_sources import build_source, load_board_entries
 from careeros.core.job_store import JobStore
 from careeros.core.models import AutomationPolicy, Goals, Job, Profile, Skills
-from careeros.operations.apply import ACTION, execute_apply, propose_apply
-from careeros.operations.approvals import resolve_approval
+from careeros.operations.apply import _JD_CAP, ACTION, execute_apply, propose_apply
+from careeros.operations.approvals import has_executed_approval, resolve_approval
 from careeros.operations.errors import (
     BrowserUnavailable, DraftFailed, EntityNotFound, FillIncomplete,
     NoFillerAvailable, OperationError, PolicyBlocked, ResumeNotFound,
@@ -202,6 +202,7 @@ def discover_and_apply_cmd(
     applied_count = 0
     skipped_count = 0
     blocked_count = 0
+    teardown_failed_count = 0
     for p in eligible:
         if applied_count >= policy.max_auto_applies_per_run:
             break
@@ -212,6 +213,28 @@ def discover_and_apply_cmd(
             # Re-read persisted state rather than trusting discovery-time
             # already_applied: this also covers an out-of-band apply that
             # happened mid-run (e.g. via a concurrent `careeros apply`).
+            skipped_count += 1
+            continue
+
+        if has_executed_approval(runtime.storage, ACTION, job_id):
+            # There is an executed apply_to_job approval for this job, but
+            # applied_at was never recorded — the approval was consumed and
+            # a browser was launched, yet the outcome is unknown (a
+            # BaseException during teardown after a successful submit, or a
+            # failure inside _mark_applied's save that followed one). That
+            # is not "never attempted": re-attempting here could resubmit
+            # an application that already went out, so this job is skipped
+            # rather than re-proposed. Logged as a distinct event, not
+            # folded into the neighbouring applied_at skip above, because
+            # silently excluding a job forever with no durable trace would
+            # leave no way for a human to notice and investigate.
+            runtime.record_activity(runtime.new_event(
+                "apply_outcome_unknown", "discover-and-apply",
+                "Skipped " + p["company"] + " — " + p["title"]
+                + ": an executed apply_to_job approval exists with no "
+                + "recorded applied_at — outcome unknown, not re-attempting.",
+                status="failed", entity_type="job", entity_id=job_id,
+            ))
             skipped_count += 1
             continue
 
@@ -228,8 +251,9 @@ def discover_and_apply_cmd(
                 # record's value is absent, so a rediscovered job (cap
                 # reached, draft failed, no filler, or score risen above
                 # threshold on a prior run) would otherwise draft from a
-                # stale JD. The 4000-character cap matches apply_cmd's.
-                jd_text=p["jd_text"][:4000],
+                # stale JD. _JD_CAP is imported from apply.py so the two
+                # can never drift apart.
+                jd_text=p["jd_text"][:_JD_CAP],
             )
         except PolicyBlocked:
             # Already logged (policy_blocked) inside propose_apply.
@@ -365,7 +389,9 @@ def discover_and_apply_cmd(
             continue
 
         try:
-            execute_apply(runtime, proposal.approval_id, headless=True, action_label="discover-and-apply")
+            apply_outcome = execute_apply(
+                runtime, proposal.approval_id, headless=True, action_label="discover-and-apply"
+            )
         except FillIncomplete:
             # execute_apply already logged apply_incomplete.
             skipped_count += 1
@@ -406,11 +432,19 @@ def discover_and_apply_cmd(
             continue
 
         applied_count += 1
+        if apply_outcome.teardown_failed:
+            teardown_failed_count += 1
+            rprint(
+                "[yellow]Warning: browser teardown failed after the submission "
+                "to " + p["company"] + " — " + p["title"] + " went through. "
+                "See the activity log (apply_teardown_failed) for details.[/yellow]"
+            )
 
     rprint(
         "Discovered: " + str(saved_count) + ", Duplicates: " + str(duplicate_count)
         + ", Blocked: " + str(blocked_count)
         + ", Auto-applied: " + str(applied_count) + ", Skipped: " + str(skipped_count)
+        + ", Teardown warnings: " + str(teardown_failed_count)
         + ", Unauthorized boards: " + (", ".join(unauthorized) if unauthorized else "none")
         + ", Unavailable sources: " + (", ".join(unavailable) if unavailable else "none")
     )
