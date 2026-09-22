@@ -1,47 +1,34 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import typer
 from rich import print as rprint
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from careeros.browser.driver import BrowserProfileBusy, launch_browser
-from careeros.browser.fillers.generic import GenericFiller
-from careeros.browser.fillers.greenhouse import GreenhouseFiller
-from careeros.browser.fillers.lever import LeverFiller
-from careeros.browser.fillers.linkedin import LinkedInFiller
-from careeros.cli.preflight import require_board_session
-from careeros.config import GlobalConfig
-from careeros.core.models import Goals, Job, PolicyConfig, Profile, Skills
-from careeros.core.policy_engine import PolicyEngine
-from careeros.core.resume_select import select_resume
-from careeros.runtime.base import ActionProposal
-from careeros.runtime.factory import open_local_runtime
-from careeros.skills.cover_letter import generate_cover_letter
-from careeros.storage.filesystem import LocalFilesystemStorage
+from careeros.operations.apply import ACTION, execute_apply, propose_apply
+from careeros.operations.approvals import resolve_approval
+from careeros.operations.errors import (
+    BoardSessionRequired, BrowserUnavailable, FillIncomplete, OperationError,
+)
+from careeros.runtime.base import ActionProposal, ApprovalResult
+from careeros.runtime.factory import (
+    WorkspaceNotConfigured, open_local_runtime, resolve_storage,
+)
+from careeros.runtime.local import LocalRuntime
 
 apply_app = typer.Typer(help="Apply to saved jobs.")
 console = Console()
 
-FILLERS = [GreenhouseFiller(), LeverFiller(), LinkedInFiller(), GenericFiller()]
 MAX_REGENERATIONS = 5
 
 
-def _get_storage(workspace_path: str | None) -> LocalFilesystemStorage:
-    if workspace_path:
-        return LocalFilesystemStorage(workspace_path)
-    config = GlobalConfig.load()
-    if not config.workspace_path:
+def _open_runtime(workspace_path: str | None) -> LocalRuntime:
+    try:
+        return open_local_runtime(resolve_storage(workspace_path))
+    except (WorkspaceNotConfigured, FileNotFoundError):
         rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
         raise typer.Exit(1)
-    return LocalFilesystemStorage(config.workspace_path)
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 @apply_app.command()
@@ -50,160 +37,87 @@ def apply_cmd(
     workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
     model: str = typer.Option(None, "--model", help="Override LLM model for cover letter"),
 ) -> None:
+    runtime = _open_runtime(workspace)
+
     try:
-        runtime = open_local_runtime(_get_storage(workspace))
-    except FileNotFoundError:
-        rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
-        raise typer.Exit(1)
+        proposal = propose_apply(runtime, job_id, model=model, action_label="apply")
 
-    # Load job
-    try:
-        job = Job.load(runtime.storage, job_id)
-    except (FileNotFoundError, ValueError):
-        rprint("[red]Job " + job_id + " not found.[/red]")
-        raise typer.Exit(1)
-
-    if not job.url:
-        rprint("[red]Job has no URL — add one with `careeros job update`.[/red]")
-        raise typer.Exit(1)
-
-    # Find resume (before profile load so failure is fast and clear)
-    resume_choice = select_resume(runtime.storage, job_id)
-    if resume_choice is None:
-        rprint("[red]No resume found in resumes/versions/ — add one first.[/red]")
-        raise typer.Exit(1)
-    resume_path = resume_choice.path
-
-    # Policy check (before any LLM call is spent preparing this application)
-    policy_engine = PolicyEngine(PolicyConfig.load(runtime.storage))
-    policy_result = policy_engine.check_job(job)
-    if policy_result.blocked:
-        runtime.record_activity(runtime.new_event(
-            "policy_blocked", "apply",
-            "Blocked by policy (" + policy_result.rule + "): " + job.company + " — " + job.title,
-            status="failed", entity_type="job", entity_id=job_id,
-        ))
-        rprint("[red]Blocked by policy (" + policy_result.rule + "). Edit config/policies.json to change this.[/red]")
-        raise typer.Exit(1)
-
-    # Load profile data (after resume check so early failure avoids unnecessary I/O)
-    profile = Profile.load_or_empty(runtime.storage)
-    skills = Skills.load_or_empty(runtime.storage)
-    goals = Goals.load_or_empty(runtime.storage)
-
-    # Use stored JD text (two-session approach: avoid keeping browser open during interactive review)
-    jd_text = (job.description or "")[:4000]
-
-    # Generate cover letter
-    with console.status("Generating cover letter..."):
-        cover_letter = generate_cover_letter(jd_text, profile, skills, goals, model=model)
-
-    if not cover_letter:
-        rprint("[red]Cover letter generation failed. Check your LLM configuration.[/red]")
-        raise typer.Exit(1)
-
-    if resume_choice.tailored:
-        if resume_choice.variant is None:
-            # No entry count is printed: the sidecar is missing, corrupt, or
-            # describes a different document, so any number here would be a
-            # claim about a file this one is not.
-            rprint("[yellow]Resume: tailored for this job, but its evidence record is "
-                   + "unavailable — the upload is unchanged, only its provenance is "
-                   + "unknown. Run 'careeros resume variant --job " + job_id
-                   + "' to regenerate it.[/yellow]")
-        else:
-            rprint("[green]Resume: tailored for this job — "
-                   + str(resume_choice.variant.entry_count())
-                   + " evidence-backed entries[/green]")
-            if resume_choice.stale_master:
-                rprint("[yellow]This variant was generated from a superseded master "
-                       + "resume, so its cited lines no longer match "
-                       + resume_choice.variant.source_file
-                       + ". Run 'careeros resume variant --job " + job_id
+        if proposal.resume.tailored:
+            if proposal.resume.variant is None:
+                # No entry count is printed: the sidecar is missing, corrupt, or
+                # describes a different document, so any number here would be a
+                # claim about a file this one is not.
+                rprint("[yellow]Resume: tailored for this job, but its evidence record is "
+                       + "unavailable — the upload is unchanged, only its provenance is "
+                       + "unknown. Run 'careeros resume variant --job " + job_id
                        + "' to regenerate it.[/yellow]")
-    else:
-        rprint("[yellow]Resume: " + resume_choice.storage_path
-               + " — NOT tailored to this job. Run 'careeros resume variant --job "
-               + job_id + "' to tailor it.[/yellow]")
-
-    # Review loop
-    regenerations = 0
-    while True:
-        console.print(Panel(cover_letter, title="Cover Letter — " + job.company + " / " + job.title))
-
-        if regenerations >= MAX_REGENERATIONS:
-            choice = Prompt.ask("[A]ccept / [Q]uit", choices=["a", "q"], default="a")
+            else:
+                rprint("[green]Resume: tailored for this job — "
+                       + str(proposal.resume.variant.entry_count())
+                       + " evidence-backed entries[/green]")
+                if proposal.resume.stale_master:
+                    rprint("[yellow]This variant was generated from a superseded master "
+                           + "resume, so its cited lines no longer match "
+                           + proposal.resume.variant.source_file
+                           + ". Run 'careeros resume variant --job " + job_id
+                           + "' to regenerate it.[/yellow]")
         else:
-            choice = Prompt.ask("[A]ccept / [R]egenerate / [Q]uit", choices=["a", "r", "q"], default="a")
+            rprint("[yellow]Resume: " + proposal.resume.storage_path
+                   + " — NOT tailored to this job. Run 'careeros resume variant --job "
+                   + job_id + "' to tailor it.[/yellow]")
 
-        if choice == "q":
-            rprint("Aborted.")
-            raise typer.Exit(0)
-        if choice == "r":
-            regenerations += 1
-            with console.status("Regenerating..."):
-                cover_letter = generate_cover_letter(jd_text, profile, skills, goals, model=model)
-            if not cover_letter:
-                rprint("[red]Cover letter generation failed.[/red]")
-                raise typer.Exit(1)
-            continue
-        break  # choice == "a"
+        # Review loop
+        regenerations = 0
+        while True:
+            console.print(Panel(
+                proposal.cover_letter,
+                title="Cover Letter — " + proposal.company + " / " + proposal.title,
+            ))
 
-    # Save cover letter
-    cl_storage_path = "applications/" + job_id + "/cover_letter.txt"
-    try:
-        runtime.storage.atomic_write(cl_storage_path, cover_letter.encode())
-        cover_letter_path = runtime.storage.resolve(cl_storage_path)
-    except ValueError:
-        rprint("[red]Invalid job ID.[/red]")
-        raise typer.Exit(1)
+            if regenerations >= MAX_REGENERATIONS:
+                choice = Prompt.ask("[A]ccept / [Q]uit", choices=["a", "q"], default="a")
+            else:
+                choice = Prompt.ask("[A]ccept / [R]egenerate / [Q]uit", choices=["a", "r", "q"], default="a")
 
-    # Detect filler
-    filler = next((f for f in FILLERS if f.can_handle(job.url)), None)
-    if filler is None:
-        rprint("[red]No filler available for this URL.[/red]")
-        raise typer.Exit(1)
+            if choice == "q":
+                resolve_approval(
+                    runtime, proposal.approval_id,
+                    ApprovalResult(approved=False, reason="aborted at review"),
+                    action_label="apply",
+                )
+                rprint("Aborted.")
+                raise typer.Exit(0)
+            if choice == "r":
+                regenerations += 1
+                proposal = propose_apply(runtime, job_id, model=model, action_label="apply")
+                continue
+            break  # choice == "a"
 
-    # Only LinkedIn Easy Apply needs a session; Greenhouse, Lever, and the
-    # generic fallback all work signed-out.
-    if isinstance(filler, LinkedInFiller):
-        require_board_session("linkedin")
-
-    # Final approval
-    result = runtime.request_approval(ActionProposal(
-        action="apply_to_job",
-        summary="About to fill the " + filler.platform + " application for "
-        + job.company + " — " + job.title + ". Proceed?",
-        entity_type="job", entity_id=job_id,
-    ))
-    if not result.approved:
-        rprint("Aborted.")
-        raise typer.Exit(0)
-
-    # Launch browser and fill
-    try:
-        with launch_browser(headless=False) as (_, page):
-            success = filler.fill(page, job, profile, cover_letter, cover_letter_path, resume_path)
-    except ImportError:
-        rprint("[red]Playwright not installed. Run: pip install playwright && playwright install chrome[/red]")
-        raise typer.Exit(1)
-    except BrowserProfileBusy as exc:
-        rprint("[red]" + str(exc) + "[/red]")
-        raise typer.Exit(1)
-    except Exception as exc:
-        rprint("[red]Browser error: " + str(exc) + ". Stage not updated.[/red]")
-        raise typer.Exit(1)
-
-    if success:
-        now = _now()
-        job = job.model_copy(update={"stage": "applied", "applied_at": now, "updated_at": now})
-        job.save(runtime.storage)
-        runtime.record_activity(runtime.new_event(
-            "job_applied", "apply",
-            "Applied to " + job.company + " — " + job.title,
+        # Final approval
+        result = runtime.request_approval(ActionProposal(
+            action=ACTION,
+            summary=proposal.summary,
             entity_type="job", entity_id=job_id,
         ))
-        rprint("[green]Applied to " + job.company + " — " + job.title + ". Stage updated to 'applied'.[/green]")
-    else:
-        rprint("[yellow]Form fill incomplete — review the browser window. Stage not updated.[/yellow]")
+        resolve_approval(runtime, proposal.approval_id, result, action_label="apply")
+
+        if not result.approved:
+            rprint("Aborted.")
+            raise typer.Exit(0)
+
+        outcome = execute_apply(runtime, proposal.approval_id, headless=False, action_label="apply")
+    except BoardSessionRequired as exc:
+        rprint("[red]" + str(exc) + "[/red]")
         raise typer.Exit(1)
+    except BrowserUnavailable as exc:
+        rprint("[red]" + str(exc) + "[/red]")
+        raise typer.Exit(1)
+    except FillIncomplete as exc:
+        rprint("[yellow]" + str(exc) + "[/yellow]")
+        raise typer.Exit(1)
+    except OperationError as exc:
+        rprint("[red]" + str(exc) + "[/red]")
+        raise typer.Exit(1)
+
+    rprint("[green]Applied to " + outcome.company + " — " + outcome.title
+           + ". Stage updated to 'applied'.[/green]")

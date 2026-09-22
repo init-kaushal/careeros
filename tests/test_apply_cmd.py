@@ -54,6 +54,30 @@ def _make_profile():
     return Profile(name="Alice Smith", email="alice@example.com", title="Senior SRE")
 
 
+def _wire_read_after_write(storage):
+    """Make a MagicMock storage's `read` see what `atomic_write` wrote.
+
+    The operations layer persists an Approval (and re-loads it, more than
+    once, within a single command invocation) rather than only ever writing
+    once the way the old inline command did. A bare MagicMock's `read` has
+    no memory of prior `atomic_write` calls, so without this, reloading the
+    just-written approval JSON hands pydantic a MagicMock instead of bytes.
+    Falls back to `b"{}"` for anything never written, matching the fixed
+    stub this replaces.
+    """
+    written: dict[str, bytes] = {}
+
+    def _atomic_write(path, data):
+        written[path] = data
+
+    def _read(path):
+        return written.get(path, b"{}")
+
+    storage.atomic_write.side_effect = _atomic_write
+    storage.read.side_effect = _read
+    return written
+
+
 def _mock_runtime(tmp_path, resume_filename="resume.pdf", approved=True, tailored=False):
     storage = MagicMock()
     storage.list.return_value = ["resumes/versions/" + resume_filename]
@@ -65,9 +89,15 @@ def _mock_runtime(tmp_path, resume_filename="resume.pdf", approved=True, tailore
     storage.exists.side_effect = lambda p: (
         tailored if p in (tailored_pdf, tailored_json) else True
     )
-    storage.read.return_value = b"{}"
+    _wire_read_after_write(storage)
     runtime = MagicMock()
     runtime.storage = storage
+    # A real string, not the auto-configured MagicMock attribute: resolve_approval
+    # writes this into the Approval's decided_by field, and the record is
+    # reloaded (JSON round-tripped) later in the same run, which a MagicMock
+    # cannot survive — its __iter__ makes pydantic serialize it as `[]`, and
+    # `[]` then fails validation as a `str | None` on reload.
+    runtime.agent_runtime_name = "local"
     runtime.request_approval.return_value = ApprovalResult(approved=approved)
     return runtime
 
@@ -83,15 +113,15 @@ class TestApplyCmdHappyPath:
         mock_filler.fill.return_value = True
         mock_filler.platform = "Greenhouse"
 
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=job), \
-             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=profile), \
-             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
-             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
-             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Dear Hiring Manager,\n\nGreat fit."), \
-             patch("careeros.cli.apply_cmd.FILLERS", [mock_filler]), \
-             patch("careeros.cli.apply_cmd.launch_browser") as mock_browser, \
+             patch("careeros.operations.apply.Job.load", return_value=job), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=profile), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Dear Hiring Manager,\n\nGreat fit."), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser") as mock_browser, \
              patch("careeros.cli.apply_cmd.Prompt.ask", side_effect=["a"]):
             mock_browser.return_value.__enter__ = MagicMock(return_value=(MagicMock(), mock_page))
             mock_browser.return_value.__exit__ = MagicMock(return_value=False)
@@ -114,21 +144,27 @@ class TestApplyCmdHappyPath:
         mock_filler.fill.return_value = True
         mock_filler.platform = "Greenhouse"
 
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=job), \
-             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
-             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
-             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
-             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Cover letter text"), \
-             patch("careeros.cli.apply_cmd.FILLERS", [mock_filler]), \
-             patch("careeros.cli.apply_cmd.launch_browser") as mock_browser, \
+             patch("careeros.operations.apply.Job.load", return_value=job), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter text"), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser") as mock_browser, \
              patch("careeros.cli.apply_cmd.Prompt.ask", side_effect=["a"]):
             mock_browser.return_value.__enter__ = MagicMock(return_value=(MagicMock(), mock_page))
             mock_browser.return_value.__exit__ = MagicMock(return_value=False)
             runner.invoke(apply_app, ["acme-sre-abc1"])
 
-        runtime.record_activity.assert_called_once()
+        event_types = [c.args[0] for c in runtime.new_event.call_args_list]
+        assert "approval_requested" in event_types
+        assert "approval_granted" in event_types
+        assert "job_applied" in event_types
+        # Every event constructed must actually have been logged — a property
+        # the old single-call assertion could not express.
+        assert runtime.record_activity.call_count == len(event_types)
         event_arg = runtime.new_event.call_args
         assert event_arg[0][0] == "job_applied"
 
@@ -141,9 +177,9 @@ class TestApplyCmdFailurePaths:
 
     def test_job_not_found_exits_1(self, tmp_path):
         runtime = _mock_runtime(tmp_path)
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", side_effect=FileNotFoundError):
+             patch("careeros.operations.apply.Job.load", side_effect=FileNotFoundError):
             result = runner.invoke(apply_app, ["nonexistent"])
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
@@ -153,9 +189,9 @@ class TestApplyCmdFailurePaths:
         now = datetime.now(timezone.utc).isoformat()
         job_no_url = Job(id="x", source="manual", url=None, company="Co", title="Role",
                          stage="saved", created_at=now, updated_at=now)
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=job_no_url):
+             patch("careeros.operations.apply.Job.load", return_value=job_no_url):
             result = runner.invoke(apply_app, ["x"])
         assert result.exit_code == 1
         assert "url" in result.output.lower()
@@ -169,9 +205,9 @@ class TestApplyCmdFailurePaths:
         # because an unconfigured MagicMock.exists(...) is truthy by default.
         storage.exists.return_value = False
         runtime.storage = storage
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()):
+             patch("careeros.operations.apply.Job.load", return_value=_make_job()):
             result = runner.invoke(apply_app, ["acme-sre-abc1"])
         assert result.exit_code == 1
         assert "resume" in result.output.lower()
@@ -179,10 +215,10 @@ class TestApplyCmdFailurePaths:
     def test_policy_blocked_company_exits_1_without_requesting_approval(self, tmp_path):
         runtime = _mock_runtime(tmp_path)
         job = _make_job()
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=job), \
-             patch("careeros.cli.apply_cmd.PolicyConfig.load", return_value=PolicyConfig(blocked_companies=["Acme"])):
+             patch("careeros.operations.apply.Job.load", return_value=job), \
+             patch("careeros.operations.apply.PolicyConfig.load", return_value=PolicyConfig(blocked_companies=["Acme"])):
             result = runner.invoke(apply_app, ["acme-sre-abc1"])
         assert result.exit_code == 1
         assert "blocked by policy" in result.output.lower()
@@ -191,10 +227,10 @@ class TestApplyCmdFailurePaths:
     def test_policy_blocked_logs_policy_blocked_event(self, tmp_path):
         runtime = _mock_runtime(tmp_path)
         job = _make_job()
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=job), \
-             patch("careeros.cli.apply_cmd.PolicyConfig.load", return_value=PolicyConfig(blocked_companies=["Acme"])):
+             patch("careeros.operations.apply.Job.load", return_value=job), \
+             patch("careeros.operations.apply.PolicyConfig.load", return_value=PolicyConfig(blocked_companies=["Acme"])):
             runner.invoke(apply_app, ["acme-sre-abc1"])
         runtime.record_activity.assert_called_once()
         event_args = runtime.new_event.call_args
@@ -202,26 +238,26 @@ class TestApplyCmdFailurePaths:
 
     def test_cover_letter_generation_failure_exits_1(self, tmp_path):
         runtime = _mock_runtime(tmp_path)
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
-             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
-             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
-             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
-             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value=""):
+             patch("careeros.operations.apply.Job.load", return_value=_make_job()), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value=""):
             result = runner.invoke(apply_app, ["acme-sre-abc1"])
         assert result.exit_code == 1
         assert "generation failed" in result.output.lower()
 
     def test_user_quits_review_loop_exits_0(self, tmp_path):
         runtime = _mock_runtime(tmp_path)
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
-             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
-             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
-             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
-             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.operations.apply.Job.load", return_value=_make_job()), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter"), \
              patch("careeros.cli.apply_cmd.Prompt.ask", return_value="q"):
             result = runner.invoke(apply_app, ["acme-sre-abc1"])
         assert result.exit_code == 0
@@ -232,14 +268,14 @@ class TestApplyCmdFailurePaths:
         mock_filler = MagicMock()
         mock_filler.can_handle.return_value = True
         mock_filler.platform = "Greenhouse"
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
-             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
-             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
-             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
-             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Cover letter"), \
-             patch("careeros.cli.apply_cmd.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.Job.load", return_value=_make_job()), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
              patch("careeros.cli.apply_cmd.Prompt.ask", return_value="a"):
             result = runner.invoke(apply_app, ["acme-sre-abc1"])
         assert result.exit_code == 0
@@ -253,15 +289,15 @@ class TestApplyCmdFailurePaths:
         mock_filler.can_handle.return_value = True
         mock_filler.fill.return_value = False
         mock_filler.platform = "Greenhouse"
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=job), \
-             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
-             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
-             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
-             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Cover letter"), \
-             patch("careeros.cli.apply_cmd.FILLERS", [mock_filler]), \
-             patch("careeros.cli.apply_cmd.launch_browser") as mock_browser, \
+             patch("careeros.operations.apply.Job.load", return_value=job), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser") as mock_browser, \
              patch("careeros.cli.apply_cmd.Prompt.ask", return_value="a"):
             mock_browser.return_value.__enter__ = MagicMock(return_value=(MagicMock(), mock_page))
             mock_browser.return_value.__exit__ = MagicMock(return_value=False)
@@ -275,15 +311,15 @@ class TestApplyCmdFailurePaths:
         mock_filler = MagicMock()
         mock_filler.can_handle.return_value = True
         mock_filler.platform = "Greenhouse"
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
-             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
-             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
-             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
-             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Cover letter"), \
-             patch("careeros.cli.apply_cmd.FILLERS", [mock_filler]), \
-             patch("careeros.cli.apply_cmd.launch_browser", side_effect=ImportError), \
+             patch("careeros.operations.apply.Job.load", return_value=_make_job()), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser", side_effect=ImportError), \
              patch("careeros.cli.apply_cmd.Prompt.ask", return_value="a"):
             result = runner.invoke(apply_app, ["acme-sre-abc1"])
         assert result.exit_code == 1
@@ -296,15 +332,15 @@ class TestApplyCmdFailurePaths:
         mock_filler.fill.return_value = True
         mock_filler.platform = "Greenhouse"
         mock_page = MagicMock()
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
-             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
-             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
-             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
-             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Cover letter") as mock_gen, \
-             patch("careeros.cli.apply_cmd.FILLERS", [mock_filler]), \
-             patch("careeros.cli.apply_cmd.launch_browser") as mock_browser, \
+             patch("careeros.operations.apply.Job.load", return_value=_make_job()), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter") as mock_gen, \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser") as mock_browser, \
              patch("careeros.cli.apply_cmd.Prompt.ask", side_effect=["r", "a"]):
             mock_browser.return_value.__enter__ = MagicMock(return_value=(MagicMock(), mock_page))
             mock_browser.return_value.__exit__ = MagicMock(return_value=False)
@@ -318,15 +354,15 @@ class TestApplyCmdFailurePaths:
         mock_filler.fill.return_value = True
         mock_filler.platform = "Greenhouse"
         mock_page = MagicMock()
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
-             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
-             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
-             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
-             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Cover letter") as mock_gen, \
-             patch("careeros.cli.apply_cmd.FILLERS", [mock_filler]), \
-             patch("careeros.cli.apply_cmd.launch_browser") as mock_browser, \
+             patch("careeros.operations.apply.Job.load", return_value=_make_job()), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter") as mock_gen, \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser") as mock_browser, \
              patch("careeros.cli.apply_cmd.Prompt.ask", return_value="a"):
             mock_browser.return_value.__enter__ = MagicMock(return_value=(MagicMock(), mock_page))
             mock_browser.return_value.__exit__ = MagicMock(return_value=False)
@@ -339,17 +375,17 @@ class TestApplyCmdFailurePaths:
 
         runtime = _mock_runtime(tmp_path)
         job = _make_job(url="https://www.linkedin.com/jobs/view/1")
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=job), \
-             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
-             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
-             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
-             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Dear team"), \
-             patch("careeros.cli.apply_cmd.FILLERS", [LinkedInFiller()]), \
-             patch("careeros.cli.preflight.check_board_sessions",
+             patch("careeros.operations.apply.Job.load", return_value=job), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Dear team"), \
+             patch("careeros.operations.apply.FILLERS", [LinkedInFiller()]), \
+             patch("careeros.operations.apply.check_board_sessions",
                    return_value={"linkedin": False}), \
-             patch("careeros.cli.apply_cmd.launch_browser") as mock_browser, \
+             patch("careeros.operations.apply.launch_browser") as mock_browser, \
              patch("careeros.cli.apply_cmd.Prompt.ask", side_effect=["a"]):
             result = runner.invoke(apply_app, ["acme-sre-abc1"])
 
@@ -367,17 +403,17 @@ class TestApplyCmdFailurePaths:
 
         runtime = _mock_runtime(tmp_path)
         job = _make_job(url="https://www.linkedin.com/jobs/view/1")
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=job), \
-             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
-             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
-             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
-             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Dear team"), \
-             patch("careeros.cli.apply_cmd.FILLERS", [LinkedInFiller()]), \
+             patch("careeros.operations.apply.Job.load", return_value=job), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Dear team"), \
+             patch("careeros.operations.apply.FILLERS", [LinkedInFiller()]), \
              patch("careeros.browser.session.launch_browser",
                    side_effect=BrowserProfileBusy("already in use by another CareerOS process")), \
-             patch("careeros.cli.apply_cmd.launch_browser") as mock_browser, \
+             patch("careeros.operations.apply.launch_browser") as mock_browser, \
              patch("careeros.cli.apply_cmd.Prompt.ask", side_effect=["a"]):
             result = runner.invoke(apply_app, ["acme-sre-abc1"])
 
@@ -391,16 +427,16 @@ class TestApplyCmdFailurePaths:
 
         runtime = _mock_runtime(tmp_path)
         job = _make_job(url="https://boards.greenhouse.io/acme/jobs/1")
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=job), \
-             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
-             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
-             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
-             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Dear team"), \
-             patch("careeros.cli.apply_cmd.FILLERS", [GreenhouseFiller()]), \
-             patch("careeros.cli.preflight.check_board_sessions") as cbs, \
-             patch("careeros.cli.apply_cmd.launch_browser") as mock_browser, \
+             patch("careeros.operations.apply.Job.load", return_value=job), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Dear team"), \
+             patch("careeros.operations.apply.FILLERS", [GreenhouseFiller()]), \
+             patch("careeros.operations.apply.check_board_sessions") as cbs, \
+             patch("careeros.operations.apply.launch_browser") as mock_browser, \
              patch("careeros.cli.apply_cmd.Prompt.ask", side_effect=["a"]):
             mock_browser.return_value.__enter__ = MagicMock(
                 return_value=(MagicMock(), MagicMock())
@@ -415,26 +451,26 @@ class TestApplyCmdFailurePaths:
 class TestApplyResumeSelection:
     def test_untailored_fallback_is_announced_as_not_tailored(self, tmp_path):
         runtime = _mock_runtime(tmp_path)
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
-             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
-             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
-             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
-             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Dear Acme,"), \
+             patch("careeros.operations.apply.Job.load", return_value=_make_job()), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Dear Acme,"), \
              patch("careeros.cli.apply_cmd.Prompt.ask", return_value="q"):
             result = runner.invoke(apply_app, ["acme-sre-abc1"])
         assert "NOT tailored" in result.output
 
     def test_tailored_variant_is_used_and_announced(self, tmp_path):
         runtime = _mock_runtime(tmp_path, tailored=True)
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
-             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
-             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
-             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
-             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Dear Acme,"), \
+             patch("careeros.operations.apply.Job.load", return_value=_make_job()), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Dear Acme,"), \
              patch("careeros.cli.apply_cmd.Prompt.ask", return_value="q"):
             result = runner.invoke(apply_app, ["acme-sre-abc1"])
         assert "tailored for this job" in result.output
@@ -443,16 +479,18 @@ class TestApplyResumeSelection:
 
     def _run_with_choice(self, choice):
         runtime = MagicMock()
+        _wire_read_after_write(runtime.storage)
+        runtime.agent_runtime_name = "local"
         runtime.request_approval.return_value = ApprovalResult(approved=False)
-        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
-             patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
-             patch("careeros.cli.apply_cmd.select_resume", return_value=choice), \
-             patch("careeros.cli.apply_cmd.PolicyConfig.load", return_value=PolicyConfig()), \
-             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
-             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
-             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
-             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Dear Acme,"), \
+             patch("careeros.operations.apply.Job.load", return_value=_make_job()), \
+             patch("careeros.operations.apply.select_resume", return_value=choice), \
+             patch("careeros.operations.apply.PolicyConfig.load", return_value=PolicyConfig()), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Dear Acme,"), \
              patch("careeros.cli.apply_cmd.Prompt.ask", return_value="q"):
             return runner.invoke(apply_app, ["acme-sre-abc1"])
 

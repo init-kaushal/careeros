@@ -8,13 +8,13 @@ from rich import print as rprint
 from careeros.browser.boards import BOARDS
 from careeros.browser.driver import BrowserProfileBusy, fetch_jd_text, launch_browser
 from careeros.browser.session import check_board_sessions
-from careeros.cli.apply_cmd import FILLERS
 from careeros.config import GlobalConfig
 from careeros.config_sources import build_source, load_board_entries
 from careeros.core.job_store import JobStore
 from careeros.core.models import AutomationPolicy, Goals, Job, PolicyConfig, Profile, Skills
 from careeros.core.policy_engine import PolicyEngine
 from careeros.core.resume_select import select_resume
+from careeros.operations.apply import FILLERS
 from careeros.runtime.base import ActionProposal
 from careeros.runtime.factory import open_automation_runtime
 from careeros.skills.browse_query import job_query_from_profile
