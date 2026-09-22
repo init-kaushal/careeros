@@ -71,3 +71,30 @@ class SendFailed(OperationError):
     def __init__(self, detail: str) -> None:
         super().__init__("Send failed: " + detail)
         self.detail = detail
+
+
+class BoardSessionRequired(OperationError):
+    def __init__(self, board: str) -> None:
+        super().__init__(
+            "Not signed in to " + board
+            + ". Run: careeros browser login --board " + board
+        )
+        self.board = board
+
+
+class FillIncomplete(OperationError):
+    pass
+
+
+class BrowserUnavailable(OperationError):
+    def __init__(self, detail: str, *, profile_busy: bool = False) -> None:
+        super().__init__(detail)
+        # A locked browser profile is a whole-run condition, not a per-job
+        # one: the scheduled discover-and-apply command must stop rather
+        # than pay for a cover letter on every remaining job only to fail
+        # identically at launch, while other browser failures only sink the
+        # one job being applied to. Carrying the distinction as a flag keeps
+        # that decision with the caller rather than baking a policy choice
+        # in here, and it stops a raw browser exception from leaking through
+        # the operations boundary.
+        self.profile_busy = profile_busy
