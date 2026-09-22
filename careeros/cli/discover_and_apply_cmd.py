@@ -14,8 +14,8 @@ from careeros.core.models import AutomationPolicy, Goals, Job, Profile, Skills
 from careeros.operations.apply import ACTION, execute_apply, propose_apply
 from careeros.operations.approvals import resolve_approval
 from careeros.operations.errors import (
-    BrowserUnavailable, DraftFailed, EntityNotFound, FillIncomplete, OperationError,
-    PolicyBlocked,
+    BrowserUnavailable, DraftFailed, EntityNotFound, FillIncomplete,
+    NoFillerAvailable, OperationError, PolicyBlocked, ResumeNotFound,
 )
 from careeros.runtime.automation import AutomationRuntime
 from careeros.runtime.base import ActionProposal
@@ -236,26 +236,28 @@ def discover_and_apply_cmd(
             ))
             skipped_count += 1
             continue
+        except ResumeNotFound:
+            rprint("[yellow]No resume found — skipping auto-apply for " + p["company"] + ".[/yellow]")
+            skipped_count += 1
+            continue
+        except NoFillerAvailable:
+            runtime.record_activity(runtime.new_event(
+                "no_filler_available", "discover-and-apply",
+                "No filler available for " + p["company"] + " — " + p["title"],
+                status="failed", entity_type="job", entity_id=job_id,
+            ))
+            skipped_count += 1
+            continue
         except EntityNotFound as exc:
-            detail = str(exc)
-            if detail.startswith("No resume found"):
-                rprint("[yellow]No resume found — skipping auto-apply for " + p["company"] + ".[/yellow]")
-            elif detail.startswith("No filler available"):
-                runtime.record_activity(runtime.new_event(
-                    "no_filler_available", "discover-and-apply",
-                    "No filler available for " + p["company"] + " — " + p["title"],
-                    status="failed", entity_type="job", entity_id=job_id,
-                ))
-            else:
-                # Job not found, or no URL on file: not distinguished by the
-                # unattended run before this refactor either, since neither
-                # case could occur for a job this loop just saved itself.
-                runtime.record_activity(runtime.new_event(
-                    "apply_error", "discover-and-apply",
-                    "Error while applying to " + p["company"] + " — " + p["title"]
-                    + ": " + type(exc).__name__,
-                    status="failed", entity_type="job", entity_id=job_id,
-                ))
+            # Job not found, or no URL on file: not distinguished by the
+            # unattended run before this refactor either, since neither
+            # case could occur for a job this loop just saved itself.
+            runtime.record_activity(runtime.new_event(
+                "apply_error", "discover-and-apply",
+                "Error while applying to " + p["company"] + " — " + p["title"]
+                + ": " + type(exc).__name__,
+                status="failed", entity_type="job", entity_id=job_id,
+            ))
             skipped_count += 1
             continue
         except BrowserUnavailable as exc:

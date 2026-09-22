@@ -19,7 +19,8 @@ from careeros.operations.approvals import (
 )
 from careeros.operations.errors import (
     ArtifactChanged, BoardSessionRequired, BrowserUnavailable, DraftFailed,
-    EntityNotFound, FillIncomplete, MalformedApproval, PolicyBlocked,
+    EntityNotFound, FillIncomplete, MalformedApproval, NoFillerAvailable,
+    PolicyBlocked, ResumeNotFound,
 )
 from careeros.runtime.base import AgentRuntime
 from careeros.skills.cover_letter import generate_cover_letter
@@ -110,7 +111,7 @@ def propose_apply(
     # missing resume fails fast and clear without touching either.
     resume_choice = select_resume(runtime.storage, job_id)
     if resume_choice is None:
-        raise EntityNotFound("No resume found in resumes/versions/ — add one first.")
+        raise ResumeNotFound()
 
     policy_result = PolicyEngine(PolicyConfig.load(runtime.storage)).check_job(job)
     if policy_result.blocked:
@@ -126,7 +127,7 @@ def propose_apply(
     # below, since the session check only applies to one filler.
     filler = next((f for f in FILLERS if f.can_handle(job.url)), None)
     if filler is None:
-        raise EntityNotFound("No filler available for this URL: " + job.url)
+        raise NoFillerAvailable(job.url)
 
     # Only LinkedIn Easy Apply needs a session; Greenhouse, Lever, and the
     # generic fallback all work signed-out. Checked here, ahead of the cover

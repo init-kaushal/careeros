@@ -15,6 +15,36 @@ class EntityNotFound(OperationError):
     pass
 
 
+class ResumeNotFound(EntityNotFound):
+    """No resume exists in resumes/versions/ for propose_apply to select.
+
+    A subclass of EntityNotFound, not a sibling, so every existing catch of
+    EntityNotFound (apply_cmd.py, its tests) keeps matching this case exactly
+    as it did before this type existed. A dedicated type exists only so a
+    caller that needs to tell "no resume" apart from "no filler" (the
+    scheduled discover-and-apply command does) can dispatch on type instead
+    of string-matching the message.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "No resume found in resumes/versions/ — add one first."
+        )
+
+
+class NoFillerAvailable(EntityNotFound):
+    """No registered filler can handle the job's URL.
+
+    See ResumeNotFound's docstring: same reasoning, same subclass relationship.
+    """
+
+    def __init__(self, url: str) -> None:
+        super().__init__(
+            "No filler available for this URL: " + url
+        )
+        self.url = url
+
+
 class PolicyBlocked(OperationError):
     def __init__(self, rule: str) -> None:
         super().__init__(

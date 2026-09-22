@@ -13,7 +13,8 @@ from careeros.operations.approvals import (
 )
 from careeros.operations.errors import (
     ApprovalNotGranted, ArtifactChanged, BoardSessionRequired, BrowserUnavailable,
-    DraftFailed, EntityNotFound, FillIncomplete, MalformedApproval, PolicyBlocked,
+    DraftFailed, EntityNotFound, FillIncomplete, MalformedApproval, NoFillerAvailable,
+    PolicyBlocked, ResumeNotFound,
 )
 from careeros.runtime.base import ApprovalResult
 from careeros.runtime.factory import open_local_runtime
@@ -95,6 +96,26 @@ class TestProposeApply:
         with patch("careeros.operations.apply.FILLERS", []):
             with pytest.raises(EntityNotFound):
                 _propose(runtime)
+
+    def test_no_resume_raises_the_specific_resume_not_found_type(self, tmp_path):
+        # Pins both the type (so a caller like discover_and_apply_cmd can
+        # dispatch on it instead of string-matching the message) and that it
+        # is still an EntityNotFound (so apply_cmd.py's existing catch, and
+        # the two tests above, keep working unmodified).
+        runtime = _runtime(tmp_path, with_resume=False)
+        with pytest.raises(ResumeNotFound) as exc:
+            _propose(runtime)
+        assert isinstance(exc.value, EntityNotFound)
+        assert str(exc.value) == "No resume found in resumes/versions/ — add one first."
+
+    def test_no_filler_raises_the_specific_no_filler_available_type(self, tmp_path):
+        url = "https://unsupported-board.example.com/job/1"
+        runtime = _runtime(tmp_path, url=url)
+        with patch("careeros.operations.apply.FILLERS", []):
+            with pytest.raises(NoFillerAvailable) as exc:
+                _propose(runtime)
+        assert isinstance(exc.value, EntityNotFound)
+        assert str(exc.value) == "No filler available for this URL: " + url
 
     def test_linkedin_without_a_session_raises_board_session_required(self, tmp_path):
         runtime = _runtime(tmp_path, url=LINKEDIN_URL)
