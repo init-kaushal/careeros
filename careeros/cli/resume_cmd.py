@@ -146,6 +146,7 @@ def variant(
     try:
         job_record = Job.load(runtime.storage, job)
     except (FileNotFoundError, ValueError):
+        _record_variant(runtime, job, "Job " + job + " not found", "failed")
         rprint("[red]Job " + job + " not found.[/red]")
         raise typer.Exit(1)
 
@@ -205,13 +206,37 @@ def variant(
         _record_variant(runtime, job, "Rendering failed: " + type(exc).__name__, "failed")
         raise typer.Exit(1)
 
-    # PDF first, then the sidecar: selection keys off the PDF, so a torn
-    # write degrades to "variant works, audit missing" rather than a sidecar
-    # promising a file that is not there.
-    runtime.storage.atomic_write(ResumeVariant.pdf_path(job), pdf_bytes)
-    runtime.storage.atomic_write(
-        ResumeVariant.json_path(job), variant_doc.model_dump_json(indent=2).encode()
-    )
+    pdf_path = ResumeVariant.pdf_path(job)
+    json_path = ResumeVariant.json_path(job)
+
+    # PDF first: Task 5's selection keys off the PDF, so a failure between
+    # the two writes must leave the variant usable with its audit missing,
+    # never a sidecar describing a document that is not there.
+    try:
+        runtime.storage.atomic_write(pdf_path, pdf_bytes)
+    except OSError as exc:
+        rprint("[red]Could not write " + pdf_path + ": " + str(exc)
+               + ". No variant was written.[/red]")
+        _record_variant(runtime, job, "Write failed: " + pdf_path, "failed")
+        raise typer.Exit(1)
+
+    try:
+        runtime.storage.atomic_write(
+            json_path, variant_doc.model_dump_json(indent=2).encode()
+        )
+    except OSError as exc:
+        # The PDF is already the new variant, so a sidecar left over from a
+        # previous run would now describe the wrong document. Remove it
+        # rather than leave a misleading audit record.
+        try:
+            if runtime.storage.exists(json_path):
+                runtime.storage.delete(json_path)
+        except OSError:
+            pass
+        rprint("[red]Wrote " + pdf_path + " but could not write its evidence "
+               + "sidecar: " + str(exc) + ". Re-run to restore it.[/red]")
+        _record_variant(runtime, job, "Write failed: " + json_path, "failed")
+        raise typer.Exit(1)
 
     _record_variant(
         runtime, job,

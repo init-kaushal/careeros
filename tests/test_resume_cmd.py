@@ -418,3 +418,115 @@ def test_variant_records_an_activity_event_on_success_and_failure(tmp_path):
     ]
     variant_events = [e for e in events if e["action"] == "variant"]
     assert [e["status"] for e in variant_events] == ["success", "failed"]
+
+
+def test_variant_records_a_failed_event_for_an_unknown_job(tmp_path):
+    ws, storage = _workspace(tmp_path)
+    result = runner.invoke(app, ["resume", "variant", "--job", "nope-xyz", "--workspace", ws])
+    assert result.exit_code == 1
+    events = [
+        json.loads(line)
+        for p in storage.list("activity/")
+        for line in storage.read(p).decode().splitlines() if line.strip()
+    ]
+    variant_events = [e for e in events if e["action"] == "variant"]
+    assert len(variant_events) == 1
+    assert variant_events[0]["status"] == "failed"
+
+
+def test_variant_pdf_write_failure_leaves_prior_pdf_untouched(tmp_path):
+    ws, storage = _workspace(tmp_path)
+    job_id = _job(storage)
+    sel, rnd = _patches(_variant_result(), pdf=b"%PDF-first")
+    with sel, rnd:
+        runner.invoke(app, ["resume", "variant", "--job", job_id, "--workspace", ws])
+    pdf_path = ResumeVariant.pdf_path(job_id)
+    assert storage.read(pdf_path) == b"%PDF-first"
+
+    real_write = LocalFilesystemStorage.atomic_write
+
+    def _boom(self, path, data):
+        if path == pdf_path:
+            raise OSError("disk full")
+        return real_write(self, path, data)
+
+    sel, rnd = _patches(_variant_result(quotes=("Python, Go",)), pdf=b"%PDF-second")
+    with sel, rnd, patch.object(
+        LocalFilesystemStorage, "atomic_write", autospec=True, side_effect=_boom
+    ):
+        result = runner.invoke(app, ["resume", "variant", "--job", job_id, "--workspace", ws])
+
+    assert result.exit_code == 1
+    assert "disk full" in result.output
+    assert storage.read(pdf_path) == b"%PDF-first"
+
+    events = [
+        json.loads(line)
+        for p in storage.list("activity/")
+        for line in storage.read(p).decode().splitlines() if line.strip()
+    ]
+    variant_events = [e for e in events if e["action"] == "variant"]
+    assert variant_events[-1]["status"] == "failed"
+
+
+def test_variant_sidecar_write_failure_removes_the_stale_sidecar(tmp_path):
+    ws, storage = _workspace(tmp_path)
+    job_id = _job(storage)
+    sel, rnd = _patches(_variant_result(), pdf=b"%PDF-first")
+    with sel, rnd:
+        runner.invoke(app, ["resume", "variant", "--job", job_id, "--workspace", ws])
+    pdf_path = ResumeVariant.pdf_path(job_id)
+    json_path = ResumeVariant.json_path(job_id)
+    assert storage.exists(json_path)
+
+    real_write = LocalFilesystemStorage.atomic_write
+
+    def _boom(self, path, data):
+        if path == json_path:
+            raise OSError("disk full")
+        return real_write(self, path, data)
+
+    sel, rnd = _patches(_variant_result(quotes=("Python, Go",)), pdf=b"%PDF-second")
+    with sel, rnd, patch.object(
+        LocalFilesystemStorage, "atomic_write", autospec=True, side_effect=_boom
+    ):
+        result = runner.invoke(app, ["resume", "variant", "--job", job_id, "--workspace", ws])
+
+    assert result.exit_code == 1
+    assert "disk full" in result.output
+    # The PDF already holds the new variant; the stale sidecar describing
+    # the previous one must not survive to misrepresent it.
+    assert storage.read(pdf_path) == b"%PDF-second"
+    assert not storage.exists(json_path)
+
+    events = [
+        json.loads(line)
+        for p in storage.list("activity/")
+        for line in storage.read(p).decode().splitlines() if line.strip()
+    ]
+    variant_events = [e for e in events if e["action"] == "variant"]
+    assert variant_events[-1]["status"] == "failed"
+
+
+def test_pdf_is_written_before_its_evidence_sidecar(tmp_path):
+    ws, storage = _workspace(tmp_path)
+    job_id = _job(storage)
+    written: list[str] = []
+    real_write = storage.atomic_write
+
+    def _spy(path, data):
+        written.append(path)
+        real_write(path, data)
+
+    sel, rnd = _patches(_variant_result())
+    with sel, rnd, patch.object(
+        LocalFilesystemStorage, "atomic_write", autospec=True,
+        side_effect=lambda self, path, data: _spy(path, data),
+    ):
+        result = runner.invoke(app, ["resume", "variant", "--job", job_id, "--workspace", ws])
+    assert result.exit_code == 0
+    variant_writes = [p for p in written if p.startswith("resumes/versions/")]
+    assert variant_writes == [
+        ResumeVariant.pdf_path(job_id),
+        ResumeVariant.json_path(job_id),
+    ], variant_writes
