@@ -138,6 +138,25 @@ def test_every_allowed_heading_is_accepted():
         assert result.sections[0].heading == heading, heading
 
 
+def test_heading_casing_and_padding_are_normalized_to_the_canonical_form():
+    # A model varying casing is plausible, and losing verified content to it
+    # is avoidable. The stored heading is still the canonical allowlist
+    # spelling regardless of what casing or padding the model sent.
+    for raw_heading in ("SKILLS", "skills", " Skills "):
+        result = _call({"sections": [
+            {"heading": raw_heading, "quotes": ["Python, Go, Kubernetes, Terraform"]}
+        ]})
+        assert result.sections[0].heading == "Skills", raw_heading
+
+
+def test_unknown_heading_is_still_dropped_and_named_with_the_original_text():
+    result = _call({"sections": [
+        {"heading": "sKiLLZ", "quotes": ["Python, Go, Kubernetes, Terraform"]}
+    ]})
+    assert result.sections == ()
+    assert result.dropped == ("section heading: sKiLLZ",)
+
+
 def test_duplicate_quote_is_collapsed_not_double_reported():
     result = _call({"sections": [
         {"heading": "Skills", "quotes": ["Python, Go, Kubernetes, Terraform"]},
@@ -238,3 +257,10 @@ def test_malformed_payload_returns_a_result_instead_of_raising(payload):
     # contract. These are written here in the same task, not deferred.
     result = _call(payload)
     assert isinstance(result, VariantResult)
+    # A malformed payload must yield an empty selection, not merely a
+    # non-raising one: asserting only isinstance would still pass if a
+    # regression started returning fabricated sections.
+    assert result.entry_count() == 0
+    assert result.sections == ()
+    assert result.error is None
+    assert isinstance(result.dropped, tuple)

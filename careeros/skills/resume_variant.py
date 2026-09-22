@@ -24,6 +24,12 @@ _SKILL_HINT_CAP = 500
 # model titling a section "Perfect Match For This Role".
 ALLOWED_HEADINGS = ("Summary", "Experience", "Skills", "Education", "Projects")
 
+# Heading matching is case-insensitive, but the stored heading is always the
+# canonical allowlist spelling, never whatever casing the model sent — so the
+# rendered heading is still one of exactly five known strings and the
+# fabrication surface does not widen.
+_HEADING_LOOKUP = {h.casefold(): h for h in ALLOWED_HEADINGS}
+
 _DROPPED_LABEL_CAP = 80
 
 _VARIANT_INSTRUCTIONS = """\
@@ -133,9 +139,10 @@ def select_variant_content(
             continue
 
         raw_heading = raw_section.get("heading")
-        heading = raw_heading.strip() if isinstance(raw_heading, str) else ""
-        if heading not in ALLOWED_HEADINGS:
-            _note(dropped, "section heading: " + (heading or "<missing>"))
+        stripped = raw_heading.strip() if isinstance(raw_heading, str) else ""
+        heading = _HEADING_LOOKUP.get(stripped.casefold(), "")
+        if not heading:
+            _note(dropped, "section heading: " + (stripped or "<missing>"))
             continue
 
         raw_quotes = raw_section.get("quotes")
