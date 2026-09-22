@@ -57,6 +57,18 @@ workspace without a `--workspace` flag threaded through every call.
 `resolve_storage` **raises `WorkspaceNotConfigured`** rather than printing an error, because a
 non-CLI caller has no terminal to print to. Catch it; do not expect a message on stdout.
 
+**Warning: most CLI commands do not honor `CAREEROS_WORKSPACE` today.** Only `careeros outreach
+send`, `careeros outreach mark-referral-requested`, and `careeros people update` are routed
+through `resolve_storage`. Every other command module (`browse_cmd`, `browser_cmd`, `job_cmd`,
+`apply_cmd`, `research_cmd`, `discover_and_apply_cmd`, `resume_cmd`, `workspace_cmd`) keeps its own
+private `_get_storage` helper that reads only an explicit `--workspace` flag and the global config
+file — it never looks at the environment variable. If you export `CAREEROS_WORKSPACE` while a
+different workspace path is already saved in the global config (from `careeros onboard`), those
+three commands and everything else will silently write to two different workspace trees: outreach
+history in one, applications and job data in the other. Until this converges (see
+`DIVERGENCES.md`), either pass an explicit workspace path to every command you invoke, or make sure
+`CAREEROS_WORKSPACE` and the configured workspace path point at the same directory.
+
 ## 3. The `AgentRuntime` Protocol
 
 ```python
@@ -245,6 +257,34 @@ via `payload_value`):
 - `job_id`
 - `person_id`
 - `draft_sha256` — `sha256` hex digest of the draft text at proposal time
+- `subject` — the email subject line, computed once at proposal time from the `Job` as it read
+  then. `execute_outreach_send` reads this back rather than recomputing it, so editing the job's
+  title or company between approval and execution cannot change what goes out with no re-review.
+  It is metadata about the send, not drafted body content, so it belongs on the payload the same
+  way `summary` does.
+
+### 6.1 Activity events this flow emits
+
+An integrator reading `activity/*.jsonl` directly (rather than through `list_pending` or an
+`Approval` record) should not meet an undocumented `event_type`. This is the complete vocabulary
+the outreach-send flow writes, so nothing else appears:
+
+| `event_type` | Emitted by | When |
+|---|---|---|
+| `outreach_drafted` | `propose_outreach_send` | every successful draft, before any human review — including each regeneration |
+| `approval_requested` | `open_approval` | every new `pending` approval is opened, including the one that follows a regeneration |
+| `approval_superseded` | `open_approval` | a prior *pending* approval for the same `(action, entity_id)` is invalidated by a new propose call — see §7's "Re-proposing supersedes" |
+| `approval_granted` | `resolve_approval` | a `pending` approval is decided `approved` |
+| `approval_declined` | `resolve_approval` | a `pending` approval is decided `declined` |
+| `outreach_sent` | `execute_outreach_send` | `send_email` succeeds |
+| `outreach_send_failed` | `execute_outreach_send` | `send_email` raises; the approval has already moved `executed -> failed` by the time this is logged |
+| `outreach_send_declined` | `decline_outreach_send` | the domain-side bookkeeping for a declined approval — logged separately from `approval_declined`, which only records the decision itself |
+| `policy_blocked` | `propose_outreach_send` | the policy engine blocks the job, logged *before* `PolicyBlocked` is raised, so the audit trail shows the block even though the caller sees an exception |
+
+`approval_superseded` in particular is easy to miss if you only read `careeros/operations/outreach.py`:
+it is emitted from inside `open_approval` in `careeros/operations/approvals.py`, not from the
+outreach module, because superseding is generic to every action that goes through `open_approval`,
+not specific to outreach.
 
 ## 7. The integrator's obligations
 

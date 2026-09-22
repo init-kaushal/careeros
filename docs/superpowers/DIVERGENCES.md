@@ -13,8 +13,8 @@ state.
 
 | Spec commitment | Source | Status |
 |---|---|---|
-| Workspace discovery via `--workspace` flag → `CAREEROS_WORKSPACE` env var → config file (three tiers) | Master §3 | **Partly closed by Phase 12a.** The env var tier is now implemented in `careeros/runtime/factory.py`'s `resolve_storage`, and honored by `careeros outreach send` and `open_agent_runtime`. `browse_cmd`, `browser_cmd`, `job_cmd`, `apply_cmd`, `research_cmd`, `discover_and_apply_cmd`, `resume_cmd`, and `workspace_cmd` still each carry their own private `_get_storage` helper (flag → config file only) that does not read `CAREEROS_WORKSPACE` — see the new entry below. |
-| Activity events carry a `reason` field ("why did CareerOS do that?") | Master §4.3 | **Partly closed by Phase 12a.** `careeros/operations/approvals.py`'s `resolve_approval` now populates it on `approval_granted` and `approval_declined` events, sourced from `ApprovalResult.reason`. Every other event type still leaves it `None`. |
+| Workspace discovery via `--workspace` flag → `CAREEROS_WORKSPACE` env var → config file (three tiers) | Master §3 | **Partly closed by Phase 12a.** The env var tier is now implemented in `careeros/runtime/factory.py`'s `resolve_storage`, and honored by `careeros outreach send`, `careeros outreach mark-referral-requested`, `careeros people update`, and `open_agent_runtime`. `browse_cmd`, `browser_cmd`, `job_cmd`, `apply_cmd`, `research_cmd`, `discover_and_apply_cmd`, `resume_cmd`, and `workspace_cmd` still each carry their own private `_get_storage` helper (flag → config file only) that does not read `CAREEROS_WORKSPACE` — see the new entry below. **The hazard this splits between:** a user or agent who follows `docs/agent-integration.md`'s advice to export `CAREEROS_WORKSPACE` while also having a workspace path saved in the global config (from `careeros onboard`) gets the three converged commands writing to one workspace tree and every other command writing to another — outreach history in one tree, applications and job data in the other, with no error or warning. Until convergence lands, pass an explicit workspace path everywhere, or keep the env var and the configured path pointed at the same directory. |
+| Activity events carry a `reason` field ("why did CareerOS do that?") | Master §4.3 | **Partly closed by Phase 12a.** `careeros/operations/approvals.py`'s `resolve_approval` now populates it on `approval_granted` and `approval_declined` events, sourced from `ApprovalResult.reason`. That source is itself populated on every path that produces one today: `LocalRuntime.request_approval` now supplies a short reason ("approved/declined at a terminal confirmation prompt") rather than leaving it `None`, so the CLI path carries a real reason too, not just automation/external-agent callers that already supplied one. Every other event type still leaves `reason` `None`. |
 | Activity event `status: "blocked"` | Master §4.3 | Never emitted — there's no policy engine yet to produce a blocked outcome (tracked as Phase 9) |
 | `cat jobs/shortlisted/<id>.json` shows full match reasoning | Master §7, Phase 2 exit condition | Score and reasoning are computed and displayed at browse time, then discarded — `Job` has no field to persist either one |
 | `careeros history` — a reader for the activity log | Master §8 | Never built. The audit trail exists (append-only, faithfully written) but has no command to read it back; `workspace status` shows only the most recent line |
@@ -70,3 +70,11 @@ state.
   `outreach_drafted` events where the previous inline command logged exactly 1 (at send time).
   Accepted as more truthful — each one genuinely was a draft — but it changes the activity log's
   shape for anyone counting drafts against sends.
+- **Quitting `careeros outreach send` at the review prompt now persists workspace state where it
+  previously persisted none.** Because `propose_outreach_send` already wrote the draft and opened
+  a `pending` `Approval` before the review loop runs, answering "q" leaves behind an
+  `outreach/<message_id>.json`, an `outreach_drafted` activity event, and — after the fix that
+  resolves this path the same way the declined path already did — a resolved (`declined`) approval
+  and an `outreach_send_declined` event. Before this branch, quitting the old inline command exited
+  before anything was written at all. This is a real change in what a quit leaves on disk, alongside
+  the two activity-log shape changes recorded above.

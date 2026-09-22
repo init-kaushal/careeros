@@ -117,6 +117,13 @@ in a later call, all without a live connection back to the first process. See
 Protocol, the approval schema, the error vocabulary, and a runnable two-process example. **Outreach
 send is drivable from an external agent session today; job apply is not yet** — that is Phase 12b.
 
+**Only `careeros outreach send`, `careeros outreach mark-referral-requested`, and `careeros people
+update` honor `CAREEROS_WORKSPACE`.** Every other command still resolves its workspace from an
+explicit `--workspace` flag or the config file saved by `careeros onboard`, never from the
+environment variable. Exporting `CAREEROS_WORKSPACE` while a different workspace is configured
+splits your data across two trees. Pass an explicit workspace path, or keep the two in sync, until
+this converges — see `docs/agent-integration.md` and `DIVERGENCES.md`.
+
 ## Workspace layout
 
 CareerOS uses a two-directory model: the framework (this repo) and your workspace (a directory you own).
@@ -200,7 +207,7 @@ LLM/browser/SMTP call mocked at the boundary.
 
 ## Status
 
-Ten phases shipped, in order:
+Eleven phases shipped, in order, plus the first half of a twelfth:
 
 1. **Workspace core** — onboarding, profile extraction, `StorageProvider` protocol, export/import
 2. **Job pipeline** — job schema, LLM-assisted scoring against your profile
@@ -217,6 +224,16 @@ Ten phases shipped, in order:
 10. **Job source connectors + deduplication** — `JobSource` connectors for Greenhouse and Lever,
     and a dedup engine behind a single `JobStore` creation seam that all four job-creation paths
     route through
+11. **Deep resume intelligence + resume variants** — evidence-backed skill extraction
+    (`careeros resume ingest`) where every stored skill carries a verified quote from the source
+    resume, plus `careeros resume variant` to render a job-tailored resume whose body is verbatim
+    spans of the master resume, with a self-validating sidecar recording provenance for every
+    bullet and header
+
+Phase 12a has also shipped: the outreach-send flow now runs through a runtime-agnostic
+`careeros/operations/` layer over a durable `Approval` record, so an agent session outside the CLI
+can propose a send in one process and a human's decision execute it in another — see "Agent
+integration" above. Job apply is not yet rewired onto that layer; that is Phase 12b.
 
 All workspace I/O goes through the `StorageProvider` protocol, so storage backends can be
 swapped without touching business logic. Every meaningful action — both outcomes of any
