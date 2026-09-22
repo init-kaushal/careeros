@@ -38,7 +38,13 @@ noting which phase closed it.
   `resume_cmd`, and `workspace_cmd` each keep a private `_get_storage` helper that duplicates logic
   also living in `careeros.runtime.factory.resolve_storage`, and none of them read
   `CAREEROS_WORKSPACE`. A deliberate deferral: converging them is mechanical but touches eight
-  command modules and their test suites, none of which Phase 12a otherwise opens.
+  command modules and their test suites, none of which Phase 12a otherwise opens. `outreach_cmd`
+  is the one worked example of the target shape: Phase 12a removed its `_get_storage` in favor of
+  `factory.resolve_storage`, so whoever converges the rest has a live pattern to copy. Two of the
+  eight — `apply_cmd` and `discover_and_apply_cmd` — are rewired onto the operations layer by
+  Phase 12b regardless, so that rewiring is the natural place to also pick up
+  `factory.resolve_storage`; this deferral shrinks to six on its own once 12b lands, and there is
+  no reason to converge those two here first.
 - `queue_only` (`careeros/operations/approval_queue.py`) is the only shipped approval callback for
   out-of-process use, and it only ever denies. A runtime wanting genuine asynchronous approval —
   propose now, a human approves on another machine hours later — has the durable `Approval` record

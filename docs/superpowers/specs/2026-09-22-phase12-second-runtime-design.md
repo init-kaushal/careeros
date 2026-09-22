@@ -45,7 +45,7 @@ job apply), and documents the resulting integration contract.
   which the Protocol already supports. A curated read surface overlaps the never-built
   `careeros jobs` / `careeros history` commands (`DIVERGENCES.md`) and belongs with
   those, not here.
-- Converging the five duplicated `_get_storage` helpers across the CLI onto the new
+- Converging the eight duplicated `_get_storage` helpers across the CLI onto the new
   factory discovery function. Only the two in-scope commands are rewired; see §10.
 - MCP, HTTP, or any network-facing transport. The integration is a documented Python
   entry point invoked from a shell.
@@ -596,10 +596,18 @@ prove the refactor changed nothing observable.
 Added to `DIVERGENCES.md` as deliberate, so a later review finds a decision rather than
 drift:
 
-- `browse_cmd`, `research_cmd`, `onboard`, and `resume_cmd` keep their private
+- `browse_cmd`, `browser_cmd`, `job_cmd`, `apply_cmd`, `research_cmd`,
+  `discover_and_apply_cmd`, `resume_cmd`, and `workspace_cmd` keep their private
   `_get_storage` helpers, now duplicating logic that also lives in
-  `factory.resolve_storage`. Converging them is mechanical but touches four command
+  `factory.resolve_storage`. Converging them is mechanical but touches eight command
   modules and their test suites, none of which this phase otherwise opens.
+  `outreach_cmd` is the one worked example of the target shape — Phase 12a removed its
+  `_get_storage` in favor of `factory.resolve_storage` — so whoever converges the rest
+  has a live pattern to copy rather than inventing one. Two of the eight,
+  `apply_cmd` and `discover_and_apply_cmd`, are rewired onto the operations layer by
+  Phase 12b anyway; that rewiring is the natural place to also pick up
+  `factory.resolve_storage`, so this deferral shrinks to six on its own once 12b
+  lands, and converging those two here first would just be redone work.
 - `queue_only` is the only shipped approval callback for out-of-process use. A runtime
   wanting genuine asynchronous approval (propose now, approve on another machine later)
   has the record it needs but no notification, expiry, or locking.
