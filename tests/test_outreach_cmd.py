@@ -39,10 +39,10 @@ def _setup_workspace(tmp_path, with_email=True):
 class TestOutreachSend:
     def test_declined_approval_logs_declined_and_does_not_send(self, tmp_path):
         ws_path = _setup_workspace(tmp_path)
-        with patch("careeros.cli.outreach_cmd.generate_outreach_message", return_value="Hi Jane..."), \
+        with patch("careeros.operations.outreach.generate_outreach_message", return_value="Hi Jane..."), \
              patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="a"), \
              patch("careeros.runtime.local.Confirm.ask", return_value=False), \
-             patch("careeros.cli.outreach_cmd.send_email") as mock_send:
+             patch("careeros.operations.outreach.send_email") as mock_send:
             result = runner.invoke(outreach_app, ["send", "--job", JOB_ID, "--person", PERSON_ID, "--workspace", ws_path])
 
         assert result.exit_code == 0
@@ -56,10 +56,10 @@ class TestOutreachSend:
 
     def test_approved_with_email_sends_and_logs_sent(self, tmp_path):
         ws_path = _setup_workspace(tmp_path, with_email=True)
-        with patch("careeros.cli.outreach_cmd.generate_outreach_message", return_value="Hi Jane..."), \
+        with patch("careeros.operations.outreach.generate_outreach_message", return_value="Hi Jane..."), \
              patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="a"), \
              patch("careeros.runtime.local.Confirm.ask", return_value=True), \
-             patch("careeros.cli.outreach_cmd.send_email") as mock_send:
+             patch("careeros.operations.outreach.send_email") as mock_send:
             result = runner.invoke(outreach_app, ["send", "--job", JOB_ID, "--person", PERSON_ID, "--workspace", ws_path])
 
         assert result.exit_code == 0
@@ -72,7 +72,8 @@ class TestOutreachSend:
         assert message.sent_at is not None
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         log_content = storage.read("activity/" + today + ".jsonl").decode()
-        assert "outreach_send_approved" in log_content
+        assert "approval_requested" in log_content
+        assert "approval_granted" in log_content
         assert "outreach_sent" in log_content
         # The recipient's email is PII beyond what's needed for audit --
         # entity_id already identifies the person; the address itself
@@ -81,10 +82,10 @@ class TestOutreachSend:
 
     def test_approved_without_email_blocks_send_and_does_not_log_failed(self, tmp_path):
         ws_path = _setup_workspace(tmp_path, with_email=False)
-        with patch("careeros.cli.outreach_cmd.generate_outreach_message", return_value="Hi Jane..."), \
+        with patch("careeros.operations.outreach.generate_outreach_message", return_value="Hi Jane..."), \
              patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="a"), \
              patch("careeros.runtime.local.Confirm.ask", return_value=True), \
-             patch("careeros.cli.outreach_cmd.send_email") as mock_send:
+             patch("careeros.operations.outreach.send_email") as mock_send:
             result = runner.invoke(outreach_app, ["send", "--job", JOB_ID, "--person", PERSON_ID, "--workspace", ws_path])
 
         assert result.exit_code == 1
@@ -92,15 +93,17 @@ class TestOutreachSend:
         storage = LocalFilesystemStorage(ws_path)
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         log_content = storage.read("activity/" + today + ".jsonl").decode()
-        assert "outreach_send_approved" in log_content
+        assert "approval_requested" in log_content
+        assert "approval_granted" in log_content
         assert "outreach_send_failed" not in log_content
+        assert "outreach_sent" not in log_content
 
     def test_smtp_failure_logs_send_failed(self, tmp_path):
         ws_path = _setup_workspace(tmp_path, with_email=True)
-        with patch("careeros.cli.outreach_cmd.generate_outreach_message", return_value="Hi Jane..."), \
+        with patch("careeros.operations.outreach.generate_outreach_message", return_value="Hi Jane..."), \
              patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="a"), \
              patch("careeros.runtime.local.Confirm.ask", return_value=True), \
-             patch("careeros.cli.outreach_cmd.send_email", side_effect=Exception("smtp error")):
+             patch("careeros.operations.outreach.send_email", side_effect=Exception("smtp error")):
             result = runner.invoke(outreach_app, ["send", "--job", JOB_ID, "--person", PERSON_ID, "--workspace", ws_path])
 
         assert result.exit_code == 1
@@ -113,7 +116,7 @@ class TestOutreachSend:
 
     def test_draft_generation_failure_exits_1(self, tmp_path):
         ws_path = _setup_workspace(tmp_path)
-        with patch("careeros.cli.outreach_cmd.generate_outreach_message", return_value=""):
+        with patch("careeros.operations.outreach.generate_outreach_message", return_value=""):
             result = runner.invoke(outreach_app, ["send", "--job", JOB_ID, "--person", PERSON_ID, "--workspace", ws_path])
         assert result.exit_code == 1
 
@@ -127,10 +130,10 @@ class TestOutreachSend:
             created_at=now, sent_at=now,
         ).save(storage)
 
-        with patch("careeros.cli.outreach_cmd.generate_outreach_message", return_value="Follow-up hi Jane..."), \
+        with patch("careeros.operations.outreach.generate_outreach_message", return_value="Follow-up hi Jane..."), \
              patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="a"), \
              patch("careeros.runtime.local.Confirm.ask", return_value=True), \
-             patch("careeros.cli.outreach_cmd.send_email") as mock_send:
+             patch("careeros.operations.outreach.send_email") as mock_send:
             result = runner.invoke(outreach_app, ["send", "--job", JOB_ID, "--person", PERSON_ID, "--workspace", ws_path])
 
         assert result.exit_code == 0
@@ -146,8 +149,8 @@ class TestOutreachSend:
         ws_path = _setup_workspace(tmp_path)
         storage = LocalFilesystemStorage(ws_path)
         PolicyConfig(blocked_companies=["Acme Corp"]).save(storage)
-        with patch("careeros.cli.outreach_cmd.generate_outreach_message") as mock_gen, \
-             patch("careeros.cli.outreach_cmd.send_email") as mock_send:
+        with patch("careeros.operations.outreach.generate_outreach_message") as mock_gen, \
+             patch("careeros.operations.outreach.send_email") as mock_send:
             result = runner.invoke(outreach_app, ["send", "--job", JOB_ID, "--person", PERSON_ID, "--workspace", ws_path])
 
         assert result.exit_code == 1
@@ -209,3 +212,41 @@ class TestPeopleUpdate:
         storage = LocalFilesystemStorage(ws_path)
         person = Person.load(storage, PERSON_ID)
         assert person.email == "jane@acme.com"
+
+
+class TestOutreachSendApprovalRecord:
+    def test_an_approved_send_leaves_an_executed_approval_record(self, tmp_path):
+        from careeros.core.models import Approval
+        from careeros.operations.approvals import EXECUTED, list_pending
+        ws_path = _setup_workspace(tmp_path)
+        with patch("careeros.operations.outreach.generate_outreach_message", return_value="Hi Jane..."), \
+             patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="a"), \
+             patch("careeros.runtime.local.Confirm.ask", return_value=True), \
+             patch("careeros.operations.outreach.send_email"):
+            result = runner.invoke(outreach_app, ["send", "--job", JOB_ID, "--person", PERSON_ID, "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        storage = LocalFilesystemStorage(ws_path)
+        approvals = [p for p in storage.list("approvals/") if p.endswith(".json")]
+        assert len(approvals) == 1
+        approval_id = approvals[0][len("approvals/"):-len(".json")]
+        approval = Approval.load(storage, approval_id)
+        assert approval.state == EXECUTED
+        assert approval.decided_by == "local"
+        assert list_pending(storage) == []
+
+    def test_regenerating_supersedes_and_sends_only_the_accepted_draft(self, tmp_path):
+        from careeros.core.models import OutreachMessage
+        ws_path = _setup_workspace(tmp_path)
+        drafts = ["first draft", "second draft"]
+        with patch("careeros.operations.outreach.generate_outreach_message", side_effect=drafts), \
+             patch("careeros.cli.outreach_cmd.Prompt.ask", side_effect=["r", "a"]), \
+             patch("careeros.runtime.local.Confirm.ask", return_value=True), \
+             patch("careeros.operations.outreach.send_email") as mock_send:
+            result = runner.invoke(outreach_app, ["send", "--job", JOB_ID, "--person", PERSON_ID, "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        # The draft that was on screen when the user accepted is the one sent.
+        assert mock_send.call_args[0][2] == "second draft"
+        storage = LocalFilesystemStorage(ws_path)
+        assert OutreachMessage.load(storage, MESSAGE_ID).draft_text == "second draft"
