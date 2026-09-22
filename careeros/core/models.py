@@ -87,6 +87,14 @@ class ResumeVariant(BaseModel):
     sections: list[VariantSection] = []
     dropped: list[str] = []
 
+    # sha256 of the rendered resume.pdf this sidecar describes, and of the master
+    # resume it was generated from. A sidecar that does not match its PDF is stale
+    # (a concurrent regeneration committed between the two writes); a master hash
+    # that no longer matches means the citations point into a file that has since
+    # been replaced. Both are detected at selection time rather than trusted.
+    pdf_sha256: str = ""
+    master_sha256: str = ""
+
     def entry_count(self) -> int:
         return sum(len(s.entries) for s in self.sections)
 

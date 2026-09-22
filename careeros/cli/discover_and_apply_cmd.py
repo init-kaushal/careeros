@@ -218,7 +218,23 @@ def discover_and_apply_cmd(
             continue
         resume_path = resume_choice.path
         if resume_choice.tailored:
-            rprint("Resume: tailored for " + p["company"] + ".")
+            if resume_choice.variant is None:
+                # Unattended, so this cannot offer to regenerate and must not
+                # print an entry count it does not have: the sidecar is
+                # missing, corrupt, or describes a different document.
+                rprint("Resume: tailored for " + p["company"]
+                       + ", evidence record unavailable — run 'careeros resume variant "
+                       + "--job " + job_id + "' to regenerate it.")
+            else:
+                rprint("Resume: tailored for " + p["company"] + " — "
+                       + str(resume_choice.variant.entry_count())
+                       + " evidence-backed entries.")
+                if resume_choice.stale_master:
+                    rprint("Resume: generated from a superseded master resume, so its "
+                           + "cited lines no longer match "
+                           + resume_choice.variant.source_file
+                           + " — run 'careeros resume variant --job " + job_id
+                           + "' to regenerate it.")
         else:
             rprint("Resume: " + resume_choice.storage_path + " — NOT tailored to this job.")
 

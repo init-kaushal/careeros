@@ -4,10 +4,36 @@ from typer.testing import CliRunner
 
 from careeros.cli.apply_cmd import apply_app
 from careeros.config import GlobalConfig
-from careeros.core.models import Goals, Job, PolicyConfig, Profile, Skills
+from careeros.core.models import (
+    Evidence,
+    Goals,
+    Job,
+    PolicyConfig,
+    Profile,
+    ResumeVariant,
+    Skills,
+    VariantSection,
+)
+from careeros.core.resume_select import ResumeChoice
 from careeros.runtime.base import ApprovalResult
 
 runner = CliRunner()
+
+
+def _unwrapped(output: str) -> str:
+    """rich hard-wraps console output at the terminal width, splitting even a
+    quoted command. Collapse it before matching on a phrase."""
+    return " ".join(output.split())
+
+
+def _make_variant():
+    return ResumeVariant(
+        job_id="acme-sre-abc1", job_company="Acme", job_title="Senior SRE",
+        generated_at="2026-09-22T00:00:00+00:00", source_file="resumes/master.md",
+        sections=[VariantSection(heading="Skills", entries=[
+            Evidence(quote="Python, Go", line=2, source_file="resumes/master.md")
+        ])],
+    )
 
 
 def _make_job(url="https://boards.greenhouse.io/acme/jobs/123"):
@@ -414,3 +440,57 @@ class TestApplyResumeSelection:
         assert "tailored for this job" in result.output
         assert "NOT tailored" not in result.output
         runtime.storage.resolve.assert_any_call("resumes/versions/acme-sre-abc1/resume.pdf")
+
+    def _run_with_choice(self, choice):
+        runtime = MagicMock()
+        runtime.request_approval.return_value = ApprovalResult(approved=False)
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+             patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
+             patch("careeros.cli.apply_cmd.select_resume", return_value=choice), \
+             patch("careeros.cli.apply_cmd.PolicyConfig.load", return_value=PolicyConfig()), \
+             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Dear Acme,"), \
+             patch("careeros.cli.apply_cmd.Prompt.ask", return_value="q"):
+            return runner.invoke(apply_app, ["acme-sre-abc1"])
+
+    def test_entry_count_is_announced_when_the_sidecar_is_valid(self, tmp_path):
+        result = self._run_with_choice(ResumeChoice(
+            path=str(tmp_path / "resume.pdf"),
+            storage_path="resumes/versions/acme-sre-abc1/resume.pdf",
+            tailored=True,
+            variant=_make_variant(),
+        ))
+        assert "tailored for this job" in result.output
+        assert "1 evidence-backed entries" in result.output
+        assert "superseded" not in result.output
+
+    def test_no_entry_count_is_announced_when_the_sidecar_is_unusable(self, tmp_path):
+        # A sidecar whose pdf_sha256 does not match the PDF describes a
+        # different document, so select_resume discards it. Printing a count
+        # from it would be a claim about a file this is not.
+        result = self._run_with_choice(ResumeChoice(
+            path=str(tmp_path / "resume.pdf"),
+            storage_path="resumes/versions/acme-sre-abc1/resume.pdf",
+            tailored=True,
+            variant=None,
+        ))
+        assert "tailored for this job" in result.output
+        assert "evidence-backed entries" not in result.output
+        assert "unavailable" in result.output
+        # rich hard-wraps the line, so match against the unwrapped form.
+        assert "careeros resume variant --job acme-sre-abc1" in _unwrapped(result.output)
+
+    def test_a_superseded_master_is_warned_about(self, tmp_path):
+        result = self._run_with_choice(ResumeChoice(
+            path=str(tmp_path / "resume.pdf"),
+            storage_path="resumes/versions/acme-sre-abc1/resume.pdf",
+            tailored=True,
+            variant=_make_variant(),
+            stale_master=True,
+        ))
+        assert "superseded master" in result.output
+        assert "resumes/master.md" in _unwrapped(result.output)
+        assert "careeros resume variant --job acme-sre-abc1" in _unwrapped(result.output)

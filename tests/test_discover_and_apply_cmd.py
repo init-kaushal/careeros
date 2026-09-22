@@ -1,3 +1,4 @@
+import hashlib
 import json
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -8,7 +9,17 @@ from typer.testing import CliRunner
 
 from careeros.cli.discover_and_apply_cmd import discover_and_apply_app
 from careeros.core.job_store import JobStore
-from careeros.core.models import AutomationPolicy, Job, PolicyConfig, Profile, ResumeVariant, Skill, Skills
+from careeros.core.models import (
+    AutomationPolicy,
+    Evidence,
+    Job,
+    PolicyConfig,
+    Profile,
+    ResumeVariant,
+    Skill,
+    Skills,
+    VariantSection,
+)
 from careeros.sources.ats import ATSFetchError
 from careeros.sources.base import Posting
 from careeros.storage.filesystem import LocalFilesystemStorage
@@ -56,6 +67,24 @@ def _mock_launch_counting(counter: list, mock_page=None):
 
 def _posting(company="Acme", title="Senior SRE", url="https://boards.greenhouse.io/acme/jobs/1"):
     return {"source_board": "linkedin", "title": title, "company": company, "location": "SF", "url": url}
+
+
+def _write_variant_sidecar(storage, job_id, pdf=b"%PDF-tailored", sidecar_pdf=None,
+                           master=b"SKILLS\nPython, Go\n"):
+    """Write a tailored variant. `sidecar_pdf` defaults to the stored PDF;
+    pass different bytes to simulate a sidecar describing another run's
+    document."""
+    storage.atomic_write(ResumeVariant.pdf_path(job_id), pdf)
+    doc = ResumeVariant(
+        job_id=job_id, job_company="Acme", job_title="Senior SRE",
+        generated_at=_NOW, source_file="resumes/master.md",
+        sections=[VariantSection(heading="Skills", entries=[
+            Evidence(quote="Python, Go", line=2, source_file="resumes/master.md")
+        ])],
+        pdf_sha256=hashlib.sha256(sidecar_pdf if sidecar_pdf is not None else pdf).hexdigest(),
+        master_sha256=hashlib.sha256(master).hexdigest(),
+    )
+    storage.atomic_write(ResumeVariant.json_path(job_id), doc.model_dump_json().encode())
 
 
 class TestDiscoverAndApplyCmd:
@@ -899,3 +928,68 @@ class TestDiscoverAndApplyCmd:
         assert len(set(resume_paths)) == 2, "both jobs received the same resume path"
         assert storage.resolve(ResumeVariant.pdf_path(job_ids["Acme"])) in resume_paths
         assert storage.resolve("resumes/versions/resume.pdf") in resume_paths
+
+    @staticmethod
+    def _one_eligible_job(tmp_path):
+        """A workspace with one eligible Acme posting whose job id is pinned,
+        plus a callable that performs the auto-apply run."""
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5,
+                                  boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        storage = LocalFilesystemStorage(ws_path)
+        job_id = "acme-job-id"
+
+        def run():
+            mock_filler = MagicMock()
+            mock_filler.can_handle.return_value = True
+            mock_filler.fill.return_value = True
+            mock_filler.platform = "Greenhouse"
+            with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                       return_value={"linkedin": True}), \
+                 patch("careeros.cli.discover_and_apply_cmd.SCRAPERS",
+                       {"linkedin": MagicMock(search=MagicMock(return_value=[_posting()]))}), \
+                 patch("careeros.cli.discover_and_apply_cmd.launch_browser",
+                       _mock_launch(MagicMock())), \
+                 patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
+                 patch("careeros.cli.discover_and_apply_cmd.score_job",
+                       return_value={"score": 95, "reasoning": "great"}), \
+                 patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter",
+                       return_value="Cover letter"), \
+                 patch("careeros.sources.base.make_job_id", return_value=job_id), \
+                 patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+                return runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+
+        return storage, job_id, run
+
+    def test_auto_apply_announces_the_entry_count_from_a_valid_sidecar(self, tmp_path):
+        storage, job_id, run = self._one_eligible_job(tmp_path)
+        storage.atomic_write("resumes/master.md", b"SKILLS\nPython, Go\n")
+        _write_variant_sidecar(storage, job_id, master=b"SKILLS\nPython, Go\n")
+        result = run()
+        assert result.exit_code == 0
+        assert "1 evidence-backed entries" in result.output
+        assert "superseded" not in result.output
+
+    def test_auto_apply_announces_no_entry_count_when_the_sidecar_is_unusable(self, tmp_path):
+        # The sidecar's pdf_sha256 does not match the stored PDF, so it
+        # describes a different document. The tailored PDF is still uploaded
+        # — degrading to the untailored fallback would be worse — but no
+        # entry count may be claimed for it.
+        storage, job_id, run = self._one_eligible_job(tmp_path)
+        _write_variant_sidecar(storage, job_id, pdf=b"%PDF-run-A", sidecar_pdf=b"%PDF-run-B")
+        result = run()
+        assert result.exit_code == 0
+        assert "evidence-backed entries" not in result.output
+        assert "evidence record unavailable" in result.output
+        # Still applied, still with the tailored file: unattended runs must
+        # degrade, never skip the job.
+        assert Job.load(storage, job_id).stage == "applied"
+
+    def test_auto_apply_warns_when_the_variant_cites_a_superseded_master(self, tmp_path):
+        storage, job_id, run = self._one_eligible_job(tmp_path)
+        storage.atomic_write("resumes/master.md", b"SKILLS\nRust, Zig\n")
+        _write_variant_sidecar(storage, job_id, master=b"SKILLS\nPython, Go\n")
+        result = run()
+        assert result.exit_code == 0
+        assert "superseded master resume" in result.output
+        assert Job.load(storage, job_id).stage == "applied"

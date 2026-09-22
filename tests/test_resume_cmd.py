@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import datetime, timezone
 from unittest.mock import patch
@@ -9,6 +10,7 @@ from careeros.cli.main import app
 from careeros.core.models import Evidence, Job, ResumeVariant, Skill, Skills
 from careeros.core.models import Evidence as _Ev
 from careeros.core.models import VariantSection
+from careeros.core.resume_select import select_resume
 from careeros.render.resume_pdf import RendererUnavailable
 from careeros.skills.resume_ingest import IngestResult
 from careeros.skills.resume_variant import VariantResult
@@ -530,3 +532,62 @@ def test_pdf_is_written_before_its_evidence_sidecar(tmp_path):
         ResumeVariant.pdf_path(job_id),
         ResumeVariant.json_path(job_id),
     ], variant_writes
+
+
+def test_a_freshly_generated_variant_validates_clean_on_both_hashes(tmp_path):
+    ws, storage = _workspace(tmp_path)
+    job_id = _job(storage)
+    sel, rnd = _patches(_variant_result(), pdf=b"%PDF-1.4 fresh")
+    with sel, rnd:
+        result = runner.invoke(app, ["resume", "variant", "--job", job_id, "--workspace", ws])
+    assert result.exit_code == 0
+
+    sidecar = ResumeVariant.model_validate_json(
+        storage.read(ResumeVariant.json_path(job_id)).decode()
+    )
+    assert sidecar.pdf_sha256 == hashlib.sha256(b"%PDF-1.4 fresh").hexdigest()
+    assert sidecar.master_sha256 == hashlib.sha256(b"SKILLS\nPython, Go\n").hexdigest()
+
+    choice = select_resume(storage, job_id)
+    assert choice.tailored is True
+    assert choice.variant is not None
+    assert choice.stale_master is False
+
+
+def test_a_variant_is_flagged_stale_after_the_master_is_re_ingested(tmp_path):
+    # The whole point of master_sha256: `resume ingest` replaces the master
+    # and leaves every variant's citations pointing at lines of a document
+    # that no longer exists.
+    ws, storage = _workspace(tmp_path)
+    job_id = _job(storage)
+    sel, rnd = _patches(_variant_result())
+    with sel, rnd:
+        runner.invoke(app, ["resume", "variant", "--job", job_id, "--workspace", ws])
+    assert select_resume(storage, job_id).stale_master is False
+
+    new_resume = tmp_path / "replacement.md"
+    new_resume.write_text("SKILLS\nRust, Zig\n")
+    with patch("careeros.cli.resume_cmd.ingest_resume", return_value=_result(names=("Rust",))):
+        result = runner.invoke(app, ["resume", "ingest", str(new_resume), "--workspace", ws])
+    assert result.exit_code == 0
+
+    choice = select_resume(storage, job_id)
+    assert choice.tailored is True
+    assert choice.variant is not None
+    assert choice.stale_master is True
+
+
+def test_a_concurrent_regeneration_of_the_pdf_invalidates_the_sidecar(tmp_path):
+    # Run A commits its PDF, run B completes fully, then run A commits its
+    # sidecar: the stored sidecar describes entries absent from the stored
+    # PDF. Reproduced here by replacing the PDF under a written sidecar.
+    ws, storage = _workspace(tmp_path)
+    job_id = _job(storage)
+    sel, rnd = _patches(_variant_result())
+    with sel, rnd:
+        runner.invoke(app, ["resume", "variant", "--job", job_id, "--workspace", ws])
+
+    storage.atomic_write(ResumeVariant.pdf_path(job_id), b"%PDF-from-another-run")
+    choice = select_resume(storage, job_id)
+    assert choice.tailored is True
+    assert choice.variant is None

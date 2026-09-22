@@ -103,10 +103,24 @@ def apply_cmd(
         raise typer.Exit(1)
 
     if resume_choice.tailored:
-        detail = ""
-        if resume_choice.variant is not None:
-            detail = " — " + str(resume_choice.variant.entry_count()) + " evidence-backed entries"
-        rprint("[green]Resume: tailored for this job" + detail + "[/green]")
+        if resume_choice.variant is None:
+            # No entry count is printed: the sidecar is missing, corrupt, or
+            # describes a different document, so any number here would be a
+            # claim about a file this one is not.
+            rprint("[yellow]Resume: tailored for this job, but its evidence record is "
+                   + "unavailable — the upload is unchanged, only its provenance is "
+                   + "unknown. Run 'careeros resume variant --job " + job_id
+                   + "' to regenerate it.[/yellow]")
+        else:
+            rprint("[green]Resume: tailored for this job — "
+                   + str(resume_choice.variant.entry_count())
+                   + " evidence-backed entries[/green]")
+            if resume_choice.stale_master:
+                rprint("[yellow]This variant was generated from a superseded master "
+                       + "resume, so its cited lines no longer match "
+                       + resume_choice.variant.source_file
+                       + ". Run 'careeros resume variant --job " + job_id
+                       + "' to regenerate it.[/yellow]")
     else:
         rprint("[yellow]Resume: " + resume_choice.storage_path
                + " — NOT tailored to this job. Run 'careeros resume variant --job "

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -156,7 +157,8 @@ def variant(
                + ". Run 'careeros resume ingest <path>' first.[/red]")
         raise typer.Exit(1)
 
-    master_text = runtime.storage.read(_MASTER).decode()
+    master_bytes = runtime.storage.read(_MASTER)
+    master_text = master_bytes.decode()
     skills = Skills.load_or_empty(runtime.storage)
     profile = Profile.load_or_empty(runtime.storage)
     jd_text = (job_record.description or "")[:_JD_CAP]
@@ -190,6 +192,10 @@ def variant(
         source_file=_MASTER,
         sections=list(result.sections),
         dropped=list(result.dropped),
+        # Of the master exactly as read above, so a later `resume ingest`
+        # replacing it is detectable at selection time instead of leaving the
+        # citations silently pointing at lines of a different document.
+        master_sha256=hashlib.sha256(master_bytes).hexdigest(),
     )
 
     try:
@@ -205,6 +211,13 @@ def variant(
         rprint("[red]Rendering failed: " + str(exc) + "[/red]")
         _record_variant(runtime, job, "Rendering failed: " + type(exc).__name__, "failed")
         raise typer.Exit(1)
+
+    # Of the exact bytes written below, so a sidecar that ends up describing a
+    # different document — two concurrent runs interleaving their two writes —
+    # is detectable rather than trusted.
+    variant_doc = variant_doc.model_copy(
+        update={"pdf_sha256": hashlib.sha256(pdf_bytes).hexdigest()}
+    )
 
     pdf_path = ResumeVariant.pdf_path(job)
     json_path = ResumeVariant.json_path(job)
