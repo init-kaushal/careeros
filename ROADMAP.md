@@ -91,7 +91,7 @@ would save a download and is worth revisiting.
 **What it builds:**
 - Resume variant generation: given a job's description and the evidence-backed skill set, generate a job-tailored resume variant, stored under `resumes/versions/`, that `apply` can select instead of always using the same file
 
-**Exit condition (met):** `careeros apply --job <id>` picks a resume variant tailored to that job's description rather than always using the same file; `cat resumes/versions/<job_id>/variant.json` shows which line of `resumes/master.md` backs each body bullet of the rendered document, and records the contact header — the one part not backed by a verified span — as it was rendered.
+**Exit condition (met):** `careeros apply --job <id>` picks a resume variant tailored to that job's description rather than always using the same file; `cat resumes/versions/<job_id>/variant.json` shows which line of `resumes/master.md` backs each body bullet of the rendered document, and records everything else it renders: the contact header as it came from your profile, and each section heading, which comes from a fixed five-value allowlist rather than from a verified span.
 
 ---
 
