@@ -47,10 +47,32 @@ def test_no_print_calls(path):
 
 
 @pytest.mark.parametrize("path", _modules(), ids=lambda p: p.name)
+def test_no_input_calls(path):
+    tree = ast.parse(path.read_text())
+    called = [
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    ]
+    assert "input" not in called, path.name + " calls input()"
+
+
+@pytest.mark.parametrize("path", _modules(), ids=lambda p: p.name)
 def test_no_sys_exit_calls(path):
-    source = path.read_text()
-    assert "sys.exit" not in source
-    assert "SystemExit" not in source
+    tree = ast.parse(path.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute):
+                if node.func.attr == "exit" and isinstance(node.func.value, ast.Name) and node.func.value.id == "sys":
+                    raise AssertionError(path.name + " calls sys.exit()")
+            elif isinstance(node.func, ast.Name):
+                if node.func.id == "SystemExit":
+                    raise AssertionError(path.name + " raises SystemExit()")
+        elif isinstance(node, ast.Raise):
+            if isinstance(node.exc, ast.Name) and node.exc.id == "SystemExit":
+                raise AssertionError(path.name + " raises SystemExit")
+            elif isinstance(node.exc, ast.Call) and isinstance(node.exc.func, ast.Name) and node.exc.func.id == "SystemExit":
+                raise AssertionError(path.name + " raises SystemExit()")
 
 
 def test_queue_only_denies_by_default_with_a_reason():
