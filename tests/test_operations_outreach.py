@@ -47,7 +47,7 @@ def _runtime(tmp_path, with_email=True, session_id="sess-1"):
 
 def _propose(runtime, draft=DRAFT):
     with patch("careeros.operations.outreach.generate_outreach_message", return_value=draft):
-        return propose_outreach_send(runtime, JOB_ID, PERSON_ID)
+        return propose_outreach_send(runtime, JOB_ID, PERSON_ID, action_label="outreach")
 
 
 def _log(storage):
@@ -89,7 +89,7 @@ class TestProposeOutreachSend:
         runtime = _runtime(tmp_path)
         with pytest.raises(EntityNotFound):
             with patch("careeros.operations.outreach.generate_outreach_message", return_value=DRAFT):
-                propose_outreach_send(runtime, JOB_ID, "nobody")
+                propose_outreach_send(runtime, JOB_ID, "nobody", action_label="outreach")
 
     def test_an_empty_draft_raises_draft_failed(self, tmp_path):
         runtime = _runtime(tmp_path)
@@ -101,7 +101,7 @@ class TestProposeOutreachSend:
         PolicyConfig(blocked_companies=["Acme Corp"]).save(runtime.storage)
         with patch("careeros.operations.outreach.generate_outreach_message") as mock_gen:
             with pytest.raises(PolicyBlocked) as exc:
-                propose_outreach_send(runtime, JOB_ID, PERSON_ID)
+                propose_outreach_send(runtime, JOB_ID, PERSON_ID, action_label="outreach")
         assert exc.value.rule == "blocked_company:Acme Corp"
         mock_gen.assert_not_called()
         assert "policy_blocked" in _log(runtime.storage)
@@ -170,7 +170,7 @@ class TestExecuteOutreachSend:
         _approve(runtime, proposal.approval_id)
 
         with patch("careeros.operations.outreach.send_email") as mock_send:
-            result = execute_outreach_send(runtime, proposal.approval_id)
+            result = execute_outreach_send(runtime, proposal.approval_id, action_label="outreach")
 
         mock_send.assert_called_once_with(
             "jane@acme.com", "Regarding Senior SRE at Acme Corp", DRAFT
@@ -193,7 +193,7 @@ class TestExecuteOutreachSend:
         approval.model_copy(update={"state": state}).save(runtime.storage)
         with patch("careeros.operations.outreach.send_email") as mock_send:
             with pytest.raises(ApprovalNotGranted):
-                execute_outreach_send(runtime, proposal.approval_id)
+                execute_outreach_send(runtime, proposal.approval_id, action_label="outreach")
         mock_send.assert_not_called()
         # Verify the approval state was not mutated by the refusal.
         assert Approval.load(runtime.storage, proposal.approval_id).state == state
@@ -203,9 +203,9 @@ class TestExecuteOutreachSend:
         proposal = _propose(runtime)
         _approve(runtime, proposal.approval_id)
         with patch("careeros.operations.outreach.send_email") as mock_send:
-            execute_outreach_send(runtime, proposal.approval_id)
+            execute_outreach_send(runtime, proposal.approval_id, action_label="outreach")
             with pytest.raises(ApprovalNotGranted):
-                execute_outreach_send(runtime, proposal.approval_id)
+                execute_outreach_send(runtime, proposal.approval_id, action_label="outreach")
         assert mock_send.call_count == 1
 
     def test_refuses_when_the_draft_changed_after_approval(self, tmp_path):
@@ -218,7 +218,7 @@ class TestExecuteOutreachSend:
 
         with patch("careeros.operations.outreach.send_email") as mock_send:
             with pytest.raises(ArtifactChanged):
-                execute_outreach_send(runtime, proposal.approval_id)
+                execute_outreach_send(runtime, proposal.approval_id, action_label="outreach")
         mock_send.assert_not_called()
 
     def test_refuses_without_a_recipient_email(self, tmp_path):
@@ -227,7 +227,7 @@ class TestExecuteOutreachSend:
         _approve(runtime, proposal.approval_id)
         with patch("careeros.operations.outreach.send_email") as mock_send:
             with pytest.raises(MissingRecipient) as exc:
-                execute_outreach_send(runtime, proposal.approval_id)
+                execute_outreach_send(runtime, proposal.approval_id, action_label="outreach")
         assert exc.value.person_name == "Jane Doe"
         mock_send.assert_not_called()
         # The approval is left approved, not failed: nothing was attempted, so
@@ -242,7 +242,7 @@ class TestExecuteOutreachSend:
         with patch("careeros.operations.outreach.send_email",
                    side_effect=RuntimeError("smtp down")):
             with pytest.raises(SendFailed):
-                execute_outreach_send(runtime, proposal.approval_id)
+                execute_outreach_send(runtime, proposal.approval_id, action_label="outreach")
 
         assert OutreachMessage.load(runtime.storage, MESSAGE_ID).send_state == "failed"
         approval = Approval.load(runtime.storage, proposal.approval_id)
@@ -258,7 +258,7 @@ class TestExecuteOutreachSend:
         approval.model_copy(update={"payload": {}}).save(runtime.storage)
         with patch("careeros.operations.outreach.send_email") as mock_send:
             with pytest.raises(MalformedApproval):
-                execute_outreach_send(runtime, proposal.approval_id)
+                execute_outreach_send(runtime, proposal.approval_id, action_label="outreach")
         mock_send.assert_not_called()
 
     def test_mark_executed_happens_before_the_send(self, tmp_path):
@@ -277,7 +277,7 @@ class TestExecuteOutreachSend:
 
         with patch("careeros.operations.outreach.send_email",
                    side_effect=check_approval_executed):
-            execute_outreach_send(runtime, proposal.approval_id)
+            execute_outreach_send(runtime, proposal.approval_id, action_label="outreach")
 
     def test_subject_is_bound_to_the_approval_not_recomputed_from_the_job(self, tmp_path):
         """Editing the job after approval must not change the sent subject.
@@ -296,7 +296,7 @@ class TestExecuteOutreachSend:
         job.model_copy(update={"title": "A Completely Different Title"}).save(runtime.storage)
 
         with patch("careeros.operations.outreach.send_email") as mock_send:
-            execute_outreach_send(runtime, proposal.approval_id)
+            execute_outreach_send(runtime, proposal.approval_id, action_label="outreach")
 
         mock_send.assert_called_once_with(
             "jane@acme.com", "Regarding Senior SRE at Acme Corp", DRAFT
@@ -315,7 +315,7 @@ class TestExecuteOutreachSend:
         runtime.storage.delete("jobs/" + JOB_ID + ".json")
 
         with patch("careeros.operations.outreach.send_email") as mock_send:
-            result = execute_outreach_send(runtime, proposal.approval_id)
+            result = execute_outreach_send(runtime, proposal.approval_id, action_label="outreach")
 
         mock_send.assert_called_once_with(
             "jane@acme.com", "Regarding Senior SRE at Acme Corp", DRAFT
@@ -329,7 +329,7 @@ class TestDeclineOutreachSend:
         proposal = _propose(runtime)
         resolve_approval(runtime, proposal.approval_id,
                          ApprovalResult(approved=False), action_label="outreach")
-        decline_outreach_send(runtime, proposal.approval_id)
+        decline_outreach_send(runtime, proposal.approval_id, action_label="outreach")
         assert OutreachMessage.load(runtime.storage, MESSAGE_ID).send_state == "declined"
         assert "outreach_send_declined" in _log(runtime.storage)
 
@@ -338,7 +338,7 @@ class TestDeclineOutreachSend:
         proposal = _propose(runtime)
         _approve(runtime, proposal.approval_id)
         with pytest.raises(ApprovalNotGranted):
-            decline_outreach_send(runtime, proposal.approval_id)
+            decline_outreach_send(runtime, proposal.approval_id, action_label="outreach")
 
     def test_decline_works_when_the_job_file_is_missing(self, tmp_path):
         """Decline is pure bookkeeping and does not need the job."""
@@ -348,6 +348,26 @@ class TestDeclineOutreachSend:
                          ApprovalResult(approved=False), action_label="outreach")
         # Delete the job file to verify decline doesn't try to load it.
         runtime.storage.delete("jobs/" + JOB_ID + ".json")
-        decline_outreach_send(runtime, proposal.approval_id)
+        decline_outreach_send(runtime, proposal.approval_id, action_label="outreach")
         assert OutreachMessage.load(runtime.storage, MESSAGE_ID).send_state == "declined"
         assert "outreach_send_declined" in _log(runtime.storage)
+
+
+class TestDeclineDoesNotNeedThePerson:
+    def test_declines_with_the_person_record_deleted(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        resolve_approval(runtime, proposal.approval_id,
+                         ApprovalResult(approved=False), action_label="outreach")
+        runtime.storage.delete("people/" + PERSON_ID + ".json")
+        decline_outreach_send(runtime, proposal.approval_id, action_label="outreach")
+        assert OutreachMessage.load(runtime.storage, MESSAGE_ID).send_state == "declined"
+        assert "outreach_send_declined" in _log(runtime.storage)
+
+
+class TestActionLabelIsRequired:
+    def test_propose_requires_action_label(self, tmp_path):
+        import pytest
+        runtime = _runtime(tmp_path)
+        with pytest.raises(TypeError):
+            propose_outreach_send(runtime, JOB_ID, PERSON_ID)

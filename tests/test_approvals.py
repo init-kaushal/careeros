@@ -241,3 +241,33 @@ class TestProtocolDeclaresRuntimeName:
     def test_agent_runtime_name_is_part_of_the_protocol(self):
         from careeros.runtime.base import AgentRuntime
         assert "agent_runtime_name" in AgentRuntime.__annotations__
+
+
+class TestApprovalStateIsConstrained:
+    def test_an_unknown_state_is_rejected_on_load(self, tmp_path):
+        import pytest
+        from pydantic import ValidationError
+        storage = _storage(tmp_path)
+        storage.atomic_write(
+            "approvals/bad.json",
+            b'{"id":"bad","action":"send_outreach","summary":"s",'
+            b'"state":"banana","created_at":"2026-09-22T00:00:00+00:00"}',
+        )
+        with pytest.raises(ValidationError):
+            Approval.load(storage, "bad")
+
+
+class TestListPendingExceptionNarrowing:
+    def test_a_corrupt_record_is_skipped_but_an_unexpected_error_is_not_swallowed(self, tmp_path, monkeypatch):
+        import pytest
+        runtime = _runtime(tmp_path)
+        pending = _open(runtime)
+        runtime.storage.atomic_write("approvals/garbage.json", b"{not json")
+        assert [a.id for a in list_pending(runtime.storage)] == [pending.id]
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("unexpected")
+
+        monkeypatch.setattr(Approval, "load", classmethod(boom))
+        with pytest.raises(RuntimeError):
+            list_pending(runtime.storage)

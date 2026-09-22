@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 from careeros.browser.boards import BOARD_NAMES
 from careeros.storage.interface import StorageProvider
@@ -352,7 +354,7 @@ class Approval(BaseModel):
     id: str
     action: str
     summary: str
-    state: str = "pending"
+    state: Literal["pending", "approved", "declined", "superseded", "executed", "failed"] = "pending"
     entity_type: str | None = None
     entity_id: str | None = None
     payload: dict[str, str] = Field(default_factory=dict)

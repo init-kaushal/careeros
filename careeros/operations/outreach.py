@@ -70,7 +70,7 @@ def propose_outreach_send(
     person_id: str,
     *,
     model: str | None = None,
-    action_label: str = "outreach",
+    action_label: str,
 ) -> OutreachProposal:
     """Draft an outreach email and record a pending approval for sending it.
 
@@ -172,7 +172,7 @@ def _load_message_and_person(
 
 
 def execute_outreach_send(
-    runtime: AgentRuntime, approval_id: str, *, action_label: str = "outreach",
+    runtime: AgentRuntime, approval_id: str, *, action_label: str,
 ) -> OutreachResult:
     """Send the email an approved approval authorized, and nothing else.
 
@@ -236,22 +236,36 @@ def execute_outreach_send(
 
 
 def decline_outreach_send(
-    runtime: AgentRuntime, approval_id: str, *, action_label: str = "outreach",
+    runtime: AgentRuntime, approval_id: str, *, action_label: str,
 ) -> None:
     """Record that a declined approval's message will not be sent.
 
     Lives here rather than inside resolve_approval because approvals.py is
     deliberately action-agnostic — it knows approval states and nothing about
     outreach messages. Callers branch on the decision they already hold.
+
+    Loads only the message, not the person: this is pure bookkeeping, and a
+    missing people/<id>.json must not turn "record that the user said no"
+    into an error. The person's name is used in the activity summary when
+    the record is present; the raw person id is used otherwise, so a decline
+    can always be recorded.
     """
     approval = require_state(runtime.storage, approval_id, DECLINED)
     message_id = payload_value(approval, "message_id")
     person_id = payload_value(approval, "person_id")
-    message, person = _load_message_and_person(runtime, message_id, person_id)
+    try:
+        message = OutreachMessage.load(runtime.storage, message_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise EntityNotFound("Outreach message not found.") from exc
+
+    try:
+        recipient = Person.load(runtime.storage, person_id).name
+    except (FileNotFoundError, ValueError):
+        recipient = person_id
 
     message.model_copy(update={"send_state": "declined"}).save(runtime.storage)
     runtime.record_activity(runtime.new_event(
         "outreach_send_declined", action_label,
-        "Send declined for outreach to " + person.name,
+        "Send declined for outreach to " + recipient,
         entity_type="outreach_message", entity_id=message_id,
     ))

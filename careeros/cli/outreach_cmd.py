@@ -49,7 +49,7 @@ def send(
     runtime = _open_runtime(workspace)
 
     try:
-        proposal = propose_outreach_send(runtime, job, person, model=model)
+        proposal = propose_outreach_send(runtime, job, person, model=model, action_label="outreach")
 
         regenerations = 0
         while True:
@@ -64,12 +64,12 @@ def send(
                     ApprovalResult(approved=False, reason="aborted at review"),
                     action_label="outreach",
                 )
-                decline_outreach_send(runtime, proposal.approval_id)
+                decline_outreach_send(runtime, proposal.approval_id, action_label="outreach")
                 rprint("Aborted.")
                 raise typer.Exit(0)
             if choice == "r":
                 regenerations += 1
-                proposal = propose_outreach_send(runtime, job, person, model=model)
+                proposal = propose_outreach_send(runtime, job, person, model=model, action_label="outreach")
                 continue
             break
 
@@ -88,17 +88,13 @@ def send(
         resolve_approval(runtime, proposal.approval_id, result, action_label="outreach")
 
         if not result.approved:
-            decline_outreach_send(runtime, proposal.approval_id)
+            decline_outreach_send(runtime, proposal.approval_id, action_label="outreach")
             rprint("Aborted.")
             raise typer.Exit(0)
 
-        outcome = execute_outreach_send(runtime, proposal.approval_id)
+        outcome = execute_outreach_send(runtime, proposal.approval_id, action_label="outreach")
     except MissingRecipient as exc:
-        rprint(
-            "[red]No email on file for " + exc.person_name
-            + ". Run 'careeros people update " + person
-            + " --email <address>' and retry.[/red]"
-        )
+        rprint("[red]" + str(exc) + "[/red]")
         raise typer.Exit(1)
     except OperationError as exc:
         rprint("[red]" + str(exc) + "[/red]")

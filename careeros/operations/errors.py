@@ -30,7 +30,11 @@ class DraftFailed(OperationError):
 
 class MissingRecipient(OperationError):
     def __init__(self, person_id: str, person_name: str) -> None:
-        super().__init__("No email on file for " + person_name)
+        super().__init__(
+            "No email on file for " + person_name
+            + ". Run 'careeros people update " + person_id
+            + " --email <address>' and retry."
+        )
         self.person_id = person_id
         self.person_name = person_name
 

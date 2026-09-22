@@ -96,3 +96,19 @@ def test_queue_only_is_accepted_as_a_claude_code_approval_callback(tmp_path):
     runtime = open_claude_code_runtime(storage, approval_callback=queue_only)
     result = runtime.request_approval(ActionProposal(action="send_outreach", summary="Send?"))
     assert result.approved is False
+
+
+@pytest.mark.parametrize("path", _modules(), ids=lambda p: p.name)
+def test_no_bare_exit_calls(path):
+    """`from sys import exit` then a bare `exit(1)` is still a process exit.
+
+    The sys.exit check only sees attribute access on `sys`; this catches the
+    imported-name form, which the previous guard let through.
+    """
+    tree = ast.parse(path.read_text())
+    called = [
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    ]
+    assert "exit" not in called, path.name + " calls a bare exit()"

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from pydantic import ValidationError
+
 from careeros.core.ids import make_approval_id
 from careeros.core.models import Approval
 from careeros.operations.errors import ApprovalNotGranted, MalformedApproval
@@ -28,7 +30,11 @@ def list_pending(storage: StorageProvider) -> list[Approval]:
 
     How an out-of-process runtime rediscovers what it left open after losing
     its own context. An unparseable record is skipped rather than raised on:
-    one corrupt file must not hide every other pending decision.
+    one corrupt file must not hide every other pending decision. An
+    unexpected error is deliberately *not* swallowed here, though: catching
+    bare Exception would also hide a genuine bug — a future field rename
+    raising TypeError on every record would make this function report
+    nothing pending while looking healthy.
     """
     pending: list[Approval] = []
     for path in storage.list(_PREFIX):
@@ -37,7 +43,7 @@ def list_pending(storage: StorageProvider) -> list[Approval]:
         approval_id = path[len(_PREFIX):-len(_SUFFIX)]
         try:
             approval = Approval.load(storage, approval_id)
-        except Exception:
+        except (ValueError, FileNotFoundError, ValidationError):
             continue
         if approval.state == PENDING:
             pending.append(approval)
