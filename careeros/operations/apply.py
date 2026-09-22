@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
-from careeros.browser.driver import BrowserProfileBusy
+from careeros.browser.driver import BrowserProfileBusy, launch_browser
 from careeros.browser.fillers.generic import GenericFiller
 from careeros.browser.fillers.greenhouse import GreenhouseFiller
 from careeros.browser.fillers.lever import LeverFiller
@@ -12,10 +13,13 @@ from careeros.browser.session import check_board_sessions
 from careeros.core.models import Goals, Job, PolicyConfig, Profile, Skills
 from careeros.core.policy_engine import PolicyEngine
 from careeros.core.resume_select import ResumeChoice, select_resume
-from careeros.operations.approvals import open_approval
+from careeros.operations.approvals import (
+    APPROVED, mark_executed, mark_failed, open_approval, payload_value,
+    require_state,
+)
 from careeros.operations.errors import (
-    BoardSessionRequired, BrowserUnavailable, DraftFailed, EntityNotFound,
-    PolicyBlocked,
+    ArtifactChanged, BoardSessionRequired, BrowserUnavailable, DraftFailed,
+    EntityNotFound, FillIncomplete, MalformedApproval, PolicyBlocked,
 )
 from careeros.runtime.base import AgentRuntime
 from careeros.skills.cover_letter import generate_cover_letter
@@ -48,6 +52,10 @@ class ApplyResult:
     title: str
     resume_storage_path: str
     applied_at: str
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _digest_stored(storage: StorageProvider, path: str) -> str:
@@ -186,4 +194,119 @@ def propose_apply(
         summary=effective_summary, cover_letter=cover_letter,
         cover_letter_storage_path=cl_storage_path, resume=resume_choice,
         filler_platform=filler.platform,
+    )
+
+
+def execute_apply(
+    runtime: AgentRuntime, approval_id: str, *, headless: bool, action_label: str,
+) -> ApplyResult:
+    """Fill and submit the application an approved approval authorized, and nothing else.
+
+    Drafts nothing and calls no LLM: the cover letter, resume, and profile
+    are read back from the workspace and each re-verified against the
+    digest recorded when the approval was created, so the bytes reviewed
+    are the bytes transmitted. job_url is likewise never re-derived from a
+    freshly-reloaded Job: it was recorded on the payload at propose time
+    (the same treatment outreach gives its subject line), so editing the
+    job's URL between approval and execution cannot change what gets
+    navigated to.
+
+    The approval is consumed before the browser is launched: the external
+    action happens with the approval already marked executed. This ordering
+    defeats process death — a crash between the two writes leaves the
+    record executed, not approved, so a retry cannot act on it a second
+    time — and narrows, though it does not eliminate, the window for a
+    second, concurrently racing executor (see require_state). A digest
+    mismatch or a missing job is checked before that consumption, so either
+    one leaves the approval approved and retryable, exactly like outreach's
+    treatment of ArtifactChanged and MissingRecipient: nothing has been
+    attempted in those cases.
+
+    A browser error must never advance the job's stage. ImportError and
+    BrowserProfileBusy mean nothing was even attempted (the browser never
+    launched), so neither marks the approval failed — it is left executed,
+    a stale record an integrator must re-propose past. Any other exception
+    may have occurred mid-fill, so it does mark the approval failed, with
+    only the exception's type name persisted as detail: a browser
+    exception's message can contain a profile path, and that must never
+    land in a durable workspace file.
+    """
+    approval = require_state(runtime.storage, approval_id, APPROVED)
+    job_id = payload_value(approval, "job_id")
+    job_url = payload_value(approval, "job_url")
+    cl_storage_path = payload_value(approval, "cover_letter_storage_path")
+    resume_storage_path = payload_value(approval, "resume_storage_path")
+    filler_platform = payload_value(approval, "filler_platform")
+    expected_cl_digest = payload_value(approval, "cover_letter_sha256")
+    expected_resume_digest = payload_value(approval, "resume_sha256")
+    expected_profile_digest = payload_value(approval, "profile_sha256")
+
+    filler = next((f for f in FILLERS if f.platform == filler_platform), None)
+    if filler is None:
+        raise MalformedApproval(approval.id, "filler_platform")
+
+    if _digest_stored(runtime.storage, cl_storage_path) != expected_cl_digest:
+        raise ArtifactChanged(cl_storage_path)
+    if _digest_stored(runtime.storage, resume_storage_path) != expected_resume_digest:
+        raise ArtifactChanged(resume_storage_path)
+
+    profile = Profile.load_or_empty(runtime.storage)
+    if _digest_text(profile.model_dump_json()) != expected_profile_digest:
+        raise ArtifactChanged("profile/profile.json")
+
+    try:
+        job = Job.load(runtime.storage, job_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise EntityNotFound("Job " + job_id + " not found.") from exc
+    # job_url is bound content, read back from the approval rather than
+    # re-derived from the reload above — see the docstring.
+    job = job.model_copy(update={"url": job_url})
+
+    cover_letter_text = runtime.storage.read(cl_storage_path).decode()
+    cover_letter_path = runtime.storage.resolve(cl_storage_path)
+    resume_path = runtime.storage.resolve(resume_storage_path)
+
+    # Consume the approval before attempting the external action.
+    mark_executed(runtime, approval_id)
+
+    try:
+        with launch_browser(headless=headless) as (_, page):
+            success = filler.fill(
+                page, job, profile, cover_letter_text, cover_letter_path, resume_path
+            )
+    except ImportError as exc:
+        raise BrowserUnavailable(
+            "Playwright not installed. Run: pip install playwright "
+            "&& playwright install chrome"
+        ) from exc
+    except BrowserProfileBusy as exc:
+        raise BrowserUnavailable(str(exc), profile_busy=True) from exc
+    except Exception as exc:
+        mark_failed(runtime, approval_id, type(exc).__name__)
+        raise BrowserUnavailable(str(exc)) from exc
+
+    if not success:
+        mark_failed(runtime, approval_id, "FillIncomplete")
+        runtime.record_activity(runtime.new_event(
+            "apply_incomplete", action_label,
+            "Form fill incomplete for " + job.company + " — " + job.title,
+            status="failed", entity_type="job", entity_id=job_id,
+        ))
+        raise FillIncomplete(
+            "Form fill incomplete for " + job.company + " — " + job.title
+            + ". Stage not updated."
+        )
+
+    applied_at = _now()
+    job = job.model_copy(update={"stage": "applied", "applied_at": applied_at, "updated_at": applied_at})
+    job.save(runtime.storage)
+    runtime.record_activity(runtime.new_event(
+        "job_applied", action_label,
+        "Applied to " + job.company + " — " + job.title
+        + " with " + resume_storage_path,
+        entity_type="job", entity_id=job_id,
+    ))
+    return ApplyResult(
+        job_id=job_id, company=job.company, title=job.title,
+        resume_storage_path=resume_storage_path, applied_at=applied_at,
     )

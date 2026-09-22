@@ -1,17 +1,21 @@
 import hashlib
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from careeros.browser.driver import BrowserProfileBusy
 from careeros.core.models import Approval, Job, PolicyConfig, Profile
-from careeros.operations.apply import propose_apply
-from careeros.operations.approvals import PENDING, SUPERSEDED
-from careeros.operations.errors import (
-    BoardSessionRequired, BrowserUnavailable, DraftFailed, EntityNotFound,
-    PolicyBlocked,
+from careeros.operations.apply import execute_apply, propose_apply
+from careeros.operations.approvals import (
+    APPROVED, EXECUTED, FAILED, PENDING, SUPERSEDED, resolve_approval,
 )
+from careeros.operations.errors import (
+    ApprovalNotGranted, ArtifactChanged, BoardSessionRequired, BrowserUnavailable,
+    DraftFailed, EntityNotFound, FillIncomplete, MalformedApproval, PolicyBlocked,
+)
+from careeros.runtime.base import ApprovalResult
 from careeros.runtime.factory import open_local_runtime
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace
@@ -190,3 +194,276 @@ class TestProposeApply:
         with pytest.raises(TypeError):
             with patch("careeros.operations.apply.generate_cover_letter", return_value=COVER_LETTER):
                 propose_apply(runtime, JOB_ID)
+
+
+def _approve(runtime, approval_id, reason="user said yes"):
+    return resolve_approval(
+        runtime, approval_id, ApprovalResult(approved=True, reason=reason),
+        action_label="apply",
+    )
+
+
+def _filler_mock(platform="Greenhouse", fill_return=True):
+    filler = MagicMock()
+    filler.platform = platform
+    filler.fill.return_value = fill_return
+    return filler
+
+
+@contextmanager
+def _ok_launch_browser(headless=False):
+    yield MagicMock(), MagicMock()
+
+
+class TestExecuteApply:
+    @pytest.mark.parametrize(
+        "state", ["pending", "declined", "superseded", "failed", "executed"]
+    )
+    def test_refuses_any_state_but_approved(self, tmp_path, state):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        approval.model_copy(update={"state": state}).save(runtime.storage)
+        filler = _filler_mock()
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser", _ok_launch_browser):
+            with pytest.raises(ApprovalNotGranted):
+                execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+        filler.fill.assert_not_called()
+        # Verify the approval state was not mutated by the refusal.
+        assert Approval.load(runtime.storage, proposal.approval_id).state == state
+
+    def test_refuses_to_execute_the_same_approval_twice(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        filler = _filler_mock()
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser", _ok_launch_browser):
+            execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+            with pytest.raises(ApprovalNotGranted):
+                execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+        # The single-use proof: the form must not have been submitted twice,
+        # not merely that the second call raised.
+        assert filler.fill.call_count == 1
+
+    def test_refuses_when_the_cover_letter_changed_after_approval(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        runtime.storage.atomic_write(proposal.cover_letter_storage_path, b"a different cover letter")
+        filler = _filler_mock()
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser", _ok_launch_browser):
+            with pytest.raises(ArtifactChanged) as exc:
+                execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+        assert exc.value.path == proposal.cover_letter_storage_path
+        filler.fill.assert_not_called()
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+
+    def test_refuses_when_the_resume_changed_after_approval(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        runtime.storage.atomic_write("resumes/versions/resume.pdf", b"%PDF-1.4 a different resume")
+        filler = _filler_mock()
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser", _ok_launch_browser):
+            with pytest.raises(ArtifactChanged) as exc:
+                execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+        assert exc.value.path == "resumes/versions/resume.pdf"
+        filler.fill.assert_not_called()
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+
+    def test_refuses_when_the_profile_changed_after_approval(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        Profile(name="Someone Else", email="someone@example.com").save(runtime.storage)
+        filler = _filler_mock()
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser", _ok_launch_browser):
+            with pytest.raises(ArtifactChanged) as exc:
+                execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+        assert exc.value.path == "profile/profile.json"
+        filler.fill.assert_not_called()
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+
+    def test_a_malformed_payload_raises_rather_than_key_error(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        approval.model_copy(update={"payload": {}}).save(runtime.storage)
+        filler = _filler_mock()
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser", _ok_launch_browser):
+            with pytest.raises(MalformedApproval):
+                execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+        filler.fill.assert_not_called()
+
+    def test_no_matching_filler_raises_malformed_approval(self, tmp_path):
+        """The approval names a platform this build no longer has a filler for.
+
+        Submitting through a *different* filler than the one that was
+        approved would be wrong, so this must fail rather than silently pick
+        another filler.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        other_filler = _filler_mock(platform="SomeOtherPlatform")
+        with patch("careeros.operations.apply.FILLERS", [other_filler]), \
+             patch("careeros.operations.apply.launch_browser", _ok_launch_browser):
+            with pytest.raises(MalformedApproval):
+                execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+        other_filler.fill.assert_not_called()
+        # Nothing was attempted, so the approval must stay approved and retryable.
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+
+    def test_fill_incomplete_leaves_the_stage_untouched(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        filler = _filler_mock(fill_return=False)
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser", _ok_launch_browser):
+            with pytest.raises(FillIncomplete):
+                execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+        assert Job.load(runtime.storage, JOB_ID).stage == "saved"
+        assert Job.load(runtime.storage, JOB_ID).applied_at is None
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        assert approval.state == FAILED
+        assert "apply_incomplete" in _log(runtime.storage)
+
+    def test_import_error_raises_browser_unavailable_and_leaves_the_stage_untouched(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        filler = _filler_mock()
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser",
+                   MagicMock(side_effect=ImportError("no module named playwright"))):
+            with pytest.raises(BrowserUnavailable) as exc:
+                execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+        assert "playwright install" in str(exc.value)
+        assert Job.load(runtime.storage, JOB_ID).stage == "saved"
+        filler.fill.assert_not_called()
+
+    def test_browser_profile_busy_raises_browser_unavailable_with_the_flag_set(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        filler = _filler_mock()
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser",
+                   MagicMock(side_effect=BrowserProfileBusy("already in use"))):
+            with pytest.raises(BrowserUnavailable) as exc:
+                execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+        assert exc.value.profile_busy is True
+        assert Job.load(runtime.storage, JOB_ID).stage == "saved"
+        filler.fill.assert_not_called()
+
+    def test_a_generic_browser_exception_marks_the_approval_failed(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        filler = _filler_mock()
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser",
+                   MagicMock(side_effect=RuntimeError("chrome crashed"))):
+            with pytest.raises(BrowserUnavailable) as exc:
+                execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+        assert "chrome crashed" in str(exc.value)
+        assert Job.load(runtime.storage, JOB_ID).stage == "saved"
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        assert approval.state == FAILED
+        assert approval.detail == "RuntimeError"
+
+    def test_happy_path_marks_applied_and_logs_the_resume_used(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        filler = _filler_mock(fill_return=True)
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser", _ok_launch_browser):
+            result = execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+
+        filler.fill.assert_called_once()
+        assert result.job_id == JOB_ID
+        assert result.company == "Acme"
+        assert result.title == "Senior SRE"
+        assert result.resume_storage_path == "resumes/versions/resume.pdf"
+        assert result.applied_at
+
+        job = Job.load(runtime.storage, JOB_ID)
+        assert job.stage == "applied"
+        assert job.applied_at == result.applied_at
+
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        assert approval.state == EXECUTED
+
+        log = _log(runtime.storage)
+        assert "job_applied" in log
+        assert "resumes/versions/resume.pdf" in log
+
+    def test_the_url_navigated_to_is_the_one_bound_at_approval_time(self, tmp_path):
+        """Editing job.url after approval must not change what gets navigated to.
+
+        job_url is recorded on the payload at propose time, exactly like
+        outreach's subject, and read back verbatim rather than re-derived
+        from a freshly-reloaded Job.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        job = Job.load(runtime.storage, JOB_ID)
+        job.model_copy(update={"url": "https://boards.greenhouse.io/acme/jobs/999"}).save(runtime.storage)
+
+        filler = _filler_mock(fill_return=True)
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser", _ok_launch_browser):
+            execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+
+        called_job = filler.fill.call_args[0][1]
+        assert called_job.url == GREENHOUSE_URL
+
+    def test_mark_executed_happens_before_the_browser_is_launched(self, tmp_path):
+        """Verify the approval is consumed before the external action.
+
+        This prevents crashes or concurrency from causing a duplicate
+        submission. Reasoned failure-on-reversal: if mark_executed ran after
+        the browser step instead of before it, the approval would still read
+        APPROVED at the moment launch_browser is called, so the recorded
+        state below would be APPROVED instead of EXECUTED and this assertion
+        would fail.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        filler = _filler_mock(fill_return=True)
+
+        observed_states = []
+
+        @contextmanager
+        def fake_launch_browser(headless=False):
+            approval = Approval.load(runtime.storage, proposal.approval_id)
+            observed_states.append(approval.state)
+            yield MagicMock(), MagicMock()
+
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser", fake_launch_browser):
+            execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+
+        assert observed_states == [EXECUTED]
+
+    def test_action_label_is_required(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        filler = _filler_mock()
+        with pytest.raises(TypeError):
+            with patch("careeros.operations.apply.FILLERS", [filler]), \
+                 patch("careeros.operations.apply.launch_browser", _ok_launch_browser):
+                execute_apply(runtime, proposal.approval_id, headless=True)
