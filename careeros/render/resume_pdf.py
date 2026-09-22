@@ -8,9 +8,17 @@ _MARGIN = {"top": "0.6in", "bottom": "0.6in", "left": "0.7in", "right": "0.7in"}
 _INSTALL_HINT = (
     "Chromium is not installed for Playwright. Run: playwright install chromium"
 )
+_DEPS_HINT = (
+    "Chromium is installed but its system libraries are missing. "
+    "Run: playwright install-deps chromium"
+)
 
-# Substrings Playwright uses when the browser binary is absent.
-_MISSING_MARKERS = ("Executable doesn't exist", "playwright install")
+# Playwright exposes no structured subtype for either condition, so the
+# message text is the only signal available. These two are deliberately
+# specific: an earlier, broader "playwright install" marker also matched the
+# missing-system-libraries message and handed the user the wrong remedy.
+_MISSING_BINARY_MARKER = "executable doesn't exist"
+_MISSING_DEPS_MARKER = "install-deps"
 
 
 class RendererUnavailable(RuntimeError):
@@ -45,6 +53,9 @@ def render_pdf(html_text: str) -> bytes:
             finally:
                 browser.close()
     except PlaywrightError as exc:
-        if any(marker in str(exc) for marker in _MISSING_MARKERS):
+        message = str(exc).lower()
+        if _MISSING_BINARY_MARKER in message:
             raise RendererUnavailable(_INSTALL_HINT) from exc
+        if _MISSING_DEPS_MARKER in message:
+            raise RendererUnavailable(_DEPS_HINT) from exc
         raise

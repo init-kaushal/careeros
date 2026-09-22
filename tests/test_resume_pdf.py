@@ -76,12 +76,37 @@ def test_missing_chromium_raises_renderer_unavailable_with_the_install_hint():
         with pytest.raises(RendererUnavailable) as exc:
             render_pdf(_HTML)
     assert "playwright install chromium" in str(exc.value)
+    assert "install-deps" not in str(exc.value)
+
+
+def test_missing_system_deps_raises_renderer_unavailable_with_the_deps_hint():
+    # The Chromium binary is present here, but its OS shared libraries
+    # (libnss3 and friends) are not — the classic fresh-Linux/CI failure.
+    # This message contains "install" but must NOT be told to run
+    # `playwright install chromium`, which would succeed and change nothing.
+    err = PlaywrightError(
+        "Missing system dependencies required to run browser chromium. "
+        "Install them with: sudo npx playwright install-deps chromium"
+    )
+    with patch("careeros.render.resume_pdf.sync_playwright", side_effect=err):
+        with pytest.raises(RendererUnavailable) as exc:
+            render_pdf(_HTML)
+    assert "install-deps" in str(exc.value)
+    assert "install chromium" not in str(exc.value)
 
 
 def test_other_playwright_errors_are_not_disguised_as_missing_chromium():
     err = PlaywrightError("Target page, context or browser has been closed")
     with patch("careeros.render.resume_pdf.sync_playwright", side_effect=err):
         with pytest.raises(PlaywrightError):
+            render_pdf(_HTML)
+
+
+def test_non_playwright_errors_from_pdf_generation_propagate_unchanged():
+    ctx, _p, _browser, page = _playwright_stub()
+    page.pdf.side_effect = RuntimeError("boom")
+    with patch("careeros.render.resume_pdf.sync_playwright", return_value=ctx):
+        with pytest.raises(RuntimeError, match="boom"):
             render_pdf(_HTML)
 
 
