@@ -197,6 +197,32 @@ def propose_apply(
     )
 
 
+def _mark_applied(
+    runtime: AgentRuntime, job: Job, job_id: str, resume_storage_path: str,
+    action_label: str,
+) -> ApplyResult:
+    """Advance the job to stage="applied" and log job_applied, then return the result.
+
+    Shared by the ordinary success path and by a teardown failure that
+    happens after filler.fill already returned True: in both cases the
+    application already went out, so the stored job record and the
+    activity log must say so identically either way.
+    """
+    applied_at = _now()
+    job = job.model_copy(update={"stage": "applied", "applied_at": applied_at, "updated_at": applied_at})
+    job.save(runtime.storage)
+    runtime.record_activity(runtime.new_event(
+        "job_applied", action_label,
+        "Applied to " + job.company + " — " + job.title
+        + " with " + resume_storage_path,
+        entity_type="job", entity_id=job_id,
+    ))
+    return ApplyResult(
+        job_id=job_id, company=job.company, title=job.title,
+        resume_storage_path=resume_storage_path, applied_at=applied_at,
+    )
+
+
 def _record_apply_failed(
     runtime: AgentRuntime, approval_id: str, job: Job, job_id: str,
     action_label: str, exc: BaseException,
@@ -246,21 +272,33 @@ def execute_apply(
     treatment of ArtifactChanged and MissingRecipient: nothing has been
     attempted in those cases.
 
-    A browser error must never advance the job's stage. Every browser-failure
-    branch — Playwright missing, the browser profile locked, or any other
-    exception raised while launching or filling — marks the approval failed
-    rather than leaving it executed: mark_executed already ran, so the
-    external action was attempted (even "attempted" as narrowly as "tried
-    to launch and could not"), and executed would otherwise misrepresent
-    that as a successful send to a reader of the activity log. failed is
-    the truthful terminal state, the approval still cannot be retried
-    (mark_executed already consumed it — an integrator re-proposes rather
-    than retrying), and only the exception's type name is ever persisted,
-    to the approval's detail and to the activity log: a browser exception's
-    message can contain the browser profile's filesystem path, and both of
-    those records are durable — the log is append-only — so nothing that
-    landed there could later be scrubbed. str(exc) is used only to build
-    the in-memory BrowserUnavailable raised back to the caller.
+    A browser error must never advance the job's stage — except in the one
+    case where the "error" is teardown failing after filler.fill already
+    returned True. There, the application already went out; advancing the
+    stage anyway (via the same path the ordinary success case uses) is what
+    stops the unattended discover-and-apply command, which only skips a
+    job once its stage has advanced, from re-proposing and resubmitting the
+    same application on its next run. That branch logs a distinct
+    apply_teardown_failed event and returns the ApplyResult normally rather
+    than raising: the caller's real question is "did the application go
+    out", and it did, so this is an operational anomaly to record, not an
+    application failure to raise.
+
+    Every other browser-failure branch — Playwright missing, the browser
+    profile locked, or any exception raised before filler.fill returns
+    True — marks the approval failed rather than leaving it executed:
+    mark_executed already ran, so the external action was attempted (even
+    "attempted" as narrowly as "tried to launch and could not"), and
+    executed would otherwise misrepresent that as a successful send to a
+    reader of the activity log. failed is the truthful terminal state, the
+    approval still cannot be retried either way (mark_executed already
+    consumed it — an integrator re-proposes rather than retrying), and only
+    the exception's type name is ever persisted, to the approval's detail
+    and to the activity log: a browser exception's message can contain the
+    browser profile's filesystem path, and both of those records are
+    durable — the log is append-only — so nothing that landed there could
+    later be scrubbed. str(exc) is used only to build the in-memory
+    BrowserUnavailable raised back to the caller.
     """
     approval = require_state(runtime.storage, approval_id, APPROVED)
     job_id = payload_value(approval, "job_id")
@@ -276,7 +314,12 @@ def execute_apply(
     if filler is None:
         raise MalformedApproval(approval.id, "filler_platform")
 
-    if _digest_stored(runtime.storage, cl_storage_path) != expected_cl_digest:
+    # Read once: the bytes digested here are the bytes decoded into
+    # cover_letter_text below, so what gets hashed and what gets uploaded
+    # are provably the same read, not two reads that could observe two
+    # different states of the file.
+    cover_letter_bytes = runtime.storage.read(cl_storage_path)
+    if hashlib.sha256(cover_letter_bytes).hexdigest() != expected_cl_digest:
         raise ArtifactChanged(cl_storage_path)
     if _digest_stored(runtime.storage, resume_storage_path) != expected_resume_digest:
         raise ArtifactChanged(resume_storage_path)
@@ -290,20 +333,32 @@ def execute_apply(
     except (FileNotFoundError, ValueError) as exc:
         raise EntityNotFound("Job " + job_id + " not found.") from exc
     # job_url is bound content, read back from the approval rather than
-    # re-derived from the reload above — see the docstring.
-    job = job.model_copy(update={"url": job_url})
+    # re-derived from the reload above — see the docstring. This is kept in
+    # a separate variable, never assigned back onto `job`: `job` itself
+    # stays the untouched reload, because it is `job` that later gets
+    # mutated to stage="applied" and saved, and a post-approval edit to
+    # job.url must survive that save rather than being silently reverted to
+    # the approved value.
+    job_for_fill = job.model_copy(update={"url": job_url})
 
-    cover_letter_text = runtime.storage.read(cl_storage_path).decode()
+    cover_letter_text = cover_letter_bytes.decode()
     cover_letter_path = runtime.storage.resolve(cl_storage_path)
     resume_path = runtime.storage.resolve(resume_storage_path)
 
     # Consume the approval before attempting the external action.
     mark_executed(runtime, approval_id)
 
+    # None, not False, until filler.fill actually returns: the except
+    # Exception branch below distinguishes "the submission itself
+    # happened, only teardown afterward failed" (success is True) from
+    # "nothing conclusive happened" (success is still None) — a plain
+    # False initial value would be indistinguishable from an unattempted
+    # fill and could never signal the former.
+    success = None
     try:
         with launch_browser(headless=headless) as (_, page):
             success = filler.fill(
-                page, job, profile, cover_letter_text, cover_letter_path, resume_path
+                page, job_for_fill, profile, cover_letter_text, cover_letter_path, resume_path
             )
     except ImportError as exc:
         _record_apply_failed(runtime, approval_id, job, job_id, action_label, exc)
@@ -315,6 +370,25 @@ def execute_apply(
         _record_apply_failed(runtime, approval_id, job, job_id, action_label, exc)
         raise BrowserUnavailable(str(exc), profile_busy=True) from exc
     except Exception as exc:
+        if success is True:
+            # filler.fill already returned True — the application went out
+            # before this exception fired, so it came from context teardown
+            # (e.g. context.close()), not from the submission itself. That
+            # is an operational anomaly, not an application failure: the
+            # caller's real question is "did the application go out", and
+            # it did. Recording it as a distinct failed event rather than
+            # raising is what stops the unattended discover-and-apply
+            # command from re-proposing and resubmitting the same
+            # application on its next run, since that command only skips a
+            # job once its stage has advanced.
+            result = _mark_applied(runtime, job, job_id, resume_storage_path, action_label)
+            runtime.record_activity(runtime.new_event(
+                "apply_teardown_failed", action_label,
+                "Browser teardown failed after a successful submission for "
+                + job.company + " — " + job.title + ": " + type(exc).__name__,
+                status="failed", entity_type="job", entity_id=job_id,
+            ))
+            return result
         _record_apply_failed(runtime, approval_id, job, job_id, action_label, exc)
         raise BrowserUnavailable(str(exc)) from exc
 
@@ -330,16 +404,4 @@ def execute_apply(
             + ". Stage not updated."
         )
 
-    applied_at = _now()
-    job = job.model_copy(update={"stage": "applied", "applied_at": applied_at, "updated_at": applied_at})
-    job.save(runtime.storage)
-    runtime.record_activity(runtime.new_event(
-        "job_applied", action_label,
-        "Applied to " + job.company + " — " + job.title
-        + " with " + resume_storage_path,
-        entity_type="job", entity_id=job_id,
-    ))
-    return ApplyResult(
-        job_id=job_id, company=job.company, title=job.title,
-        resume_storage_path=resume_storage_path, applied_at=applied_at,
-    )
+    return _mark_applied(runtime, job, job_id, resume_storage_path, action_label)

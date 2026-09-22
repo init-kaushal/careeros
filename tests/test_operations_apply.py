@@ -9,7 +9,7 @@ from careeros.browser.driver import BrowserProfileBusy
 from careeros.core.models import Approval, Job, PolicyConfig, Profile
 from careeros.operations.apply import execute_apply, propose_apply
 from careeros.operations.approvals import (
-    APPROVED, EXECUTED, FAILED, PENDING, SUPERSEDED, resolve_approval,
+    APPROVED, DECLINED, EXECUTED, FAILED, PENDING, SUPERSEDED, resolve_approval,
 )
 from careeros.operations.errors import (
     ApprovalNotGranted, ArtifactChanged, BoardSessionRequired, BrowserUnavailable,
@@ -217,7 +217,7 @@ def _ok_launch_browser(headless=False):
 
 class TestExecuteApply:
     @pytest.mark.parametrize(
-        "state", ["pending", "declined", "superseded", "failed", "executed"]
+        "state", [PENDING, DECLINED, SUPERSEDED, FAILED, EXECUTED]
     )
     def test_refuses_any_state_but_approved(self, tmp_path, state):
         runtime = _runtime(tmp_path)
@@ -395,7 +395,10 @@ class TestExecuteApply:
     @pytest.mark.parametrize(
         "exc_factory",
         [
-            lambda: ImportError("no module named playwright"),
+            lambda: ImportError(
+                "No module named 'playwright' (checked "
+                "/Users/fakeuser/Library/Application Support/careeros/browser)"
+            ),
             lambda: BrowserProfileBusy(
                 "The CareerOS browser profile is already in use: "
                 "/Users/fakeuser/Library/Application Support/careeros/browser (lock held)"
@@ -456,6 +459,15 @@ class TestExecuteApply:
         assert "job_applied" in log
         assert "resumes/versions/resume.pdf" in log
 
+        # filler.fill(page, job, profile, cover_letter_text, cover_letter_path, resume_path):
+        # the last two arguments must be real, absolute filesystem paths —
+        # a real form uploader cannot use a workspace-relative path — so
+        # this pins runtime.storage.resolve() actually being used rather
+        # than the raw storage-relative strings.
+        _, _, _, _, cover_letter_path_arg, resume_path_arg = filler.fill.call_args[0]
+        assert cover_letter_path_arg == runtime.storage.resolve(proposal.cover_letter_storage_path)
+        assert resume_path_arg == runtime.storage.resolve("resumes/versions/resume.pdf")
+
     def test_the_url_navigated_to_is_the_one_bound_at_approval_time(self, tmp_path):
         """Editing job.url after approval must not change what gets navigated to.
 
@@ -477,6 +489,85 @@ class TestExecuteApply:
 
         called_job = filler.fill.call_args[0][1]
         assert called_job.url == GREENHOUSE_URL
+
+    def test_a_post_approval_url_edit_survives_a_successful_execute(self, tmp_path):
+        """The persisted Job record must not be silently reverted to the
+        approved URL.
+
+        job_for_fill (a copy carrying the bound job_url) is what the filler
+        navigates to, but the record execute_apply saves back at the end
+        must come from the untouched reload — otherwise a legitimate
+        post-approval correction to job.url (e.g. the posting moved) would
+        be clobbered by the stale value bound at propose time, even though
+        execute_apply's contract is limited to updating stage, applied_at,
+        and updated_at.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        edited_url = "https://boards.greenhouse.io/acme/jobs/999"
+        job = Job.load(runtime.storage, JOB_ID)
+        job.model_copy(update={"url": edited_url}).save(runtime.storage)
+
+        filler = _filler_mock(fill_return=True)
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser", _ok_launch_browser):
+            execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+
+        # The filler still navigated to the approved URL...
+        called_job = filler.fill.call_args[0][1]
+        assert called_job.url == GREENHOUSE_URL
+        # ...but the persisted record keeps the post-approval edit.
+        assert Job.load(runtime.storage, JOB_ID).url == edited_url
+
+    def test_teardown_failure_after_a_successful_submit_still_counts_as_applied(self, tmp_path):
+        """A submission that went out must not be recorded as a failure.
+
+        filler.fill returns True (the application was submitted), and then
+        the browser context's teardown (context.close(), inside the
+        `with launch_browser(...)` block) raises. That is an operational
+        anomaly, not an application failure: the job must still advance to
+        applied, the approval must still read executed (never regressed to
+        failed), both job_applied and a distinct apply_teardown_failed event
+        must be logged, and execute_apply must return the ApplyResult
+        normally rather than raising — an unhandled exception here would
+        otherwise look identical to a failed submission to a caller such as
+        the scheduled discover-and-apply command, whose retry would then
+        resubmit an application that already went out.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        filler = _filler_mock(fill_return=True)
+
+        @contextmanager
+        def teardown_fails(headless=False):
+            yield MagicMock(), MagicMock()
+            raise RuntimeError("context.close() failed: profile lock held")
+
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser", teardown_fails):
+            result = execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+
+        filler.fill.assert_called_once()
+        assert result.job_id == JOB_ID
+        assert result.applied_at
+
+        job = Job.load(runtime.storage, JOB_ID)
+        assert job.stage == "applied"
+        assert job.applied_at == result.applied_at
+
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        assert approval.state == EXECUTED
+
+        log = _log(runtime.storage)
+        assert "job_applied" in log
+        assert "apply_teardown_failed" in log
+        # Credential hygiene applies here too: the teardown exception's
+        # message can carry a profile path, so only its type name may land
+        # in the log.
+        assert "profile lock held" not in log
 
     def test_mark_executed_happens_before_the_browser_is_launched(self, tmp_path):
         """Verify the approval is consumed before the external action.
