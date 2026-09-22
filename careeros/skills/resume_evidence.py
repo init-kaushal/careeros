@@ -26,6 +26,17 @@ def _normalize(text: str) -> str:
     return " ".join(text.lower().split())
 
 
+def normalize_quote(text: str) -> str:
+    """Public name for the normalization verify_quote matches on.
+
+    Any dedup of quotes outside this module must use exactly this form.
+    Phase 11a's I3 finding was a dedup key built from raw text while the
+    matcher used the normalized form, so one skill was reported as both
+    stored and dropped.
+    """
+    return _normalize(text)
+
+
 def _find_bounded(needle: str, haystack: str) -> int | None:
     """Index of `needle` in `haystack`, but only where it is not embedded
     inside a longer word.

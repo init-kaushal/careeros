@@ -65,6 +65,47 @@ class Skills(BaseModel):
         return cls.model_validate_json(storage.read("profile/skills.json").decode())
 
 
+class VariantSection(BaseModel):
+    heading: str
+    entries: list[Evidence] = []
+
+
+class ResumeVariant(BaseModel):
+    """A job-tailored resume assembled only from verbatim spans of the master.
+
+    Every entry is an Evidence record whose quote verify_quote located in
+    source_file, so each line of the rendered document traces to a line
+    number in the master resume. `dropped` names what the model proposed
+    that did not survive the guards.
+    """
+
+    job_id: str
+    job_company: str = ""
+    job_title: str = ""
+    generated_at: str
+    source_file: str
+    sections: list[VariantSection] = []
+    dropped: list[str] = []
+
+    def entry_count(self) -> int:
+        return sum(len(s.entries) for s in self.sections)
+
+    # Path helpers live here so the command, the selector, and apply cannot
+    # drift apart on where a variant is stored. Per-job subdirectories keep
+    # tailored output out of the untailored fallback pool.
+    @staticmethod
+    def variant_dir(job_id: str) -> str:
+        return "resumes/versions/" + job_id + "/"
+
+    @staticmethod
+    def pdf_path(job_id: str) -> str:
+        return ResumeVariant.variant_dir(job_id) + "resume.pdf"
+
+    @staticmethod
+    def json_path(job_id: str) -> str:
+        return ResumeVariant.variant_dir(job_id) + "variant.json"
+
+
 class Preferences(BaseModel):
     target_roles: list[str] = []
     seniority: str | None = None
