@@ -62,12 +62,15 @@ send`, `careeros outreach mark-referral-requested`, and `careeros people update`
 through `resolve_storage`. Every other command module (`browse_cmd`, `browser_cmd`, `job_cmd`,
 `apply_cmd`, `research_cmd`, `discover_and_apply_cmd`, `resume_cmd`, `workspace_cmd`) keeps its own
 private `_get_storage` helper that reads only an explicit `--workspace` flag and the global config
-file — it never looks at the environment variable. If you export `CAREEROS_WORKSPACE` while a
-different workspace path is already saved in the global config (from `careeros onboard`), those
-three commands and everything else will silently write to two different workspace trees: outreach
-history in one, applications and job data in the other. Until this converges (see
-`DIVERGENCES.md`), either pass an explicit workspace path to every command you invoke, or make sure
-`CAREEROS_WORKSPACE` and the configured workspace path point at the same directory.
+file — it never looks at the environment variable. `careeros/cli/portability.py` (`careeros
+export`) resolves the same way — flag, then the global config file — but inline rather than
+through a private helper; it too never looks at the environment variable. If you export
+`CAREEROS_WORKSPACE` while a different workspace path is already saved in the global config (from
+`careeros onboard`), those three commands and everything else will silently write to two different
+workspace trees: outreach history in one, applications and job data in the other. Until this
+converges (see `DIVERGENCES.md`), either pass an explicit workspace path to every command you
+invoke, or make sure `CAREEROS_WORKSPACE` and the configured workspace path point at the same
+directory.
 
 ## 3. The `AgentRuntime` Protocol
 
@@ -288,11 +291,17 @@ not specific to outreach.
 
 ## 7. The integrator's obligations
 
-- **An approval is single-use.** `execute_outreach_send` calls `mark_executed`, which moves the
-  record out of `approved` to `executed`, before it calls `send_email`. Whether `send_email`
-  then succeeds (record stays `executed`) or raises (record moves on to `failed` — see §6), the
-  state is no longer `approved` either way. A second `execute_*` call against the same id fails
-  `require_state`'s check and raises `ApprovalNotGranted` — it cannot send twice.
+- **An approval is single-use against a sequential caller.** `execute_outreach_send` calls
+  `mark_executed`, which moves the record out of `approved` to `executed`, before it calls
+  `send_email`. Whether `send_email` then succeeds (record stays `executed`) or raises (record
+  moves on to `failed` — see §6), the state is no longer `approved` either way, so a second,
+  later `execute_*` call against the same id fails `require_state`'s check and raises
+  `ApprovalNotGranted`. That refusal is what makes the record single-use in normal operation, but
+  it is a sequential guarantee, not a concurrency one: `require_state` is a read-then-compare with
+  no compare-and-swap, so it does not by itself exclude two processes calling `execute_*` against
+  the same approval id at the same time — both can read `approved` before either writes past it.
+  See §10 for that residual window. Do not run two executors against the same approval id
+  concurrently; the integrator, not this layer, has to prevent that.
 - **Only `approved` executes.** `execute_outreach_send` and `decline_outreach_send` both call
   `require_state` for the specific state they need (`approved`, `declined` respectively) and raise
   `ApprovalNotGranted` for anything else, including `pending`.
