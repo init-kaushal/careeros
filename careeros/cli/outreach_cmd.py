@@ -17,6 +17,7 @@ from careeros.runtime.base import ActionProposal
 from careeros.runtime.factory import (
     WorkspaceNotConfigured, open_local_runtime, resolve_storage,
 )
+from careeros.runtime.local import LocalRuntime
 
 outreach_app = typer.Typer(help="Draft, approve, and send outreach messages.")
 people_app = typer.Typer(help="Manage researched people.")
@@ -30,7 +31,7 @@ def _people_app_callback() -> None:
     """Manage researched people."""
 
 
-def _open_runtime(workspace_path: str | None):
+def _open_runtime(workspace_path: str | None) -> LocalRuntime:
     try:
         return open_local_runtime(resolve_storage(workspace_path))
     except (WorkspaceNotConfigured, FileNotFoundError):

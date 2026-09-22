@@ -113,6 +113,9 @@ class TestOutreachSend:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         log_content = storage.read("activity/" + today + ".jsonl").decode()
         assert "outreach_send_failed" in log_content
+        # The old inline command printed "Send failed: <detail>" -- that
+        # prefix must survive the move to SendFailed's own message.
+        assert "Send failed: smtp error" in result.output
 
     def test_draft_generation_failure_exits_1(self, tmp_path):
         ws_path = _setup_workspace(tmp_path)

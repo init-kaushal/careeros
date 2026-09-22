@@ -64,4 +64,6 @@ class ArtifactChanged(OperationError):
 
 
 class SendFailed(OperationError):
-    pass
+    def __init__(self, detail: str) -> None:
+        super().__init__("Send failed: " + detail)
+        self.detail = detail
