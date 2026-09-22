@@ -148,6 +148,36 @@ class TestOutreachSend:
         # A re-send must be surfaced to the human approving it, not silent.
         assert "already sent" in result.output.lower()
 
+    def test_quitting_at_review_leaves_no_pending_approval(self, tmp_path):
+        from careeros.core.models import Approval
+        from careeros.operations.approvals import list_pending
+
+        ws_path = _setup_workspace(tmp_path)
+        with patch("careeros.operations.outreach.generate_outreach_message", return_value="Hi Jane..."), \
+             patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="q"), \
+             patch("careeros.operations.outreach.send_email") as mock_send:
+            result = runner.invoke(outreach_app, ["send", "--job", JOB_ID, "--person", PERSON_ID, "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert "Aborted." in result.output
+        mock_send.assert_not_called()
+        storage = LocalFilesystemStorage(ws_path)
+        # No pending approval survives a quit: it must be resolved to a
+        # terminal state, not left open for a later process to act on.
+        assert list_pending(storage) == []
+        approvals = [p for p in storage.list("approvals/") if p.endswith(".json")]
+        assert len(approvals) == 1
+        approval_id = approvals[0][len("approvals/"):-len(".json")]
+        approval = Approval.load(storage, approval_id)
+        assert approval.state == "declined"
+        assert approval.reason == "aborted at review"
+        message = OutreachMessage.load(storage, MESSAGE_ID)
+        assert message.send_state == "declined"
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        log_content = storage.read("activity/" + today + ".jsonl").decode()
+        assert "approval_declined" in log_content
+        assert "outreach_send_declined" in log_content
+
     def test_policy_blocked_company_exits_1_and_does_not_send(self, tmp_path):
         ws_path = _setup_workspace(tmp_path)
         storage = LocalFilesystemStorage(ws_path)

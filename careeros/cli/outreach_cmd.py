@@ -13,7 +13,7 @@ from careeros.operations.outreach import (
     ACTION, decline_outreach_send, execute_outreach_send, make_message_id,
     propose_outreach_send,
 )
-from careeros.runtime.base import ActionProposal
+from careeros.runtime.base import ActionProposal, ApprovalResult
 from careeros.runtime.factory import (
     WorkspaceNotConfigured, open_local_runtime, resolve_storage,
 )
@@ -59,6 +59,12 @@ def send(
             else:
                 choice = Prompt.ask("[A]ccept / [R]egenerate / [Q]uit", choices=["a", "r", "q"], default="a")
             if choice == "q":
+                resolve_approval(
+                    runtime, proposal.approval_id,
+                    ApprovalResult(approved=False, reason="aborted at review"),
+                    action_label="outreach",
+                )
+                decline_outreach_send(runtime, proposal.approval_id)
                 rprint("Aborted.")
                 raise typer.Exit(0)
             if choice == "r":
