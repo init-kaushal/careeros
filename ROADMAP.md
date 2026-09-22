@@ -73,11 +73,14 @@ stored. `onboard` uses the same extractor, so a stored skill means one thing.
 the ATS form uploader, so a tailored "variant" has to be an uploadable document and the
 project had no renderer — was settled by rendering through the Playwright Chromium already
 in the dependency tree, launched ephemerally so it never contends with the browsing
-profile Phase 9c isolated. `careeros resume variant --job <id>` builds a variant from
-verbatim spans of the master resume only: the model selects and orders, and a span it
-cannot copy exactly is dropped and named rather than reworded. `apply` and
-`discover-and-apply` look the variant up by exact path per job and say at the approval
-prompt whether the resume going up is tailored.
+profile Phase 9c isolated. `careeros resume variant --job <id>` builds a variant whose
+body is verbatim spans of the master resume only: the model selects and orders, and a span
+it cannot copy exactly — including one stitched together across a paragraph break — is
+dropped and named rather than reworded. The contact header comes from `profile.json`
+instead, so it is recorded in the sidecar rather than verified. `apply` and
+`discover-and-apply` look the variant up by exact path per job; `apply` prints whether the
+resume going up is tailored above its cover-letter review prompt, and `discover-and-apply`,
+which has no prompt, prints it for each job it is about to apply to.
 
 Note for a later phase: rendering uses Playwright's bundled Chromium while browsing uses
 `channel="chrome"`, so the two need separate `playwright install` runs. Reusing one binary
@@ -88,7 +91,7 @@ would save a download and is worth revisiting.
 **What it builds:**
 - Resume variant generation: given a job's description and the evidence-backed skill set, generate a job-tailored resume variant, stored under `resumes/versions/`, that `apply` can select instead of always using the same file
 
-**Exit condition (met):** `careeros apply --job <id>` picks a resume variant tailored to that job's description rather than always using the same file; `cat resumes/versions/<job_id>/variant.json` shows which line of `resumes/master.md` backs every line of the rendered document.
+**Exit condition (met):** `careeros apply --job <id>` picks a resume variant tailored to that job's description rather than always using the same file; `cat resumes/versions/<job_id>/variant.json` shows which line of `resumes/master.md` backs each body bullet of the rendered document, and records the contact header — the one part not backed by a verified span — as it was rendered.
 
 ---
 

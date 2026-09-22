@@ -50,12 +50,16 @@ an append-only audit trail.
   verifies — including on an API or network failure — your existing `profile/skills.json`
   is left untouched and the command exits non-zero, so a bad run is always safe to retry.
   Pass a path to replace your stored master resume, but only once ingestion succeeds.
-- **`careeros resume variant --job <id>`** — build a resume tailored to one job,
-  assembled only from verbatim spans of your master resume. The model selects and
-  orders; it never writes new text, and any span it cannot copy exactly is dropped
-  and named. Stored as `resumes/versions/<job_id>/resume.pdf` with a
-  `variant.json` sidecar recording which line of `resumes/master.md` backs every
-  line of the document. `apply` uses it automatically.
+- **`careeros resume variant --job <id>`** — build a resume tailored to one job. Every
+  body bullet is a verbatim span of your master resume, verified against it: the model
+  selects and orders, it never writes new text, and any span it cannot copy exactly —
+  including one stitched together across a paragraph break — is dropped and named. The
+  contact header (name, title, location, email) comes from your stored profile, not from
+  the master. Stored as `resumes/versions/<job_id>/resume.pdf` with a `variant.json`
+  sidecar recording which line of `resumes/master.md` backs each body bullet, the header
+  as rendered, and checksums of both the PDF and the master it was built from — so a
+  variant whose master has since changed is flagged rather than trusted. `apply` uses it
+  automatically.
 - **`careeros workspace status` / `workspace validate`** — workspace path, schema version,
   profile/skills/goals summary, activity counts; validate checks schema and data integrity.
 - **`careeros export` / `careeros import <path>`** — zip your entire workspace, or restore one,
@@ -121,7 +125,7 @@ CareerOS uses a two-directory model: the framework (this repo) and your workspac
       my-resume.pdf           ← your own files; used when a job has no tailored variant
       <job_id>/
         resume.pdf            ← job-tailored variant, uploaded by `careeros apply`
-        variant.json          ← which line of master.md backs each line of the variant
+        variant.json          ← which line of master.md backs each bullet, plus the header
   activity/
     2026-01-15.jsonl          ← append-only activity log, one event per line
   exports/                    ← created by `careeros export`
