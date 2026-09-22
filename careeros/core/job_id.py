@@ -1,13 +1,9 @@
-import re
 import secrets
+
+from careeros.core.ids import slugify
 
 
 def make_job_id(company: str, title: str) -> str:
-    def slugify(s: str) -> str:
-        s = s.lower()
-        s = re.sub(r"[^a-z0-9]+", "-", s)
-        return s.strip("-")
-
     company_slug = slugify(company)[:12]
     title_slug = slugify(title)[:16]
     suffix = secrets.token_hex(2)

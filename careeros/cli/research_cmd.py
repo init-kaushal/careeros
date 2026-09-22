@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import re
 import urllib.parse
 
 import typer
@@ -11,7 +10,7 @@ from careeros.browser.driver import BrowserProfileBusy, fetch_jd_text, launch_br
 from careeros.browser.scrapers.people_search import PeopleSearchScraper
 from careeros.cli.preflight import require_board_session
 from careeros.config import GlobalConfig
-from careeros.core.ids import make_company_id, make_compensation_id, make_person_id
+from careeros.core.ids import make_company_id, make_compensation_id, make_person_id, slugify
 from careeros.core.models import Company, CompensationDataPoint, Job, Person, Preferences
 from careeros.runtime.factory import open_local_runtime
 from careeros.skills.company_research import extract_company_info
@@ -139,12 +138,6 @@ def people(
     rprint("[green]Found " + str(found) + " people[/green]")
 
 
-def _slugify(s: str) -> str:
-    s = s.lower()
-    s = re.sub(r"[^a-z0-9]+", "-", s)
-    return s.strip("-")
-
-
 @research_app.command()
 def compensation(
     job: str = typer.Option(..., "--job", help="Job ID to research compensation for"),
@@ -165,8 +158,8 @@ def compensation(
     prefs = Preferences.load_or_empty(runtime.storage)
 
     url = (
-        "https://www.levels.fyi/companies/" + urllib.parse.quote(_slugify(job_obj.company))
-        + "/salaries/" + urllib.parse.quote(_slugify(job_obj.title))
+        "https://www.levels.fyi/companies/" + urllib.parse.quote(slugify(job_obj.company))
+        + "/salaries/" + urllib.parse.quote(slugify(job_obj.title))
     )
 
     try:
