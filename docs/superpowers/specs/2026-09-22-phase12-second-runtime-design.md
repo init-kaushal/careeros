@@ -476,26 +476,30 @@ that later gets mutated to `stage="applied"` and saved — not to source the URL
 navigates to.) See `docs/agent-integration.md` §11.3 for the shipped behavior.
 
 `headless` is a parameter rather than a constant because the CLI runs headful
-(`apply_cmd.py:185`) and `discover-and-apply` runs headless
-(`discover_and_apply_cmd.py:300`).
+(`apply_cmd.py:108`) and `discover-and-apply` runs headless
+(`discover_and_apply_cmd.py:368`).
 
 **Corrected during implementation:** the sentence originally here claimed `headless` was
 "the only behavioral difference" between those two call sites, and used that claim to justify
-sharing one implementation. As shipped, there are five: the approval-summary content
-(`discover-and-apply` embeds its own score/threshold wording; `apply_cmd` uses
-`propose_apply`'s default), JD truncation (`discover-and-apply` passes its own freshly-fetched,
-already-capped JD text via the `jd_text` override; `apply_cmd` relies on `propose_apply`'s
-own `(job.description or "")[:_JD_CAP]` default), the per-job activity events
+sharing one implementation. As shipped, four differences required parameterization:
+the approval-summary content (`discover-and-apply` embeds its own score/threshold wording;
+`apply_cmd` uses `propose_apply`'s default), JD truncation (`discover-and-apply` passes its own
+freshly-fetched, already-capped JD text via the `jd_text` override; `apply_cmd` relies on
+`propose_apply`'s own `(job.description or "")[:_JD_CAP]` default), the per-job activity events
 `discover-and-apply` logs around calls into the operations layer that the interactive command
 has no equivalent of (`apply_error`, `cover_letter_failed`, `no_filler_available`, and others —
-see `docs/agent-integration.md` §11.5), the `job_applied` summary (`discover-and-apply`'s no
-longer embeds the score/threshold it used to — see `DIVERGENCES.md`), and locked-profile
-(`BrowserProfileBusy`)
-handling (`discover-and-apply` treats it as a whole-run stop condition via
+see `docs/agent-integration.md` §11.5), and locked-profile (`BrowserProfileBusy`) handling
+(`discover-and-apply` treats it as a whole-run stop condition via
 `BrowserUnavailable.profile_busy`; `apply_cmd` does not need to, since it only ever applies to
-one job per invocation). `headless` is still a real, load-bearing parameter — just not the
-*only* one, which is why one shared implementation still needed a five-way parameterization,
-not a one-way one.
+one job per invocation). A fifth difference existed before the two call sites were consolidated
+onto one operations layer, and was resolved by unification rather than by parameterization:
+`discover-and-apply`'s `job_applied` summary used to embed the score and threshold that
+triggered the auto-apply, where `apply_cmd`'s never did; both callers now go through the same
+`_mark_applied` helper and share one canonical summary text with no caller-specific
+parameter — see the `DIVERGENCES.md` entry on this. `headless` is still a real, load-bearing
+parameter — just not the *only* one, which is why one shared implementation still needed a
+four-way parameterization (plus the one difference consolidation eliminated outright), not a
+one-way one.
 
 ---
 
