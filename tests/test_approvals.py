@@ -50,8 +50,6 @@ class TestApprovalModel:
         assert storage.exists("approvals/a-1.json")
 
 
-from unittest.mock import MagicMock
-
 from careeros.operations.approvals import (
     APPROVED, DECLINED, EXECUTED, FAILED, PENDING, SUPERSEDED,
     list_pending, mark_executed, mark_failed, open_approval, payload_value,
@@ -184,9 +182,17 @@ class TestMarkExecutedAndFailed:
     def test_mark_executed_sets_state_and_timestamp(self, tmp_path):
         runtime = _runtime(tmp_path)
         approval = _open(runtime)
+        resolve_approval(runtime, approval.id, ApprovalResult(approved=True), action_label="outreach")
         marked = mark_executed(runtime, approval.id)
         assert marked.state == EXECUTED
         assert marked.executed_at is not None
+
+    def test_mark_executed_refuses_a_pending_approval(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        approval = _open(runtime)
+        with pytest.raises(ApprovalNotGranted) as exc:
+            mark_executed(runtime, approval.id)
+        assert exc.value.state == PENDING
 
     def test_mark_failed_records_detail(self, tmp_path):
         runtime = _runtime(tmp_path)

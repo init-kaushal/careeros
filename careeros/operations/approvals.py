@@ -48,8 +48,14 @@ def require_state(storage: StorageProvider, approval_id: str, expected: str) -> 
     """Load an approval, or raise if it is not in the state this step needs.
 
     The single guard behind every execute_* and decline_*. Because executing
-    advances the record to a terminal state, this is what makes a second
-    execution of the same approval impossible rather than merely unlikely.
+    advances the record to a terminal state, this is what closes the window
+    between a crash and a retry — a dead process leaves the record executed
+    or failed, never approved, so a retry cannot act on it a second time. It
+    is a read-then-compare with no compare-and-swap, though, so it does not
+    by itself exclude two processes racing execute_* concurrently: both can
+    read approved before either writes past it. See docs/agent-integration.md
+    §10 for that residual window and the integrator's obligation not to run
+    two executors against the same approval id at once.
     """
     approval = Approval.load(storage, approval_id)
     if approval.state != expected:
@@ -140,12 +146,21 @@ def resolve_approval(
 
 
 def mark_executed(runtime: AgentRuntime, approval_id: str) -> Approval:
-    """Advance an approval to its terminal executed state.
+    """Advance an approved approval to its terminal executed state.
 
     Logs nothing: the calling flow records its own domain event, which is the
     one that means something to a reader of the activity log.
+
+    Guarded through require_state rather than a bare load: execute_* already
+    loads the approval once (via its own require_state call) before doing the
+    digest check and the model loads that sit between that gate and this
+    write, so re-checking here costs nothing but a comparison already paid
+    for by the load, and it narrows the accepted concurrency window from
+    "digest plus several file reads" down to a single load-then-write gap.
+    It also means this helper cannot be called on an approval that was never
+    approved.
     """
-    approval = Approval.load(runtime.storage, approval_id)
+    approval = require_state(runtime.storage, approval_id, APPROVED)
     approval = approval.model_copy(update={"state": EXECUTED, "executed_at": _now()})
     approval.save(runtime.storage)
     return approval
