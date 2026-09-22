@@ -1,3 +1,5 @@
+from html.parser import HTMLParser
+
 from careeros.core.models import Evidence, Profile, ResumeVariant, VariantSection
 from careeros.render.resume_html import build_resume_html
 
@@ -26,6 +28,23 @@ def _profile():
         title="Senior Site Reliability Engineer",
         location="Berlin",
     )
+
+
+_ALLOWED_TAGS = {"html", "head", "meta", "title", "style", "body",
+                 "h1", "p", "h2", "ul", "li"}
+_ALLOWED_ATTRS = {"lang", "charset", "class"}
+
+
+class _TagCollector(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tags: set[str] = set()
+        self.attrs: set[str] = set()
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.add(tag)
+        for name, _value in attrs:
+            self.attrs.add(name)
 
 
 def test_contact_header_comes_from_the_profile():
@@ -67,11 +86,35 @@ def test_markup_in_a_profile_field_is_escaped():
     assert "&lt;script&gt;" in html
 
 
-def test_no_external_asset_references():
-    # Rendering must never touch the network. Inline CSS only.
+def test_no_external_asset_markup():
     html = build_resume_html(_variant(), _profile())
-    for marker in ("http://", "https://", "<link", "@import", "<script", "src="):
+    # These cannot appear via escaped user text: a quote containing
+    # "<link" renders as "&lt;link", so a literal match here means real
+    # markup. http:// and src= are NOT safe to assert this way — see
+    # test_document_emits_no_asset_referencing_markup below.
+    for marker in ("<link", "<script", "@import"):
         assert marker not in html, marker
+
+
+def test_document_emits_no_asset_referencing_markup():
+    # A resume legitimately containing a URL must not be able to introduce a
+    # tag or an attribute. Substring checks cannot tell escaped text from
+    # live markup, so parse the document and assert an allowlist.
+    variant = _variant([VariantSection(heading="Projects", entries=[
+        _ev('Built portfolio at http://example.com/me using src="x.png"'),
+        _ev('<img src="http://evil/x.png"> <link rel="stylesheet" href="http://evil/s.css">'),
+        _ev('<script src="http://evil/x.js"></script>'),
+    ])])
+    parser = _TagCollector()
+    parser.feed(build_resume_html(variant, _profile()))
+    assert parser.tags <= _ALLOWED_TAGS, parser.tags - _ALLOWED_TAGS
+    assert parser.attrs <= _ALLOWED_ATTRS, parser.attrs - _ALLOWED_ATTRS
+
+
+def test_stylesheet_references_no_external_resource():
+    from careeros.render.resume_html import _CSS
+    for marker in ("url(", "@import", "http://", "https://"):
+        assert marker not in _CSS, marker
 
 
 def test_section_with_no_entries_is_not_rendered():
