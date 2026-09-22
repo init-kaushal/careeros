@@ -8,7 +8,7 @@ FORBIDDEN = {"rich", "typer", "click"}
 
 
 def _modules():
-    return sorted(OPERATIONS.glob("*.py"))
+    return sorted(OPERATIONS.glob("**/*.py"))
 
 
 def test_there_is_something_to_check():
