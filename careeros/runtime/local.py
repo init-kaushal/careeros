@@ -23,7 +23,11 @@ class LocalRuntime:
 
     def request_approval(self, proposal: ActionProposal) -> ApprovalResult:
         approved = Confirm.ask(proposal.summary, default=False)
-        return ApprovalResult(approved=approved)
+        reason = (
+            "approved at a terminal confirmation prompt" if approved
+            else "declined at a terminal confirmation prompt"
+        )
+        return ApprovalResult(approved=approved, reason=reason)
 
     def record_activity(self, event: ActivityEvent) -> None:
         event.agent_runtime = self.agent_runtime_name

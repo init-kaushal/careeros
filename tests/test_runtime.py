@@ -37,7 +37,9 @@ class TestLocalRuntime:
         with patch("careeros.runtime.local.Confirm.ask", return_value=True) as mock_ask:
             result = runtime.request_approval(proposal)
         mock_ask.assert_called_once_with("Apply to Acme?", default=False)
-        assert result == ApprovalResult(approved=True)
+        assert result == ApprovalResult(
+            approved=True, reason="approved at a terminal confirmation prompt"
+        )
 
     def test_request_approval_returns_approved_false_when_declined(self):
         storage = MagicMock()
