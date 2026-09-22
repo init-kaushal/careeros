@@ -14,6 +14,7 @@ from careeros.config_sources import build_source, load_board_entries
 from careeros.core.job_store import JobStore
 from careeros.core.models import AutomationPolicy, Goals, Job, PolicyConfig, Profile, Skills
 from careeros.core.policy_engine import PolicyEngine
+from careeros.core.resume_select import select_resume
 from careeros.runtime.base import ActionProposal
 from careeros.runtime.factory import open_automation_runtime
 from careeros.skills.browse_query import job_query_from_profile
@@ -24,8 +25,6 @@ from careeros.sources.base import job_from_posting, posting_from_scrape
 from careeros.storage.filesystem import LocalFilesystemStorage
 
 discover_and_apply_app = typer.Typer(help="Unattended discover + auto-apply for scheduled runs.")
-
-_RESUME_EXTENSIONS = (".pdf", ".docx")
 
 SCRAPERS: dict = {name: board.scraper for name, board in BOARDS.items()}
 
@@ -203,12 +202,6 @@ def discover_and_apply_cmd(
             best_by_job_id[job_id] = p
     eligible = sorted(best_by_job_id.values(), key=lambda p: p["score"], reverse=True)
 
-    resume_entries = sorted([
-        p for p in runtime.storage.list("resumes/versions/")
-        if p.endswith(_RESUME_EXTENSIONS)
-    ])
-    resume_path = runtime.storage.resolve(resume_entries[-1]) if resume_entries else None
-
     policy_engine = PolicyEngine(PolicyConfig.load(runtime.storage))
     applied_count = 0
     skipped_count = 0
@@ -216,12 +209,19 @@ def discover_and_apply_cmd(
     for p in eligible:
         if applied_count >= policy.max_auto_applies_per_run:
             break
-        if resume_path is None:
+
+        job_id = p["job_id"]
+        resume_choice = select_resume(runtime.storage, job_id)
+        if resume_choice is None:
             rprint("[yellow]No resume found — skipping auto-apply for " + p["company"] + ".[/yellow]")
             skipped_count += 1
             continue
+        resume_path = resume_choice.path
+        if resume_choice.tailored:
+            rprint("Resume: tailored for " + p["company"] + ".")
+        else:
+            rprint("Resume: " + resume_choice.storage_path + " — NOT tailored to this job.")
 
-        job_id = p["job_id"]
         job = Job.load(runtime.storage, job_id)
         if job.applied_at is not None:
             # Re-read persisted state rather than trusting discovery-time

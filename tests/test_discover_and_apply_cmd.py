@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 
 from careeros.cli.discover_and_apply_cmd import discover_and_apply_app
 from careeros.core.job_store import JobStore
-from careeros.core.models import AutomationPolicy, Job, PolicyConfig, Profile, Skill, Skills
+from careeros.core.models import AutomationPolicy, Job, PolicyConfig, Profile, ResumeVariant, Skill, Skills
 from careeros.sources.ats import ATSFetchError
 from careeros.sources.base import Posting
 from careeros.storage.filesystem import LocalFilesystemStorage
@@ -849,3 +849,53 @@ class TestDiscoverAndApplyCmd:
         jobs = Job.list_all(storage)
         assert len(jobs) == 1
         assert jobs[0].stage == "applied"
+
+    def test_auto_apply_prefers_a_tailored_variant_per_job(self, tmp_path):
+        # Two eligible jobs discovered in one run: Acme has a tailored
+        # variant waiting at resumes/versions/<job_id>/resume.pdf, Beta does
+        # not. Selection happens inside the per-job loop (see the fix for
+        # the hoisted resume_path bug), so each fill call must receive its
+        # own resume path rather than one path resolved once before the
+        # loop and reused for both jobs.
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5,
+                                  boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        storage = LocalFilesystemStorage(ws_path)
+
+        # job ids carry a random suffix (careeros.core.job_id.make_job_id),
+        # so pin them here to know in advance where the tailored variant for
+        # Acme must be written.
+        job_ids = {"Acme": "acme-job-id", "Beta": "beta-job-id"}
+        storage.atomic_write(ResumeVariant.pdf_path(job_ids["Acme"]), b"%PDF-tailored")
+
+        mock_filler = MagicMock()
+        mock_filler.can_handle.return_value = True
+        mock_filler.fill.return_value = True
+        mock_filler.platform = "Greenhouse"
+        mock_page = MagicMock()
+        postings = [
+            _posting(company="Acme", title="Role One", url="https://boards.greenhouse.io/acme/jobs/1"),
+            _posting(company="Beta", title="Role Two", url="https://boards.greenhouse.io/beta/jobs/2"),
+        ]
+
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS",
+                   {"linkedin": MagicMock(search=MagicMock(return_value=postings))}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job",
+                   return_value={"score": 95, "reasoning": "great"}), \
+             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.sources.base.make_job_id",
+                   side_effect=lambda company, title: job_ids[company]), \
+             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert mock_filler.fill.call_count == 2
+
+        resume_paths = [call.args[5] for call in mock_filler.fill.call_args_list]
+        assert len(set(resume_paths)) == 2, "both jobs received the same resume path"
+        assert storage.resolve(ResumeVariant.pdf_path(job_ids["Acme"])) in resume_paths
+        assert storage.resolve("resumes/versions/resume.pdf") in resume_paths

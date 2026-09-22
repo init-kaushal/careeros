@@ -28,11 +28,17 @@ def _make_profile():
     return Profile(name="Alice Smith", email="alice@example.com", title="Senior SRE")
 
 
-def _mock_runtime(tmp_path, resume_filename="resume.pdf", approved=True):
+def _mock_runtime(tmp_path, resume_filename="resume.pdf", approved=True, tailored=False):
     storage = MagicMock()
     storage.list.return_value = ["resumes/versions/" + resume_filename]
     storage.resolve.return_value = str(tmp_path / "resumes" / "versions" / resume_filename)
-    storage.exists.return_value = True
+    # Path-aware: a blanket True would make every test claim a tailored
+    # variant that does not exist.
+    tailored_pdf = "resumes/versions/acme-sre-abc1/resume.pdf"
+    tailored_json = "resumes/versions/acme-sre-abc1/variant.json"
+    storage.exists.side_effect = lambda p: (
+        tailored if p in (tailored_pdf, tailored_json) else True
+    )
     storage.read.return_value = b"{}"
     runtime = MagicMock()
     runtime.storage = storage
@@ -132,6 +138,10 @@ class TestApplyCmdFailurePaths:
         runtime = MagicMock()
         storage = MagicMock()
         storage.list.return_value = []
+        # No tailored variant either: select_resume must see this as "no
+        # resume at all", not accidentally claim a tailored PDF exists just
+        # because an unconfigured MagicMock.exists(...) is truthy by default.
+        storage.exists.return_value = False
         runtime.storage = storage
         with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
              patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
@@ -374,3 +384,33 @@ class TestApplyCmdFailurePaths:
 
         cbs.assert_not_called()
         mock_browser.assert_called()
+
+
+class TestApplyResumeSelection:
+    def test_untailored_fallback_is_announced_as_not_tailored(self, tmp_path):
+        runtime = _mock_runtime(tmp_path)
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+             patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
+             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Dear Acme,"), \
+             patch("careeros.cli.apply_cmd.Prompt.ask", return_value="q"):
+            result = runner.invoke(apply_app, ["acme-sre-abc1"])
+        assert "NOT tailored" in result.output
+
+    def test_tailored_variant_is_used_and_announced(self, tmp_path):
+        runtime = _mock_runtime(tmp_path, tailored=True)
+        with patch("careeros.cli.apply_cmd._get_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+             patch("careeros.cli.apply_cmd.Job.load", return_value=_make_job()), \
+             patch("careeros.cli.apply_cmd.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.cli.apply_cmd.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.cli.apply_cmd.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.cli.apply_cmd.generate_cover_letter", return_value="Dear Acme,"), \
+             patch("careeros.cli.apply_cmd.Prompt.ask", return_value="q"):
+            result = runner.invoke(apply_app, ["acme-sre-abc1"])
+        assert "tailored for this job" in result.output
+        assert "NOT tailored" not in result.output
+        runtime.storage.resolve.assert_any_call("resumes/versions/acme-sre-abc1/resume.pdf")

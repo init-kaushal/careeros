@@ -17,6 +17,7 @@ from careeros.cli.preflight import require_board_session
 from careeros.config import GlobalConfig
 from careeros.core.models import Goals, Job, PolicyConfig, Profile, Skills
 from careeros.core.policy_engine import PolicyEngine
+from careeros.core.resume_select import select_resume
 from careeros.runtime.base import ActionProposal
 from careeros.runtime.factory import open_local_runtime
 from careeros.skills.cover_letter import generate_cover_letter
@@ -27,7 +28,6 @@ console = Console()
 
 FILLERS = [GreenhouseFiller(), LeverFiller(), LinkedInFiller(), GenericFiller()]
 MAX_REGENERATIONS = 5
-_RESUME_EXTENSIONS = (".pdf", ".docx")
 
 
 def _get_storage(workspace_path: str | None) -> LocalFilesystemStorage:
@@ -68,16 +68,11 @@ def apply_cmd(
         raise typer.Exit(1)
 
     # Find resume (before profile load so failure is fast and clear)
-    resume_entries = sorted([
-        p for p in runtime.storage.list("resumes/versions/")
-        if p.endswith(_RESUME_EXTENSIONS)
-    ])
-    if not resume_entries:
+    resume_choice = select_resume(runtime.storage, job_id)
+    if resume_choice is None:
         rprint("[red]No resume found in resumes/versions/ — add one first.[/red]")
         raise typer.Exit(1)
-
-    resume_file = resume_entries[-1]
-    resume_path = runtime.storage.resolve(resume_file)
+    resume_path = resume_choice.path
 
     # Policy check (before any LLM call is spent preparing this application)
     policy_engine = PolicyEngine(PolicyConfig.load(runtime.storage))
@@ -106,6 +101,16 @@ def apply_cmd(
     if not cover_letter:
         rprint("[red]Cover letter generation failed. Check your LLM configuration.[/red]")
         raise typer.Exit(1)
+
+    if resume_choice.tailored:
+        detail = ""
+        if resume_choice.variant is not None:
+            detail = " — " + str(resume_choice.variant.entry_count()) + " evidence-backed entries"
+        rprint("[green]Resume: tailored for this job" + detail + "[/green]")
+    else:
+        rprint("[yellow]Resume: " + resume_choice.storage_path
+               + " — NOT tailored to this job. Run 'careeros resume variant --job "
+               + job_id + "' to tailor it.[/yellow]")
 
     # Review loop
     regenerations = 0
