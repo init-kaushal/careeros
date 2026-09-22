@@ -69,17 +69,26 @@ every stored skill carries a verbatim quote whose presence in the resume was
 deterministically verified, and a skill the model cannot evidence is dropped rather than
 stored. `onboard` uses the same extractor, so a stored skill means one thing.
 
-**11b — resume variants — remains.** It was split out because it needs a decision 11a did
-not: `apply` hands a file path to the ATS form uploader, so a tailored "variant" has to be
-an uploadable `.pdf`/`.docx`, and the project has no document renderer. That question gets
-its own spec rather than riding along with an extraction task.
+**Status: 11b shipped.** The decision 11b was split out for — `apply` hands a file path to
+the ATS form uploader, so a tailored "variant" has to be an uploadable document and the
+project had no renderer — was settled by rendering through the Playwright Chromium already
+in the dependency tree, launched ephemerally so it never contends with the browsing
+profile Phase 9c isolated. `careeros resume variant --job <id>` builds a variant from
+verbatim spans of the master resume only: the model selects and orders, and a span it
+cannot copy exactly is dropped and named rather than reworded. `apply` and
+`discover-and-apply` look the variant up by exact path per job and say at the approval
+prompt whether the resume going up is tailored.
+
+Note for a later phase: rendering uses Playwright's bundled Chromium while browsing uses
+`channel="chrome"`, so the two need separate `playwright install` runs. Reusing one binary
+would save a download and is worth revisiting.
 
 **Why:** `onboard`'s profile extraction is a quick, one-shot pass — good enough to bootstrap a workspace, but every downstream skill (job scoring, cover letters, outreach drafts) is only as good as that first extraction. And `apply` fills every application with the same static resume file regardless of the job, when a tailored variant would score better with both ATS keyword matching and a human reader.
 
 **What it builds:**
 - Resume variant generation: given a job's description and the evidence-backed skill set, generate a job-tailored resume variant, stored under `resumes/versions/`, that `apply` can select instead of always using the same file
 
-**Exit condition:** `careeros apply --job <id>` picks a resume variant tailored to that job's description rather than always using the same file; `cat resumes/versions/<variant>.json` (or equivalent) shows which evidence backs which claim.
+**Exit condition (met):** `careeros apply --job <id>` picks a resume variant tailored to that job's description rather than always using the same file; `cat resumes/versions/<job_id>/variant.json` shows which line of `resumes/master.md` backs every line of the rendered document.
 
 ---
 
