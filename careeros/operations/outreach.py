@@ -158,13 +158,25 @@ def propose_outreach_send(
     )
 
 
-def _load_for_execution(runtime: AgentRuntime, message_id: str, person_id: str):
+def _load_message_and_person(
+    runtime: AgentRuntime, message_id: str, person_id: str,
+) -> tuple[OutreachMessage, Person]:
     try:
         message = OutreachMessage.load(runtime.storage, message_id)
         person = Person.load(runtime.storage, person_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise EntityNotFound("Outreach message or person not found.") from exc
+    return message, person
+
+
+def _load_for_execution(
+    runtime: AgentRuntime, message_id: str, person_id: str,
+) -> tuple[OutreachMessage, Person, Job]:
+    message, person = _load_message_and_person(runtime, message_id, person_id)
+    try:
         job = Job.load(runtime.storage, message.job_id)
     except (FileNotFoundError, ValueError) as exc:
-        raise EntityNotFound("Outreach message, person, or job not found.") from exc
+        raise EntityNotFound("Job not found.") from exc
     return message, person, job
 
 
@@ -176,6 +188,10 @@ def execute_outreach_send(
     Drafts nothing and calls no LLM: the text that sends is read back from the
     stored OutreachMessage and checked against the digest recorded when the
     approval was created, so the bytes reviewed are the bytes transmitted.
+
+    The approval is consumed before the send: the external action happens with
+    the approval already marked executed, so process death or concurrency cannot
+    trigger a duplicate send.
     """
     approval = require_state(runtime.storage, approval_id, APPROVED)
     message_id = payload_value(approval, "message_id")
@@ -192,6 +208,9 @@ def execute_outreach_send(
         # the address and retrying must still work without re-approving.
         raise MissingRecipient(person_id, person.name)
 
+    # Consume the approval before attempting the external action.
+    mark_executed(runtime, approval_id)
+
     try:
         send_email(person.email, subject_for(job), message.draft_text)
     except Exception as exc:
@@ -199,14 +218,16 @@ def execute_outreach_send(
         mark_failed(runtime, approval_id, type(exc).__name__)
         runtime.record_activity(runtime.new_event(
             "outreach_send_failed", action_label,
-            "Send failed for outreach to " + person.name + ": " + type(exc).__name__,
+            "Send failed for outreach to " + person.name + ": "
+            + type(exc).__name__,
             status="failed", entity_type="outreach_message", entity_id=message_id,
         ))
         raise SendFailed(str(exc)) from exc
 
     sent_at = _now()
-    message.model_copy(update={"send_state": "sent", "sent_at": sent_at}).save(runtime.storage)
-    mark_executed(runtime, approval_id)
+    message.model_copy(update={"send_state": "sent", "sent_at": sent_at}).save(
+        runtime.storage
+    )
     runtime.record_activity(runtime.new_event(
         "outreach_sent", action_label, "Sent outreach to " + person.name,
         entity_type="outreach_message", entity_id=message_id,
@@ -228,7 +249,7 @@ def decline_outreach_send(
     approval = require_state(runtime.storage, approval_id, DECLINED)
     message_id = payload_value(approval, "message_id")
     person_id = payload_value(approval, "person_id")
-    message, person, _ = _load_for_execution(runtime, message_id, person_id)
+    message, person = _load_message_and_person(runtime, message_id, person_id)
 
     message.model_copy(update={"send_state": "declined"}).save(runtime.storage)
     runtime.record_activity(runtime.new_event(

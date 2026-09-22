@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import patch
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace, WorkspaceContext
 
@@ -33,3 +34,19 @@ BS Computer Science, UC Berkeley, 2016
 def tmp_workspace(tmp_path) -> WorkspaceContext:
     storage = LocalFilesystemStorage(str(tmp_path))
     return init_workspace(storage)
+
+
+@pytest.fixture(autouse=True)
+def _guard_against_real_smtp():
+    """Prevent any test from making real SMTP connections.
+
+    This is an autouse guard at the smtplib layer, independent of import
+    style, so it cannot be bypassed. Per-test explicit patches override it,
+    so tests that legitimately exercise the mailer (test_mailer.py) can
+    still patch send_email to run their own SMTP mocks.
+    """
+    with patch("smtplib.SMTP", side_effect=AssertionError(
+            "test attempted a real SMTP connection")):
+        with patch("smtplib.SMTP_SSL", side_effect=AssertionError(
+                "test attempted a real SMTP connection")):
+            yield

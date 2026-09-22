@@ -6,11 +6,18 @@ import pytest
 from careeros.core.models import (
     Approval, Company, Job, OutreachMessage, Person, PolicyConfig, Profile,
 )
-from careeros.operations.approvals import PENDING, SUPERSEDED
-from careeros.operations.errors import DraftFailed, EntityNotFound, PolicyBlocked
-from careeros.operations.outreach import (
-    make_message_id, propose_outreach_send,
+from careeros.operations.approvals import (
+    APPROVED, DECLINED, EXECUTED, FAILED, PENDING, SUPERSEDED, resolve_approval,
 )
+from careeros.operations.errors import (
+    ApprovalNotGranted, ArtifactChanged, DraftFailed, EntityNotFound,
+    MalformedApproval, MissingRecipient, PolicyBlocked, SendFailed,
+)
+from careeros.operations.outreach import (
+    decline_outreach_send, execute_outreach_send, make_message_id,
+    propose_outreach_send,
+)
+from careeros.runtime.base import ApprovalResult
 from careeros.runtime.factory import open_local_runtime
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace
@@ -149,14 +156,6 @@ class TestMakeMessageId:
         assert "/" not in make_message_id("../../etc/passwd", "..")
 
 
-from careeros.operations.approvals import APPROVED, EXECUTED, FAILED, resolve_approval
-from careeros.operations.errors import (
-    ApprovalNotGranted, ArtifactChanged, MissingRecipient, SendFailed,
-)
-from careeros.operations.outreach import decline_outreach_send, execute_outreach_send
-from careeros.runtime.base import ApprovalResult
-
-
 def _approve(runtime, approval_id, reason="user said yes"):
     return resolve_approval(
         runtime, approval_id, ApprovalResult(approved=True, reason=reason),
@@ -184,7 +183,9 @@ class TestExecuteOutreachSend:
         assert Approval.load(runtime.storage, proposal.approval_id).state == EXECUTED
         assert "outreach_sent" in _log(runtime.storage)
 
-    @pytest.mark.parametrize("state", ["pending", "declined", "superseded", "failed"])
+    @pytest.mark.parametrize(
+        "state", ["pending", "declined", "superseded", "failed", "executed"]
+    )
     def test_refuses_any_state_but_approved(self, tmp_path, state):
         runtime = _runtime(tmp_path)
         proposal = _propose(runtime)
@@ -194,6 +195,8 @@ class TestExecuteOutreachSend:
             with pytest.raises(ApprovalNotGranted):
                 execute_outreach_send(runtime, proposal.approval_id)
         mock_send.assert_not_called()
+        # Verify the approval state was not mutated by the refusal.
+        assert Approval.load(runtime.storage, proposal.approval_id).state == state
 
     def test_refuses_to_execute_the_same_approval_twice(self, tmp_path):
         runtime = _runtime(tmp_path)
@@ -248,13 +251,32 @@ class TestExecuteOutreachSend:
         assert "outreach_send_failed" in _log(runtime.storage)
 
     def test_a_malformed_payload_raises_rather_than_key_error(self, tmp_path):
-        from careeros.operations.errors import MalformedApproval
         runtime = _runtime(tmp_path)
         proposal = _propose(runtime)
         _approve(runtime, proposal.approval_id)
         approval = Approval.load(runtime.storage, proposal.approval_id)
         approval.model_copy(update={"payload": {}}).save(runtime.storage)
-        with pytest.raises(MalformedApproval):
+        with patch("careeros.operations.outreach.send_email") as mock_send:
+            with pytest.raises(MalformedApproval):
+                execute_outreach_send(runtime, proposal.approval_id)
+        mock_send.assert_not_called()
+
+    def test_mark_executed_happens_before_the_send(self, tmp_path):
+        """Verify the approval is consumed before the external action.
+
+        This prevents crashes or concurrency from causing duplicate sends.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        def check_approval_executed(*args, **kwargs):
+            # When send_email is called, the approval must already be EXECUTED.
+            approval = Approval.load(runtime.storage, proposal.approval_id)
+            assert approval.state == EXECUTED
+
+        with patch("careeros.operations.outreach.send_email",
+                   side_effect=check_approval_executed):
             execute_outreach_send(runtime, proposal.approval_id)
 
 
@@ -274,3 +296,15 @@ class TestDeclineOutreachSend:
         _approve(runtime, proposal.approval_id)
         with pytest.raises(ApprovalNotGranted):
             decline_outreach_send(runtime, proposal.approval_id)
+
+    def test_decline_works_when_the_job_file_is_missing(self, tmp_path):
+        """Decline is pure bookkeeping and does not need the job."""
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        resolve_approval(runtime, proposal.approval_id,
+                         ApprovalResult(approved=False), action_label="outreach")
+        # Delete the job file to verify decline doesn't try to load it.
+        runtime.storage.delete("jobs/" + JOB_ID + ".json")
+        decline_outreach_send(runtime, proposal.approval_id)
+        assert OutreachMessage.load(runtime.storage, MESSAGE_ID).send_state == "declined"
+        assert "outreach_send_declined" in _log(runtime.storage)
