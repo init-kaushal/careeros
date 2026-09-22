@@ -331,12 +331,16 @@ class Approval(BaseModel):
     two other terminal outcomes reachable only from pending. executed is
     terminal on the success path, but not always: execute_* marks the record
     executed before attempting its external action (closing the window where
-    a crash or a race could let a second process act on a still-approved
-    record), and moves it on to failed if that action then raises. So the
-    fourth path out of pending is pending -> approved -> executed -> failed,
-    not a direct approved -> failed edge. Either way, only `approved` may
-    execute, and executing advances the record out of that state
-    immediately, so one approval can never authorize two external actions.
+    a crash between the two writes could leave a still-approved record a
+    retrying process could act on again), and moves it on to failed if that
+    action then raises. So the fourth path out of pending is pending ->
+    approved -> executed -> failed, not a direct approved -> failed edge.
+    Either way, only `approved` may execute, and executing advances the
+    record out of that state before the external action runs — which defeats
+    process death and narrows, but does not by itself eliminate, the window
+    for two processes racing the same approval id concurrently (see
+    require_state and docs/agent-integration.md §10). Integrators are told
+    not to run two executors against one approval id at once.
 
     `payload` is an open string map on purpose: it holds only the identifiers
     and workspace-relative paths execute_* needs to find its inputs, which
