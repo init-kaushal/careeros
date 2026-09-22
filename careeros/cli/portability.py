@@ -6,6 +6,7 @@ import typer
 from rich import print as rprint
 
 from careeros.config import GlobalConfig
+from careeros.runtime.factory import WorkspaceNotConfigured, resolve_storage
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import open_workspace
 
@@ -17,13 +18,13 @@ def export_cmd(
     output: str | None = typer.Option(None, "--output", "-o", help="Output zip path"),
     workspace: str | None = typer.Option(None, "--workspace", help="Workspace path"),
 ) -> None:
-    config = GlobalConfig.load()
-    ws_path = workspace or config.workspace_path
-    if not ws_path:
+    try:
+        storage = resolve_storage(workspace)
+    except WorkspaceNotConfigured:
         rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
         raise typer.Exit(1)
 
-    ws_root = Path(ws_path).expanduser()
+    ws_root = Path(storage.resolve("."))
 
     if not output:
         date = datetime.now(timezone.utc).strftime("%Y-%m-%d")

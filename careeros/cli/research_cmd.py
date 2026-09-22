@@ -9,26 +9,23 @@ from rich import print as rprint
 from careeros.browser.driver import BrowserProfileBusy, fetch_jd_text, launch_browser
 from careeros.browser.scrapers.people_search import PeopleSearchScraper
 from careeros.cli.preflight import require_board_session
-from careeros.config import GlobalConfig
 from careeros.core.ids import make_company_id, make_compensation_id, make_person_id, slugify
 from careeros.core.models import Company, CompensationDataPoint, Job, Person, Preferences
-from careeros.runtime.factory import open_local_runtime
+from careeros.runtime.factory import WorkspaceNotConfigured, open_local_runtime, resolve_storage
+from careeros.runtime.local import LocalRuntime
 from careeros.skills.company_research import extract_company_info
 from careeros.skills.compensation_research import extract_compensation_data
 from careeros.skills.people_research import classify_person_role
-from careeros.storage.filesystem import LocalFilesystemStorage
 
 research_app = typer.Typer(help="Research companies and people for outreach.")
 
 
-def _get_storage(workspace_path: str | None) -> LocalFilesystemStorage:
-    if workspace_path:
-        return LocalFilesystemStorage(workspace_path)
-    config = GlobalConfig.load()
-    if not config.workspace_path:
+def _open_runtime(workspace_path: str | None) -> LocalRuntime:
+    try:
+        return open_local_runtime(resolve_storage(workspace_path))
+    except (WorkspaceNotConfigured, FileNotFoundError):
         rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
         raise typer.Exit(1)
-    return LocalFilesystemStorage(config.workspace_path)
 
 
 def _now() -> str:
@@ -40,11 +37,7 @@ def company(
     job: str = typer.Option(..., "--job", help="Job ID to research the company for"),
     workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
 ) -> None:
-    try:
-        runtime = open_local_runtime(_get_storage(workspace))
-    except FileNotFoundError:
-        rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
-        raise typer.Exit(1)
+    runtime = _open_runtime(workspace)
 
     try:
         job_obj = Job.load(runtime.storage, job)
@@ -87,11 +80,7 @@ def people(
     job: str = typer.Option(..., "--job", help="Job ID to research people for"),
     workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
 ) -> None:
-    try:
-        runtime = open_local_runtime(_get_storage(workspace))
-    except FileNotFoundError:
-        rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
-        raise typer.Exit(1)
+    runtime = _open_runtime(workspace)
 
     try:
         job_obj = Job.load(runtime.storage, job)
@@ -143,11 +132,7 @@ def compensation(
     job: str = typer.Option(..., "--job", help="Job ID to research compensation for"),
     workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
 ) -> None:
-    try:
-        runtime = open_local_runtime(_get_storage(workspace))
-    except FileNotFoundError:
-        rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
-        raise typer.Exit(1)
+    runtime = _open_runtime(workspace)
 
     try:
         job_obj = Job.load(runtime.storage, job)

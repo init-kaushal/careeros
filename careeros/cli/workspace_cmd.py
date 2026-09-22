@@ -4,6 +4,7 @@ from rich import print as rprint
 from careeros.config import GlobalConfig
 from careeros.config_sources import KNOWN_SOURCES
 from careeros.core.models import Profile, Skills
+from careeros.runtime.factory import WorkspaceNotConfigured, resolve_storage
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import open_workspace
 from careeros.workspace.manifest import Manifest, check_schema_compatibility, UnsupportedSchemaVersion
@@ -12,13 +13,11 @@ workspace_app = typer.Typer(name="workspace", help="Manage your CareerOS workspa
 
 
 def _get_storage(workspace_path: str | None) -> LocalFilesystemStorage:
-    if workspace_path:
-        return LocalFilesystemStorage(workspace_path)
-    config = GlobalConfig.load()
-    if not config.workspace_path:
+    try:
+        return resolve_storage(workspace_path)
+    except WorkspaceNotConfigured:
         rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
         raise typer.Exit(1)
-    return LocalFilesystemStorage(config.workspace_path)
 
 
 @workspace_app.command("status")

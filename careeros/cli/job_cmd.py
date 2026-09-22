@@ -6,11 +6,11 @@ from rich.panel import Panel
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
 
-from careeros.config import GlobalConfig
 from careeros.core.activity import ActivityLogger
 from careeros.core.job_id import make_job_id
 from careeros.core.job_store import JobStore
 from careeros.core.models import Job, JOB_STAGES
+from careeros.runtime.factory import WorkspaceNotConfigured, resolve_storage
 from careeros.skills.job_extract import extract_job_fields
 from careeros.sources.ats import ATSFetchError
 from careeros.sources.base import job_from_posting
@@ -24,13 +24,11 @@ console = Console()
 
 
 def _get_storage(workspace_path: str | None) -> LocalFilesystemStorage:
-    if workspace_path:
-        return LocalFilesystemStorage(workspace_path)
-    config = GlobalConfig.load()
-    if not config.workspace_path:
+    try:
+        return resolve_storage(workspace_path)
+    except WorkspaceNotConfigured:
         rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
         raise typer.Exit(1)
-    return LocalFilesystemStorage(config.workspace_path)
 
 
 def _now() -> str:

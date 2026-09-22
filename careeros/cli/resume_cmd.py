@@ -8,14 +8,13 @@ import typer
 from playwright.sync_api import Error as PlaywrightError
 from rich import print as rprint
 
-from careeros.config import GlobalConfig
 from careeros.core.models import Job, Profile, ResumeVariant, Skills
 from careeros.render.resume_html import build_resume_html
 from careeros.render.resume_pdf import RendererUnavailable, render_pdf
-from careeros.runtime.factory import open_local_runtime
+from careeros.runtime.factory import WorkspaceNotConfigured, open_local_runtime, resolve_storage
+from careeros.runtime.local import LocalRuntime
 from careeros.skills.resume_ingest import ingest_resume
 from careeros.skills.resume_variant import select_variant_content
-from careeros.storage.filesystem import LocalFilesystemStorage
 
 resume_app = typer.Typer(name="resume", help="Ingest and inspect your resume.")
 
@@ -24,14 +23,12 @@ _SKILLS_PATH = "profile/skills.json"
 _PROFILE_PATH = "profile/profile.json"
 
 
-def _get_storage(workspace_path: str | None) -> LocalFilesystemStorage:
-    if workspace_path:
-        return LocalFilesystemStorage(workspace_path)
-    config = GlobalConfig.load()
-    if not config.workspace_path:
+def _open_runtime(workspace_path: str | None) -> LocalRuntime:
+    try:
+        return open_local_runtime(resolve_storage(workspace_path))
+    except (WorkspaceNotConfigured, FileNotFoundError):
         rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
         raise typer.Exit(1)
-    return LocalFilesystemStorage(config.workspace_path)
 
 
 def _record_failed(runtime, summary: str) -> None:
@@ -61,11 +58,7 @@ def ingest(
     """Extract skills from your resume, keeping only evidence-backed ones."""
     # A workspace is required because this writes both the skill file and an
     # audit event.
-    try:
-        runtime = open_local_runtime(_get_storage(workspace))
-    except FileNotFoundError:
-        rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
-        raise typer.Exit(1)
+    runtime = _open_runtime(workspace)
 
     # `new_resume_text` is set only when `path` names a file to adopt as the
     # new master. It is deliberately not written to storage yet — see below.
@@ -139,11 +132,7 @@ def variant(
     model: str = typer.Option(None, "--model", help="Override LLM model"),
 ) -> None:
     """Build a job-tailored resume from verbatim spans of your master resume."""
-    try:
-        runtime = open_local_runtime(_get_storage(workspace))
-    except FileNotFoundError:
-        rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
-        raise typer.Exit(1)
+    runtime = _open_runtime(workspace)
 
     try:
         job_record = Job.load(runtime.storage, job)

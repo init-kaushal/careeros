@@ -10,9 +10,8 @@ from rich.table import Table
 from careeros.browser.boards import BOARDS
 from careeros.browser.driver import BrowserProfileBusy, get_careeros_profile_path, launch_browser
 from careeros.browser.session import check_board_sessions
-from careeros.config import GlobalConfig
-from careeros.runtime.factory import open_local_runtime
-from careeros.storage.filesystem import LocalFilesystemStorage
+from careeros.runtime.factory import WorkspaceNotConfigured, open_local_runtime, resolve_storage
+from careeros.runtime.local import LocalRuntime
 
 browser_app = typer.Typer(name="browser", help="Manage the isolated CareerOS browser profile.")
 console = Console()
@@ -21,14 +20,12 @@ _LOGIN_TIMEOUT_SECONDS = 300
 _POLL_INTERVAL_SECONDS = 2
 
 
-def _get_storage(workspace_path: str | None) -> LocalFilesystemStorage:
-    if workspace_path:
-        return LocalFilesystemStorage(workspace_path)
-    config = GlobalConfig.load()
-    if not config.workspace_path:
+def _open_runtime(workspace_path: str | None) -> LocalRuntime:
+    try:
+        return open_local_runtime(resolve_storage(workspace_path))
+    except (WorkspaceNotConfigured, FileNotFoundError):
         rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
         raise typer.Exit(1)
-    return LocalFilesystemStorage(config.workspace_path)
 
 
 @browser_app.command()
@@ -43,11 +40,7 @@ def login(
         raise typer.Exit(1)
 
     # A workspace is required here because this command writes an audit record.
-    try:
-        runtime = open_local_runtime(_get_storage(workspace))
-    except FileNotFoundError:
-        rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
-        raise typer.Exit(1)
+    runtime = _open_runtime(workspace)
 
     rprint("Opening " + board_obj.login_url)
     rprint("[yellow]Sign in in the browser window. CareerOS detects it and closes automatically.[/yellow]")

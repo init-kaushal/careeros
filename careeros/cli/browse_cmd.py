@@ -12,14 +12,13 @@ from careeros.browser.boards import BOARDS
 from careeros.browser.driver import BrowserProfileBusy, fetch_jd_text, launch_browser
 from careeros.browser.scrapers.generic import GenericScraper
 from careeros.cli.preflight import require_board_session
-from careeros.config import GlobalConfig
 from careeros.core.job_store import JobStore
 from careeros.core.models import Goals, Profile, Skills
-from careeros.runtime.factory import open_local_runtime
+from careeros.runtime.factory import WorkspaceNotConfigured, open_local_runtime, resolve_storage
+from careeros.runtime.local import LocalRuntime
 from careeros.skills.browse_query import job_query_from_profile
 from careeros.skills.job_score import score_job
 from careeros.sources.base import job_from_posting, posting_from_scrape
-from careeros.storage.filesystem import LocalFilesystemStorage
 
 browse_app = typer.Typer(name="browse", help="Search job boards using your browser session.")
 console = Console()
@@ -27,14 +26,12 @@ console = Console()
 SCRAPERS: dict = {name: board.scraper for name, board in BOARDS.items()}
 
 
-def _get_storage(workspace_path: str | None) -> LocalFilesystemStorage:
-    if workspace_path:
-        return LocalFilesystemStorage(workspace_path)
-    config = GlobalConfig.load()
-    if not config.workspace_path:
+def _open_runtime(workspace_path: str | None) -> LocalRuntime:
+    try:
+        return open_local_runtime(resolve_storage(workspace_path))
+    except (WorkspaceNotConfigured, FileNotFoundError):
         rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
         raise typer.Exit(1)
-    return LocalFilesystemStorage(config.workspace_path)
 
 
 def _now() -> str:
@@ -62,11 +59,7 @@ def browse_cmd(
     if board != "url":
         require_board_session(board)
 
-    try:
-        runtime = open_local_runtime(_get_storage(workspace))
-    except FileNotFoundError:
-        rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
-        raise typer.Exit(1)
+    runtime = _open_runtime(workspace)
 
     try:
         profile = Profile.load(runtime.storage)
