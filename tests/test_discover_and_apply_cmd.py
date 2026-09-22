@@ -235,7 +235,7 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
-             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+             patch("careeros.operations.apply.FILLERS", [mock_filler]):
             result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
@@ -268,8 +268,9 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
-             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
-             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser", _mock_launch(mock_page)):
             result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
@@ -296,7 +297,7 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 50, "reasoning": "meh"}), \
-             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+             patch("careeros.operations.apply.FILLERS", [mock_filler]):
             result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
@@ -321,8 +322,9 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
-             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
-             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser", _mock_launch(mock_page)):
             result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
@@ -354,8 +356,9 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
-             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
-             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser", _mock_launch(mock_page)):
             result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
@@ -379,8 +382,8 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
-             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value=""), \
-             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+             patch("careeros.operations.apply.generate_cover_letter", return_value=""), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]):
             result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
@@ -402,8 +405,8 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
-             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
-             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]):
             result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
@@ -437,9 +440,10 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
-             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter"), \
              patch.object(LocalFilesystemStorage, "atomic_write", flaky_atomic_write), \
-             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser", _mock_launch(mock_page)):
             result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
@@ -472,8 +476,9 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
-             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
-             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser", _mock_launch(mock_page)):
             result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
@@ -499,8 +504,9 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
-             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
-             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser", _mock_launch(mock_page)):
             first = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
             second = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
@@ -527,7 +533,7 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 50, "reasoning": "meh"}), \
-             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+             patch("careeros.operations.apply.FILLERS", [mock_filler]):
             runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
             second = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
@@ -551,8 +557,8 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
-             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter") as mock_gen, \
-             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+             patch("careeros.operations.apply.generate_cover_letter") as mock_gen, \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]):
             result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
@@ -580,8 +586,6 @@ class TestDiscoverAndApplyCmd:
         mock_browser.assert_called_with(headless=True)
 
     def test_locked_profile_during_auto_apply_aborts_the_run(self, tmp_path):
-        from contextlib import contextmanager as _contextmanager
-
         from careeros.browser.driver import BrowserProfileBusy
 
         # Two eligible jobs: if a locked profile were treated as a per-job
@@ -599,28 +603,20 @@ class TestDiscoverAndApplyCmd:
         ]
 
         # The discovery loop's launch_browser call (once, for the "linkedin"
-        # board) must succeed normally; only the auto-apply loop's calls must
-        # raise BrowserProfileBusy, so this test exercises the auto-apply site
-        # specifically and not the discovery site.
-        call_count = {"n": 0}
-
-        def _launch(headless=True):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                @_contextmanager
-                def _ctx():
-                    yield MagicMock(), mock_page
-                return _ctx()
-            raise BrowserProfileBusy("already in use by another CareerOS process")
-
+        # board) must succeed normally; only the auto-apply loop's calls
+        # (now inside careeros.operations.apply, via execute_apply) must
+        # raise BrowserProfileBusy, so this test exercises the auto-apply
+        # site specifically and not the discovery site.
         with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
                    return_value={"linkedin": True}), \
              patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=postings))}), \
-             patch("careeros.cli.discover_and_apply_cmd.launch_browser", side_effect=_launch), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch(mock_page)), \
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
-             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter") as mock_gen, \
-             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter") as mock_gen, \
+             patch("careeros.operations.apply.launch_browser",
+                   side_effect=BrowserProfileBusy("already in use by another CareerOS process")), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]):
             result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 1
@@ -666,8 +662,8 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="jd"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job",
                    return_value={"score": 95, "reasoning": "great"}), \
-             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
-             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]):
             scrapers.__getitem__.return_value.search.return_value = [
                 _posting(title="Senior SRE", url="https://linkedin.test/1")
             ]
@@ -869,8 +865,9 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job",
                    return_value={"score": 95, "reasoning": "great"}), \
-             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
-             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser", _mock_launch(mock_page)):
             result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
@@ -915,10 +912,11 @@ class TestDiscoverAndApplyCmd:
              patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
              patch("careeros.cli.discover_and_apply_cmd.score_job",
                    return_value={"score": 95, "reasoning": "great"}), \
-             patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter", return_value="Cover letter"), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter"), \
              patch("careeros.sources.base.make_job_id",
                    side_effect=lambda company, title: job_ids[company]), \
-             patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser", _mock_launch(mock_page)):
             result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         assert result.exit_code == 0
@@ -953,10 +951,11 @@ class TestDiscoverAndApplyCmd:
                  patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
                  patch("careeros.cli.discover_and_apply_cmd.score_job",
                        return_value={"score": 95, "reasoning": "great"}), \
-                 patch("careeros.cli.discover_and_apply_cmd.generate_cover_letter",
+                 patch("careeros.operations.apply.generate_cover_letter",
                        return_value="Cover letter"), \
                  patch("careeros.sources.base.make_job_id", return_value=job_id), \
-                 patch("careeros.cli.discover_and_apply_cmd.FILLERS", [mock_filler]):
+                 patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+                 patch("careeros.operations.apply.launch_browser", _mock_launch(MagicMock())):
                 return runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
 
         return storage, job_id, run

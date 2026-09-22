@@ -8,35 +8,36 @@ from rich import print as rprint
 from careeros.browser.boards import BOARDS
 from careeros.browser.driver import BrowserProfileBusy, fetch_jd_text, launch_browser
 from careeros.browser.session import check_board_sessions
-from careeros.config import GlobalConfig
 from careeros.config_sources import build_source, load_board_entries
 from careeros.core.job_store import JobStore
-from careeros.core.models import AutomationPolicy, Goals, Job, PolicyConfig, Profile, Skills
-from careeros.core.policy_engine import PolicyEngine
-from careeros.core.resume_select import select_resume
-from careeros.operations.apply import FILLERS
+from careeros.core.models import AutomationPolicy, Goals, Job, Profile, Skills
+from careeros.operations.apply import ACTION, execute_apply, propose_apply
+from careeros.operations.approvals import resolve_approval
+from careeros.operations.errors import (
+    BrowserUnavailable, DraftFailed, EntityNotFound, FillIncomplete, OperationError,
+    PolicyBlocked,
+)
+from careeros.runtime.automation import AutomationRuntime
 from careeros.runtime.base import ActionProposal
-from careeros.runtime.factory import open_automation_runtime
+from careeros.runtime.factory import (
+    WorkspaceNotConfigured, open_automation_runtime, resolve_storage,
+)
 from careeros.skills.browse_query import job_query_from_profile
-from careeros.skills.cover_letter import generate_cover_letter
 from careeros.skills.job_score import score_job
 from careeros.sources.ats import ATSFetchError
 from careeros.sources.base import job_from_posting, posting_from_scrape
-from careeros.storage.filesystem import LocalFilesystemStorage
 
 discover_and_apply_app = typer.Typer(help="Unattended discover + auto-apply for scheduled runs.")
 
 SCRAPERS: dict = {name: board.scraper for name, board in BOARDS.items()}
 
 
-def _get_storage(workspace_path: str | None) -> LocalFilesystemStorage:
-    if workspace_path:
-        return LocalFilesystemStorage(workspace_path)
-    config = GlobalConfig.load()
-    if not config.workspace_path:
+def _open_runtime(workspace_path: str | None) -> AutomationRuntime:
+    try:
+        return open_automation_runtime(resolve_storage(workspace_path))
+    except (WorkspaceNotConfigured, FileNotFoundError):
         rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
         raise typer.Exit(1)
-    return LocalFilesystemStorage(config.workspace_path)
 
 
 def _now() -> str:
@@ -51,11 +52,7 @@ def discover_and_apply_cmd(
     ),
     workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
 ) -> None:
-    try:
-        runtime = open_automation_runtime(_get_storage(workspace))
-    except FileNotFoundError:
-        rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
-        raise typer.Exit(1)
+    runtime = _open_runtime(workspace)
 
     try:
         policy = AutomationPolicy.load(runtime.storage)
@@ -202,7 +199,6 @@ def discover_and_apply_cmd(
             best_by_job_id[job_id] = p
     eligible = sorted(best_by_job_id.values(), key=lambda p: p["score"], reverse=True)
 
-    policy_engine = PolicyEngine(PolicyConfig.load(runtime.storage))
     applied_count = 0
     skipped_count = 0
     blocked_count = 0
@@ -211,13 +207,6 @@ def discover_and_apply_cmd(
             break
 
         job_id = p["job_id"]
-        resume_choice = select_resume(runtime.storage, job_id)
-        if resume_choice is None:
-            rprint("[yellow]No resume found — skipping auto-apply for " + p["company"] + ".[/yellow]")
-            skipped_count += 1
-            continue
-        resume_path = resume_choice.path
-
         job = Job.load(runtime.storage, job_id)
         if job.applied_at is not None:
             # Re-read persisted state rather than trusting discovery-time
@@ -225,20 +214,90 @@ def discover_and_apply_cmd(
             # happened mid-run (e.g. via a concurrent `careeros apply`).
             skipped_count += 1
             continue
-        policy_result = policy_engine.check_job(job)
-        if policy_result.blocked:
+
+        summary = (
+            "Auto-apply (score " + str(p["score"]) + " >= threshold "
+            + str(policy.auto_apply_min_score) + ") to " + p["company"] + " — " + p["title"]
+        )
+
+        try:
+            proposal = propose_apply(
+                runtime, job_id, action_label="discover-and-apply", summary=summary,
+            )
+        except PolicyBlocked:
+            # Already logged (policy_blocked) inside propose_apply.
+            blocked_count += 1
+            continue
+        except DraftFailed:
             runtime.record_activity(runtime.new_event(
-                "policy_blocked", "discover-and-apply",
-                "Blocked by policy (" + policy_result.rule + "): " + p["company"] + " — " + p["title"],
+                "cover_letter_failed", "discover-and-apply",
+                "Cover letter generation failed for " + p["company"] + " — " + p["title"],
                 status="failed", entity_type="job", entity_id=job_id,
             ))
-            blocked_count += 1
+            skipped_count += 1
+            continue
+        except EntityNotFound as exc:
+            detail = str(exc)
+            if detail.startswith("No resume found"):
+                rprint("[yellow]No resume found — skipping auto-apply for " + p["company"] + ".[/yellow]")
+            elif detail.startswith("No filler available"):
+                runtime.record_activity(runtime.new_event(
+                    "no_filler_available", "discover-and-apply",
+                    "No filler available for " + p["company"] + " — " + p["title"],
+                    status="failed", entity_type="job", entity_id=job_id,
+                ))
+            else:
+                # Job not found, or no URL on file: not distinguished by the
+                # unattended run before this refactor either, since neither
+                # case could occur for a job this loop just saved itself.
+                runtime.record_activity(runtime.new_event(
+                    "apply_error", "discover-and-apply",
+                    "Error while applying to " + p["company"] + " — " + p["title"]
+                    + ": " + type(exc).__name__,
+                    status="failed", entity_type="job", entity_id=job_id,
+                ))
+            skipped_count += 1
+            continue
+        except BrowserUnavailable as exc:
+            if exc.profile_busy:
+                # A locked profile is a whole-run condition, not a per-job
+                # one: continuing would re-run a paid cover-letter generation
+                # for every remaining job only to fail identically at
+                # launch. Match the discovery loop and stop.
+                rprint("[red]" + str(exc) + "[/red]")
+                raise typer.Exit(1)
+            runtime.record_activity(runtime.new_event(
+                "apply_error", "discover-and-apply",
+                "Error while applying to " + p["company"] + " — " + p["title"]
+                + ": " + type(exc).__name__,
+                status="failed", entity_type="job", entity_id=job_id,
+            ))
+            skipped_count += 1
+            continue
+        except OperationError as exc:
+            runtime.record_activity(runtime.new_event(
+                "apply_error", "discover-and-apply",
+                "Error while applying to " + p["company"] + " — " + p["title"]
+                + ": " + type(exc).__name__,
+                status="failed", entity_type="job", entity_id=job_id,
+            ))
+            skipped_count += 1
+            continue
+        except Exception as exc:
+            runtime.record_activity(runtime.new_event(
+                "apply_error", "discover-and-apply",
+                "Error while applying to " + p["company"] + " — " + p["title"]
+                + ": " + type(exc).__name__,
+                status="failed", entity_type="job", entity_id=job_id,
+            ))
+            skipped_count += 1
             continue
 
         # Announced only once this job is actually going to be applied to:
-        # above the two checks it claimed a resume for jobs skipped as
-        # already-applied or refused by policy.
+        # propose_apply already refused a job blocked by policy or lacking a
+        # resume/filler/cover letter before this point.
         job_label = p["company"] + " / " + p["title"]
+        resume_choice = proposal.resume
         if resume_choice.tailored:
             if resume_choice.variant is None:
                 # Unattended, so this cannot offer to regenerate and must not
@@ -261,82 +320,43 @@ def discover_and_apply_cmd(
             rprint("Resume: " + resume_choice.storage_path
                    + " — NOT tailored to " + job_label + ".")
 
-        cover_letter = generate_cover_letter(p["jd_text"], profile, skills, goals)
-        if not cover_letter:
-            runtime.record_activity(runtime.new_event(
-                "cover_letter_failed", "discover-and-apply",
-                "Cover letter generation failed for " + p["company"] + " — " + p["title"],
-                status="failed", entity_type="job", entity_id=job_id,
-            ))
+        result = runtime.request_approval(ActionProposal(
+            action=ACTION,
+            summary=proposal.summary,
+            entity_type="job", entity_id=job_id,
+        ))
+        resolve_approval(runtime, proposal.approval_id, result, action_label="discover-and-apply")
+        if not result.approved:
             skipped_count += 1
             continue
 
-        filler = next((f for f in FILLERS if f.can_handle(p["url"])), None)
-        if filler is None:
-            runtime.record_activity(runtime.new_event(
-                "no_filler_available", "discover-and-apply",
-                "No filler available for " + p["company"] + " — " + p["title"],
-                status="failed", entity_type="job", entity_id=job_id,
-            ))
-            skipped_count += 1
-            continue
-
-        cl_storage_path = "applications/" + job_id + "/cover_letter.txt"
         try:
-            runtime.storage.atomic_write(cl_storage_path, cover_letter.encode())
-            cover_letter_path = runtime.storage.resolve(cl_storage_path)
-
-            approval = runtime.request_approval(ActionProposal(
-                action="apply_to_job",
-                summary="Auto-apply (score " + str(p["score"]) + " >= threshold "
-                + str(policy.auto_apply_min_score) + ") to " + p["company"] + " — " + p["title"],
-                entity_type="job", entity_id=job_id,
-            ))
-            if not approval.approved:
-                skipped_count += 1
-                continue
-
-            job = Job.load(runtime.storage, job_id)
-            with launch_browser(headless=True) as (_, page):
-                success = filler.fill(page, job, profile, cover_letter, cover_letter_path, resume_path)
-
-            if success:
-                applied_now = _now()
-                job = job.model_copy(update={"stage": "applied", "applied_at": applied_now, "updated_at": applied_now})
-                job.save(runtime.storage)
-                runtime.record_activity(runtime.new_event(
-                    "job_applied", "discover-and-apply",
-                    "Auto-applied (score " + str(p["score"]) + " >= threshold "
-                    + str(policy.auto_apply_min_score) + ") to " + p["company"] + " — " + p["title"]
-                    # The console output of an unattended run is not durable,
-                    # so the audit record has to say which resume each
-                    # application actually got.
-                    + " with " + resume_choice.storage_path,
-                    entity_type="job", entity_id=job_id,
-                ))
-                applied_count += 1
-            else:
-                runtime.record_activity(runtime.new_event(
-                    "apply_incomplete", "discover-and-apply",
-                    "Form fill incomplete for " + p["company"] + " — " + p["title"],
-                    status="failed", entity_type="job", entity_id=job_id,
-                ))
-                skipped_count += 1
-        except BrowserProfileBusy as exc:
-            # A locked profile is a whole-run condition, not a per-job failure:
-            # continuing would re-run a paid cover-letter generation for every
-            # remaining job only to fail identically at launch. Match the
-            # discovery loop and stop.
-            rprint("[red]" + str(exc) + "[/red]")
-            raise typer.Exit(1)
+            execute_apply(runtime, proposal.approval_id, headless=True, action_label="discover-and-apply")
+        except FillIncomplete:
+            # execute_apply already logged apply_incomplete.
+            skipped_count += 1
+            continue
+        except BrowserUnavailable as exc:
+            if exc.profile_busy:
+                rprint("[red]" + str(exc) + "[/red]")
+                raise typer.Exit(1)
+            # execute_apply already logged apply_failed.
+            skipped_count += 1
+            continue
+        except OperationError:
+            skipped_count += 1
+            continue
         except Exception as exc:
             runtime.record_activity(runtime.new_event(
                 "apply_error", "discover-and-apply",
-                "Error while applying to " + p["company"] + " — " + p["title"] + ": " + type(exc).__name__,
+                "Error while applying to " + p["company"] + " — " + p["title"]
+                + ": " + type(exc).__name__,
                 status="failed", entity_type="job", entity_id=job_id,
             ))
             skipped_count += 1
             continue
+
+        applied_count += 1
 
     rprint(
         "Discovered: " + str(saved_count) + ", Duplicates: " + str(duplicate_count)
