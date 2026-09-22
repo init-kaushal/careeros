@@ -72,15 +72,13 @@ Create `tests/test_resume_variant.py`:
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from careeros.core.models import Evidence, ResumeVariant, Skill, Skills, VariantSection
 from careeros.skills.resume_evidence import normalize_quote
-from careeros.skills.resume_variant import (
-    ALLOWED_HEADINGS,
-    VariantResult,
-    select_variant_content,
-)
+
+# NOTE: do not import from careeros.skills.resume_variant yet. That module
+# does not exist until Step 8, and a module-level import of it here would
+# make this whole file fail at collection — including the four model tests
+# Step 5 asks you to run. Step 6 adds those imports.
 
 _MASTER = """Alice Johnson
 Senior Site Reliability Engineer
@@ -218,11 +216,26 @@ def normalize_quote(text: str) -> str:
 - [ ] **Step 5: Run the model tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_resume_variant.py -v`
-Expected: the four tests above PASS; the file's remaining imports still fail until Step 7.
+Expected: all four tests PASS. They can only pass because Step 1 deliberately
+left `careeros.skills.resume_variant` unimported; if you added that import
+early, the file fails at collection instead.
 
 - [ ] **Step 6: Write the failing tests for the selector**
 
-Append to `tests/test_resume_variant.py`:
+Append to `tests/test_resume_variant.py`. Add these imports at the top of the
+file, replacing the NOTE comment from Step 1:
+
+```python
+import pytest
+
+from careeros.skills.resume_variant import (
+    ALLOWED_HEADINGS,
+    VariantResult,
+    select_variant_content,
+)
+```
+
+Then append:
 
 ```python
 def _resp(payload):
