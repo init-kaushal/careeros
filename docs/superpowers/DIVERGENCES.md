@@ -166,6 +166,18 @@ state.
   teardown failure that already returns normally (§11.4's "looks like a bug but isn't"), not on
   either window below, both of which end in an uncaught propagation with no `ApplyResult` returned
   at all.
+
+  **Be precise about what `executed` + `applied_at is None` actually implies.** Windows 1 and 2
+  below are both post-submit: `filler.fill` already returned `True` before either one fires. But
+  the identical durable state — `executed`, `applied_at` still `None` — is also reached by an
+  interrupt anywhere *after* `mark_executed` and *before* a submission ever happened at all: a
+  Ctrl-C or `SIGTERM` during browser launch or mid-fill, with nothing sent. That case is at least
+  as likely as the two below, and it is the one where `has_executed_approval`'s permanent skip
+  costs a legitimate, never-submitted application rather than merely avoiding a duplicate one. The
+  durable record cannot distinguish the two — skipping is still correct, since it trades a
+  possibly-missed legitimate application for certainly avoiding a duplicate real submission to a
+  real employer — but an operator triaging `apply_outcome_unknown` should not assume the
+  application went out.
   1. A `BaseException` — a `KeyboardInterrupt` from Ctrl-C, a `SystemExit` raised by a signal
      handler installed for `SIGTERM`, or any other exception that is not an `Exception` subclass —
      landing during browser context teardown, after

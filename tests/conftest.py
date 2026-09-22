@@ -76,4 +76,11 @@ def _guard_against_real_browser():
     """
     with patch("playwright.sync_api.sync_playwright", side_effect=AssertionError(
             "test attempted to launch a real browser")):
-        yield
+        # careeros/render/resume_pdf.py does `from playwright.sync_api import
+        # sync_playwright` at MODULE level, binding its own module-namespace
+        # name at import time rather than looking it up per call — the
+        # patch above never touches that already-bound name, so it needs
+        # its own patch to make the "any test" claim above actually true.
+        with patch("careeros.render.resume_pdf.sync_playwright", side_effect=AssertionError(
+                "test attempted to launch a real browser")):
+            yield

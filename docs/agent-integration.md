@@ -367,6 +367,7 @@ whole vocabulary a caller branches on.
 | `MissingRecipient` | the person has no email on file at execute time | not retryable until `careeros people update <id> --email <address>` is run; the approval is untouched (still `approved`) so retrying `execute_outreach_send` after adding the address works without re-approving |
 | `ApprovalNotGranted` | `require_state` finds the approval in a different state than the step needs (`.state` names the actual state) | retryable only by taking the correct action for that state — e.g. resolve first if `pending`, do nothing if already `executed` |
 | `MalformedApproval` | a required payload key is missing (`.key` names it) | not retryable; the approval record itself is broken |
+| `WrongApprovalAction` | the approval id passed to `execute_apply` or `execute_outreach_send` names an approval opened for a *different* action (`.expected` and `.actual` name which) — checked before any state change, so a transposed id never consumes the approval it names | not retryable as-is; the caller passed the wrong approval id — find the right one, or re-propose the intended action |
 | `ArtifactChanged` | the draft's digest (outreach) or one of the cover-letter/resume/profile digests (apply — see §11.3) no longer matches what was approved (`.path` names the file) | not retryable as-is; re-propose so review covers the actual content |
 | `SendFailed` | `send_email` raised | by the time this propagates to the caller, `mark_failed` has already run — the approval is `failed`, not `executed` (see §6). Do not retry against the same approval id; a retry requires a new propose |
 | `ResumeNotFound` | `propose_apply` found no resume in `resumes/versions/` — a **subclass of `EntityNotFound`**, so an existing catch of the parent still matches it | not retryable until a resume file exists (`careeros resume ingest`), then re-propose |
@@ -642,6 +643,10 @@ but didn't log (e.g. `ArtifactChanged`, `ApprovalNotGranted`, a generic `Browser
 exactly the same relationship §6.1 describes between `outreach_send_declined` and
 `approval_declined`. `discover_and_apply_cmd.py` also logs several events entirely of its own —
 `cover_letter_failed`, `no_filler_available`, `session_unauthorized`, `source_unavailable`,
-`posting_unusable`, `job_added`, `job_merged` — that belong to that command's unattended-discovery
-loop, not to the `apply_to_job` approval flow this section documents; read that module directly if
-you need its complete vocabulary.
+`posting_unusable`, `job_added`, `job_merged`, `apply_outcome_unknown` — that belong to that
+command's unattended-discovery loop, not to the `apply_to_job` approval flow this section
+documents; read that module directly if you need its complete vocabulary.
+`apply_outcome_unknown` is logged when `careeros.operations.approvals.has_executed_approval`
+finds an `executed` `apply_to_job` approval for a job whose `applied_at` is still unset, and the
+job is skipped rather than re-proposed — see `docs/superpowers/DIVERGENCES.md` for why that state
+is reachable and why skipping, not resubmitting, is the safe choice.

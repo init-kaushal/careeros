@@ -219,15 +219,20 @@ def discover_and_apply_cmd(
         if has_executed_approval(runtime.storage, ACTION, job_id):
             # There is an executed apply_to_job approval for this job, but
             # applied_at was never recorded — the approval was consumed and
-            # a browser was launched, yet the outcome is unknown (a
-            # BaseException during teardown after a successful submit, or a
-            # failure inside _mark_applied's save that followed one). That
-            # is not "never attempted": re-attempting here could resubmit
-            # an application that already went out, so this job is skipped
-            # rather than re-proposed. Logged as a distinct event, not
-            # folded into the neighbouring applied_at skip above, because
-            # silently excluding a job forever with no durable trace would
-            # leave no way for a human to notice and investigate.
+            # a browser was launched, yet the outcome is unknown. That can
+            # be a BaseException during teardown after a successful submit,
+            # or a failure inside _mark_applied's save that followed one —
+            # but it can equally be an interrupt anywhere after the approval
+            # was consumed and before a submission happened at all, e.g. a
+            # Ctrl-C or SIGTERM during browser launch or mid-fill, with
+            # nothing sent. The durable record cannot tell these apart, and
+            # this is not "never attempted": re-attempting here could
+            # resubmit an application that already went out, so this job is
+            # skipped rather than re-proposed either way. Logged as a
+            # distinct event, not folded into the neighbouring applied_at
+            # skip above, because silently excluding a job forever with no
+            # durable trace would leave no way for a human to notice and
+            # investigate.
             runtime.record_activity(runtime.new_event(
                 "apply_outcome_unknown", "discover-and-apply",
                 "Skipped " + p["company"] + " — " + p["title"]
@@ -404,15 +409,15 @@ def discover_and_apply_cmd(
             skipped_count += 1
             continue
         except OperationError as exc:
-            # ApprovalNotGranted, MalformedApproval, and ArtifactChanged are
-            # all raised before mark_executed, with no record_activity of
-            # their own — unlike FillIncomplete and BrowserUnavailable above,
-            # nothing has logged this refusal yet. Without this, a refused
-            # submission (e.g. the approved cover letter, resume, or profile
-            # bytes changed since approval — the exact tamper-or-corruption
-            # signal the digest binding exists to catch) would leave no
-            # durable trace, only a console Skipped count nobody reads the
-            # next morning.
+            # ApprovalNotGranted, MalformedApproval, WrongApprovalAction, and
+            # ArtifactChanged are all raised before mark_executed, with no
+            # record_activity of their own — unlike FillIncomplete and
+            # BrowserUnavailable above, nothing has logged this refusal yet.
+            # Without this, a refused submission (e.g. the approved cover
+            # letter, resume, or profile bytes changed since approval — the
+            # exact tamper-or-corruption signal the digest binding exists to
+            # catch) would leave no durable trace, only a console Skipped
+            # count nobody reads the next morning.
             runtime.record_activity(runtime.new_event(
                 "apply_error", "discover-and-apply",
                 "Error while applying to " + p["company"] + " — " + p["title"]
