@@ -138,6 +138,7 @@ def propose_outreach_send(
             + " — send ANOTHER outreach email re: " + job.company + " — " + job.title + "?"
         )
 
+    subject = subject_for(job)
     approval = open_approval(
         runtime, ACTION, summary,
         {
@@ -145,6 +146,7 @@ def propose_outreach_send(
             "job_id": job_id,
             "person_id": person_id,
             "draft_sha256": draft_digest(draft_text),
+            "subject": subject,
         },
         entity_type="outreach_message", entity_id=message_id,
         action_label=action_label,
@@ -153,7 +155,7 @@ def propose_outreach_send(
     return OutreachProposal(
         approval_id=approval.id, message_id=message_id, summary=summary,
         draft_text=draft_text, recipient_name=person.name,
-        recipient_email=person.email, subject=subject_for(job),
+        recipient_email=person.email, subject=subject,
         already_sent_at=already_sent_at,
     )
 
@@ -169,17 +171,6 @@ def _load_message_and_person(
     return message, person
 
 
-def _load_for_execution(
-    runtime: AgentRuntime, message_id: str, person_id: str,
-) -> tuple[OutreachMessage, Person, Job]:
-    message, person = _load_message_and_person(runtime, message_id, person_id)
-    try:
-        job = Job.load(runtime.storage, message.job_id)
-    except (FileNotFoundError, ValueError) as exc:
-        raise EntityNotFound("Job not found.") from exc
-    return message, person, job
-
-
 def execute_outreach_send(
     runtime: AgentRuntime, approval_id: str, *, action_label: str = "outreach",
 ) -> OutreachResult:
@@ -187,18 +178,25 @@ def execute_outreach_send(
 
     Drafts nothing and calls no LLM: the text that sends is read back from the
     stored OutreachMessage and checked against the digest recorded when the
-    approval was created, so the bytes reviewed are the bytes transmitted.
+    approval was created, so the bytes reviewed are the bytes transmitted. The
+    subject line is likewise never re-derived from the Job: it was recorded on
+    the payload at propose time, so editing the job's title or company between
+    approval and execution cannot change what goes out.
 
     The approval is consumed before the send: the external action happens with
-    the approval already marked executed, so process death or concurrency cannot
-    trigger a duplicate send.
+    the approval already marked executed. This ordering defeats process death —
+    a crash between the two writes leaves the record executed, not approved, so
+    a retry cannot act on it a second time — and narrows, though it does not
+    eliminate, the window for a second, concurrently racing executor (see
+    require_state).
     """
     approval = require_state(runtime.storage, approval_id, APPROVED)
     message_id = payload_value(approval, "message_id")
     person_id = payload_value(approval, "person_id")
     expected_digest = payload_value(approval, "draft_sha256")
+    subject = payload_value(approval, "subject")
 
-    message, person, job = _load_for_execution(runtime, message_id, person_id)
+    message, person = _load_message_and_person(runtime, message_id, person_id)
 
     if draft_digest(message.draft_text) != expected_digest:
         raise ArtifactChanged("outreach/" + message_id + ".json")
@@ -212,7 +210,7 @@ def execute_outreach_send(
     mark_executed(runtime, approval_id)
 
     try:
-        send_email(person.email, subject_for(job), message.draft_text)
+        send_email(person.email, subject, message.draft_text)
     except Exception as exc:
         message.model_copy(update={"send_state": "failed"}).save(runtime.storage)
         mark_failed(runtime, approval_id, type(exc).__name__)

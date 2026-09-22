@@ -279,6 +279,48 @@ class TestExecuteOutreachSend:
                    side_effect=check_approval_executed):
             execute_outreach_send(runtime, proposal.approval_id)
 
+    def test_subject_is_bound_to_the_approval_not_recomputed_from_the_job(self, tmp_path):
+        """Editing the job after approval must not change the sent subject.
+
+        The subject is recorded on the payload at propose time and read back
+        verbatim at execute time, so it is digest-bound the same way the
+        draft body is: an out-of-band edit to job.title cannot silently
+        change what goes out with no re-review.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        job = Job.load(runtime.storage, JOB_ID)
+        job.model_copy(update={"title": "A Completely Different Title"}).save(runtime.storage)
+
+        with patch("careeros.operations.outreach.send_email") as mock_send:
+            execute_outreach_send(runtime, proposal.approval_id)
+
+        mock_send.assert_called_once_with(
+            "jane@acme.com", "Regarding Senior SRE at Acme Corp", DRAFT
+        )
+
+    def test_a_missing_job_at_execute_time_does_not_block_the_send(self, tmp_path):
+        """execute_* never re-derives the subject, so it never needs the Job.
+
+        A job file deleted (or otherwise missing) between approval and
+        execution must not block sending an already-approved email.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        runtime.storage.delete("jobs/" + JOB_ID + ".json")
+
+        with patch("careeros.operations.outreach.send_email") as mock_send:
+            result = execute_outreach_send(runtime, proposal.approval_id)
+
+        mock_send.assert_called_once_with(
+            "jane@acme.com", "Regarding Senior SRE at Acme Corp", DRAFT
+        )
+        assert result.recipient_name == "Jane Doe"
+
 
 class TestDeclineOutreachSend:
     def test_marks_the_message_declined_and_logs(self, tmp_path):
