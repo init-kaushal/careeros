@@ -993,3 +993,51 @@ class TestDiscoverAndApplyCmd:
         assert result.exit_code == 0
         assert "superseded master resume" in result.output
         assert Job.load(storage, job_id).stage == "applied"
+
+    def test_no_resume_is_announced_for_a_job_blocked_by_policy(self, tmp_path):
+        # The announcement used to sit above the policy check, so a blocked
+        # job was told it had a tailored resume it was never going to use.
+        storage, job_id, run = self._one_eligible_job(tmp_path)
+        PolicyConfig(blocked_companies=["Acme"]).save(storage)
+        storage.atomic_write("resumes/master.md", b"SKILLS\nPython, Go\n")
+        _write_variant_sidecar(storage, job_id, master=b"SKILLS\nPython, Go\n")
+        result = run()
+        assert result.exit_code == 0
+        assert "Blocked: 1" in result.output
+        assert "Resume:" not in result.output
+
+    def test_no_resume_is_announced_for_a_job_already_applied_to(self, tmp_path):
+        storage, job_id, run = self._one_eligible_job(tmp_path)
+        storage.atomic_write("resumes/master.md", b"SKILLS\nPython, Go\n")
+        _write_variant_sidecar(storage, job_id, master=b"SKILLS\nPython, Go\n")
+        first = run()
+        assert "Resume:" in first.output
+        assert Job.load(storage, job_id).stage == "applied"
+        # Second run: the job is re-discovered but skipped as already
+        # applied, so nothing may be announced for it.
+        second = run()
+        assert second.exit_code == 0
+        assert "Resume:" not in second.output
+
+    def test_the_untailored_fallback_names_the_job_it_is_not_tailored_to(self, tmp_path):
+        storage, job_id, run = self._one_eligible_job(tmp_path)
+        result = run()
+        assert result.exit_code == 0
+        assert "NOT tailored to Acme / Senior SRE" in result.output
+
+    def test_the_job_applied_event_records_which_resume_was_uploaded(self, tmp_path):
+        # The console output of an unattended run is not durable; the audit
+        # record has to answer which resume each application got.
+        storage, job_id, run = self._one_eligible_job(tmp_path)
+        storage.atomic_write("resumes/master.md", b"SKILLS\nPython, Go\n")
+        _write_variant_sidecar(storage, job_id, master=b"SKILLS\nPython, Go\n")
+        result = run()
+        assert result.exit_code == 0
+        events = [
+            json.loads(line)
+            for p in storage.list("activity/")
+            for line in storage.read(p).decode().splitlines() if line.strip()
+        ]
+        applied = [e for e in events if e["event_type"] == "job_applied"]
+        assert len(applied) == 1
+        assert ResumeVariant.pdf_path(job_id) in applied[0]["summary"]

@@ -305,6 +305,24 @@ def test_variant_passes_the_job_description_to_the_selector(tmp_path):
     assert sel.call_args.args[3] == "resumes/master.md"
 
 
+def test_variant_warns_when_the_job_has_no_description_to_tailor_against(tmp_path):
+    # Not an error: the spans are still verified and the document is still
+    # valid. But a variant with nothing to rank against must be
+    # distinguishable from a genuinely tailored one.
+    ws, storage = _workspace(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    Job(id="nodesc-abc1", source="browse", url="https://example.com/j",
+        company="Acme", title="Senior SRE", description=None,
+        stage="saved", created_at=now, updated_at=now).save(storage)
+    sel, rnd = _patches(_variant_result())
+    with sel, rnd:
+        result = runner.invoke(app, ["resume", "variant", "--job", "nodesc-abc1",
+                                     "--workspace", ws])
+    assert result.exit_code == 0
+    assert "nothing to tailor against" in " ".join(result.output.split())
+    assert storage.exists(ResumeVariant.pdf_path("nodesc-abc1"))
+
+
 def test_variant_names_every_dropped_span(tmp_path):
     ws, storage = _workspace(tmp_path)
     job_id = _job(storage)

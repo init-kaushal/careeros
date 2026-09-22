@@ -176,6 +176,14 @@ def variant(
         raise typer.Exit(1)
 
     jd_text = (job_record.description or "")[:_JD_CAP]
+    if not jd_text.strip():
+        # Not an error — the spans are still verified and the document is
+        # still valid — but with nothing to rank against, the result is only
+        # nominally tailored and must be distinguishable from the real thing.
+        rprint("[yellow]Job " + job + " has no stored description, so there is "
+               + "nothing to tailor against and the selected spans cannot be "
+               + "ranked for this role. Re-save the job with its description "
+               + "('careeros job add') for a genuinely tailored variant.[/yellow]")
 
     rprint("Tailoring resume for " + job_record.company + " / " + job_record.title + "...")
     result = select_variant_content(jd_text, master_text, skills, _MASTER, model=model)

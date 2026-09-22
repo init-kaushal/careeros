@@ -217,26 +217,6 @@ def discover_and_apply_cmd(
             skipped_count += 1
             continue
         resume_path = resume_choice.path
-        if resume_choice.tailored:
-            if resume_choice.variant is None:
-                # Unattended, so this cannot offer to regenerate and must not
-                # print an entry count it does not have: the sidecar is
-                # missing, corrupt, or describes a different document.
-                rprint("Resume: tailored for " + p["company"]
-                       + ", evidence record unavailable — run 'careeros resume variant "
-                       + "--job " + job_id + "' to regenerate it.")
-            else:
-                rprint("Resume: tailored for " + p["company"] + " — "
-                       + str(resume_choice.variant.entry_count())
-                       + " evidence-backed entries.")
-                if resume_choice.stale_master:
-                    rprint("Resume: generated from a superseded master resume, so its "
-                           + "cited lines no longer match "
-                           + resume_choice.variant.source_file
-                           + " — run 'careeros resume variant --job " + job_id
-                           + "' to regenerate it.")
-        else:
-            rprint("Resume: " + resume_choice.storage_path + " — NOT tailored to this job.")
 
         job = Job.load(runtime.storage, job_id)
         if job.applied_at is not None:
@@ -254,6 +234,32 @@ def discover_and_apply_cmd(
             ))
             blocked_count += 1
             continue
+
+        # Announced only once this job is actually going to be applied to:
+        # above the two checks it claimed a resume for jobs skipped as
+        # already-applied or refused by policy.
+        job_label = p["company"] + " / " + p["title"]
+        if resume_choice.tailored:
+            if resume_choice.variant is None:
+                # Unattended, so this cannot offer to regenerate and must not
+                # print an entry count it does not have: the sidecar is
+                # missing, corrupt, or describes a different document.
+                rprint("Resume: tailored for " + job_label
+                       + ", evidence record unavailable — run 'careeros resume variant "
+                       + "--job " + job_id + "' to regenerate it.")
+            else:
+                rprint("Resume: tailored for " + job_label + " — "
+                       + str(resume_choice.variant.entry_count())
+                       + " evidence-backed entries.")
+                if resume_choice.stale_master:
+                    rprint("Resume: generated from a superseded master resume, so its "
+                           + "cited lines no longer match "
+                           + resume_choice.variant.source_file
+                           + " — run 'careeros resume variant --job " + job_id
+                           + "' to regenerate it.")
+        else:
+            rprint("Resume: " + resume_choice.storage_path
+                   + " — NOT tailored to " + job_label + ".")
 
         cover_letter = generate_cover_letter(p["jd_text"], profile, skills, goals)
         if not cover_letter:
@@ -301,7 +307,11 @@ def discover_and_apply_cmd(
                 runtime.record_activity(runtime.new_event(
                     "job_applied", "discover-and-apply",
                     "Auto-applied (score " + str(p["score"]) + " >= threshold "
-                    + str(policy.auto_apply_min_score) + ") to " + p["company"] + " — " + p["title"],
+                    + str(policy.auto_apply_min_score) + ") to " + p["company"] + " — " + p["title"]
+                    # The console output of an unattended run is not durable,
+                    # so the audit record has to say which resume each
+                    # application actually got.
+                    + " with " + resume_choice.storage_path,
                     entity_type="job", entity_id=job_id,
                 ))
                 applied_count += 1

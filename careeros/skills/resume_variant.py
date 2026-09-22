@@ -148,8 +148,13 @@ def select_variant_content(
             messages=[
                 {"role": "system", "content": _VARIANT_INSTRUCTIONS},
                 {"role": "user", "content": (
-                    "Verified skills (hint for ranking only — never copy from this list): "
-                    + hint
+                    # The hint is wrapped like everything else: a skill name
+                    # is free-text model output from ingest_resume, never
+                    # verbatim-verified, and one has been observed carrying a
+                    # literal </untrusted_content>. Nothing unverified sits
+                    # outside a wrapper.
+                    "Verified skills (hint for ranking only — never copy from this list):\n"
+                    + wrap_untrusted(hint)
                     + "\n\nJob description:\n" + wrap_untrusted(jd_text)
                     + "\n\nResume:\n" + wrap_untrusted(capped)
                 )},
@@ -166,7 +171,10 @@ def select_variant_content(
     raw_sections = payload.get("sections") if isinstance(payload, dict) else None
     sections_in = raw_sections if isinstance(raw_sections, list) else []
 
-    sections: list[VariantSection] = []
+    # Keyed by canonical heading, insertion-ordered: "Experience" and
+    # "EXPERIENCE" both canonicalize to Experience, and as two separate
+    # sections they render as two identical headings in one document.
+    merged: dict[str, list[Evidence]] = {}
     dropped: list[str] = []
     seen: set[str] = set()
 
@@ -212,6 +220,13 @@ def select_variant_content(
                 continue
 
         if entries:
-            sections.append(VariantSection(heading=heading, entries=entries))
+            # Appending keeps first-seen heading order and the order of the
+            # quotes within it, which is the model's relevance ranking.
+            merged.setdefault(heading, []).extend(entries)
+
+    sections = [
+        VariantSection(heading=heading, entries=entries)
+        for heading, entries in merged.items()
+    ]
 
     return VariantResult(sections=tuple(sections), dropped=tuple(dropped))
