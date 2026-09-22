@@ -253,18 +253,23 @@ finding `state == "executed"` on disk means the send was attempted and either su
 process died before it could record the outcome — it never means a send is still pending, and it
 is never safe to retry against that approval id (see `SendFailed` in §8).
 
-Payload keys for `send_outreach` (set by `propose_outreach_send`, read by `execute_outreach_send`
-via `payload_value`):
+Payload keys for `send_outreach` (set by `propose_outreach_send`). Read at execute time means read
+via `payload_value` by `execute_outreach_send` and/or `decline_outreach_send`; the rest is recorded
+on the payload for audit only and read by neither:
 
-- `message_id` — the `OutreachMessage` id the payload refers to
-- `job_id`
-- `person_id`
-- `draft_sha256` — `sha256` hex digest of the draft text at proposal time
-- `subject` — the email subject line, computed once at proposal time from the `Job` as it read
+- `message_id` — the `OutreachMessage` id the payload refers to; read at execute time by both
+  `execute_outreach_send` and `decline_outreach_send`
+- `job_id` — recorded for audit only; read by neither `execute_outreach_send` nor
+  `decline_outreach_send`
+- `person_id` — read at execute time by both `execute_outreach_send` and `decline_outreach_send`
+- `draft_sha256` — `sha256` hex digest of the draft text at proposal time; read at execute time by
+  `execute_outreach_send` only
+- `subject` — read at execute time by `execute_outreach_send` only; the email subject line,
+  computed once at proposal time from the `Job` as it read
   then. `execute_outreach_send` reads this back rather than recomputing it, so editing the job's
-  title or company between approval and execution cannot change what goes out with no re-review.
-  It is metadata about the send, not drafted body content, so it belongs on the payload the same
-  way `summary` does.
+  title or company between approval and execution cannot change what goes out. It is metadata
+  about the send, not drafted body content, so it belongs on the payload the same way `summary`
+  does.
 
 ### 6.1 Activity events this flow emits
 

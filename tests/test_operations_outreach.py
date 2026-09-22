@@ -283,9 +283,10 @@ class TestExecuteOutreachSend:
         """Editing the job after approval must not change the sent subject.
 
         The subject is recorded on the payload at propose time and read back
-        verbatim at execute time, so it is digest-bound the same way the
-        draft body is: an out-of-band edit to job.title cannot silently
-        change what goes out with no re-review.
+        verbatim at execute time. Unlike the draft body, it is not hashed and
+        compared against a digest — it is stored on the payload directly,
+        which is a stronger guarantee than digest-binding: an out-of-band
+        edit to job.title cannot change what goes out.
         """
         runtime = _runtime(tmp_path)
         proposal = _propose(runtime)

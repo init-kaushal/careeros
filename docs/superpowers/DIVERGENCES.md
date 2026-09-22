@@ -46,7 +46,12 @@ state.
   eight — `apply_cmd` and `discover_and_apply_cmd` — are rewired onto the operations layer by
   Phase 12b regardless, so that rewiring is the natural place to also pick up
   `factory.resolve_storage`; this deferral shrinks to six on its own once 12b lands, and there is
-  no reason to converge those two here first.
+  no reason to converge those two here first. `careeros/cli/portability.py` (`careeros export`)
+  shares the same divergence — it also ignores `CAREEROS_WORKSPACE` — but it is not one of the
+  eight above because it has no private `_get_storage` helper to converge: it resolves the
+  flag-then-config-file precedence inline in `export_cmd`. It is deferred for the same reason as
+  the eight, and picking it up alongside them (or alongside `factory.resolve_storage` directly) is
+  the natural fix.
 - `queue_only` (`careeros/operations/approval_queue.py`) is the only shipped approval callback for
   out-of-process use, and it only ever denies. A runtime wanting genuine asynchronous approval —
   propose now, a human approves on another machine hours later — has the durable `Approval` record

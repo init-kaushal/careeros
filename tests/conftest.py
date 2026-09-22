@@ -40,10 +40,14 @@ def tmp_workspace(tmp_path) -> WorkspaceContext:
 def _guard_against_real_smtp():
     """Prevent any test from making real SMTP connections.
 
-    This is an autouse guard at the smtplib layer, independent of import
-    style, so it cannot be bypassed. Per-test explicit patches override it,
-    so tests that legitimately exercise the mailer (test_mailer.py) can
-    still patch send_email to run their own SMTP mocks.
+    This is an autouse guard at the smtplib layer: it patches
+    `smtplib.SMTP`/`smtplib.SMTP_SSL` on the module, so it covers any caller
+    that does `import smtplib` and looks up the attribute at call time (as
+    `careeros/mailer.py` does). It would not catch a caller that instead did
+    `from smtplib import SMTP`, since that binds the real class before this
+    fixture ever runs. Per-test explicit patches override it, so tests that
+    legitimately exercise the mailer (test_mailer.py) can still patch
+    send_email to run their own SMTP mocks.
     """
     with patch("smtplib.SMTP", side_effect=AssertionError(
             "test attempted a real SMTP connection")):

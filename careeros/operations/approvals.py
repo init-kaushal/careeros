@@ -49,11 +49,15 @@ def require_state(storage: StorageProvider, approval_id: str, expected: str) -> 
 
     The single guard behind every execute_* and decline_*. Because executing
     advances the record to a terminal state, this is what closes the window
-    between a crash and a retry — a dead process leaves the record executed
-    or failed, never approved, so a retry cannot act on it a second time. It
-    is a read-then-compare with no compare-and-swap, though, so it does not
-    by itself exclude two processes racing execute_* concurrently: both can
-    read approved before either writes past it. See docs/agent-integration.md
+    between a crash and a retry — a process that dies after mark_executed
+    leaves the record executed or failed, never approved, so a retry cannot
+    act on it a second time. A process that dies earlier, before
+    mark_executed, leaves the record approved by design: the pre-execution
+    checks (digest comparison, missing-recipient check) must be safe to
+    re-run against a still-approved record. It is a read-then-compare with
+    no compare-and-swap, though, so it does not by itself exclude two
+    processes racing execute_* concurrently: both can read approved before
+    either writes past it. See docs/agent-integration.md
     §10 for that residual window and the integrator's obligation not to run
     two executors against the same approval id at once.
     """
