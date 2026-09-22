@@ -337,6 +337,23 @@ class TestDiscoverAndApplyCmd:
         log_content = storage.read("activity/" + today + ".jsonl").decode()
         assert "automation" in log_content
 
+        # Regression guard for the accepted divergence in the job_applied
+        # summary (it no longer carries the score): the score must still be
+        # recoverable from the approval trail for the same entity_id, via
+        # approval_requested and approval_granted, both of which carry the
+        # summary propose_apply was given.
+        events = [
+            json.loads(line)
+            for path in storage.list("activity/")
+            for line in storage.read(path).decode().splitlines() if line.strip()
+        ]
+        requested = [e for e in events if e["event_type"] == "approval_requested"]
+        granted = [e for e in events if e["event_type"] == "approval_granted"]
+        assert len(requested) == 1
+        assert "score 95" in requested[0]["summary"]
+        assert len(granted) == 1
+        assert "score 95" in granted[0]["summary"]
+
     def test_max_auto_applies_per_run_stops_further_applies(self, tmp_path):
         policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=1, boards=["linkedin"])
         ws_path = _setup_workspace(tmp_path, policy=policy)
@@ -622,6 +639,41 @@ class TestDiscoverAndApplyCmd:
         assert result.exit_code == 1
         assert "already in use" in result.output
         assert mock_gen.call_count <= 1
+
+    def test_locked_profile_during_propose_aborts_the_run(self, tmp_path):
+        # A locked profile can also surface earlier than execute_apply's own
+        # browser launch: propose_apply's LinkedIn-session check (distinct
+        # from the discovery loop's own board-session preflight) hits the
+        # same isolated profile. This must abort the whole run exactly like
+        # the execute-time case above, not merely skip the one job — and
+        # unlike that test, FILLERS is left real (not mocked) so the URL
+        # resolves to an actual LinkedInFiller, the only filler that checks
+        # a session at all.
+        from careeros.browser.driver import BrowserProfileBusy
+
+        policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5, boards=["linkedin"])
+        ws_path = _setup_workspace(tmp_path, policy=policy)
+        postings = [
+            _posting(company="Acme", title="Role One", url="https://www.linkedin.com/jobs/view/1"),
+            _posting(company="Beta", title="Role Two", url="https://www.linkedin.com/jobs/view/2"),
+        ]
+
+        with patch("careeros.cli.discover_and_apply_cmd.check_board_sessions",
+                   return_value={"linkedin": True}), \
+             patch("careeros.cli.discover_and_apply_cmd.SCRAPERS", {"linkedin": MagicMock(search=MagicMock(return_value=postings))}), \
+             patch("careeros.cli.discover_and_apply_cmd.launch_browser", _mock_launch()), \
+             patch("careeros.cli.discover_and_apply_cmd.fetch_jd_text", return_value="JD text"), \
+             patch("careeros.cli.discover_and_apply_cmd.score_job", return_value={"score": 95, "reasoning": "great"}), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value="Cover letter") as mock_gen, \
+             patch("careeros.operations.apply.check_board_sessions",
+                   side_effect=BrowserProfileBusy("already in use by another CareerOS process")):
+            result = runner.invoke(discover_and_apply_app, ["--workspace", ws_path])
+
+        assert result.exit_code == 1
+        assert "already in use" in result.output
+        # propose_apply's session check runs before the LLM call, so it must
+        # never have been reached for either job.
+        mock_gen.assert_not_called()
 
     def test_title_variant_rediscovery_does_not_create_a_second_record(self, tmp_path):
         policy = AutomationPolicy(auto_apply_min_score=90, max_auto_applies_per_run=5,

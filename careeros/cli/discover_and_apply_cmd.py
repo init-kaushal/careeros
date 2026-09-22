@@ -223,6 +223,13 @@ def discover_and_apply_cmd(
         try:
             proposal = propose_apply(
                 runtime, job_id, action_label="discover-and-apply", summary=summary,
+                # This run's freshly-fetched JD text, not job.description:
+                # JobStore._merge only fills description when the existing
+                # record's value is absent, so a rediscovered job (cap
+                # reached, draft failed, no filler, or score risen above
+                # threshold on a prior run) would otherwise draft from a
+                # stale JD. The 4000-character cap matches apply_cmd's.
+                jd_text=p["jd_text"][:4000],
             )
         except PolicyBlocked:
             # Already logged (policy_blocked) inside propose_apply.
@@ -300,34 +307,59 @@ def discover_and_apply_cmd(
         # resume/filler/cover letter before this point.
         job_label = p["company"] + " / " + p["title"]
         resume_choice = proposal.resume
-        if resume_choice.tailored:
-            if resume_choice.variant is None:
-                # Unattended, so this cannot offer to regenerate and must not
-                # print an entry count it does not have: the sidecar is
-                # missing, corrupt, or describes a different document.
-                rprint("Resume: tailored for " + job_label
-                       + ", evidence record unavailable — run 'careeros resume variant "
-                       + "--job " + job_id + "' to regenerate it.")
+        try:
+            if resume_choice.tailored:
+                if resume_choice.variant is None:
+                    # Unattended, so this cannot offer to regenerate and must
+                    # not print an entry count it does not have: the sidecar
+                    # is missing, corrupt, or describes a different document.
+                    rprint("Resume: tailored for " + job_label
+                           + ", evidence record unavailable — run 'careeros resume variant "
+                           + "--job " + job_id + "' to regenerate it.")
+                else:
+                    rprint("Resume: tailored for " + job_label + " — "
+                           + str(resume_choice.variant.entry_count())
+                           + " evidence-backed entries.")
+                    if resume_choice.stale_master:
+                        rprint("Resume: generated from a superseded master resume, so its "
+                               + "cited lines no longer match "
+                               + resume_choice.variant.source_file
+                               + " — run 'careeros resume variant --job " + job_id
+                               + "' to regenerate it.")
             else:
-                rprint("Resume: tailored for " + job_label + " — "
-                       + str(resume_choice.variant.entry_count())
-                       + " evidence-backed entries.")
-                if resume_choice.stale_master:
-                    rprint("Resume: generated from a superseded master resume, so its "
-                           + "cited lines no longer match "
-                           + resume_choice.variant.source_file
-                           + " — run 'careeros resume variant --job " + job_id
-                           + "' to regenerate it.")
-        else:
-            rprint("Resume: " + resume_choice.storage_path
-                   + " — NOT tailored to " + job_label + ".")
+                rprint("Resume: " + resume_choice.storage_path
+                       + " — NOT tailored to " + job_label + ".")
 
-        result = runtime.request_approval(ActionProposal(
-            action=ACTION,
-            summary=proposal.summary,
-            entity_type="job", entity_id=job_id,
-        ))
-        resolve_approval(runtime, proposal.approval_id, result, action_label="discover-and-apply")
+            result = runtime.request_approval(ActionProposal(
+                action=ACTION,
+                summary=proposal.summary,
+                entity_type="job", entity_id=job_id,
+            ))
+            resolve_approval(runtime, proposal.approval_id, result, action_label="discover-and-apply")
+        except OperationError as exc:
+            # request_approval/resolve_approval used to sit inside the same
+            # guarded try pre-refactor. A concurrent decision on this
+            # approval (ApprovalNotGranted) or a storage failure here must
+            # sink this one job, not the whole scheduled run — same property
+            # the bare except Exception below exists to preserve.
+            runtime.record_activity(runtime.new_event(
+                "apply_error", "discover-and-apply",
+                "Error while applying to " + p["company"] + " — " + p["title"]
+                + ": " + type(exc).__name__,
+                status="failed", entity_type="job", entity_id=job_id,
+            ))
+            skipped_count += 1
+            continue
+        except Exception as exc:
+            runtime.record_activity(runtime.new_event(
+                "apply_error", "discover-and-apply",
+                "Error while applying to " + p["company"] + " — " + p["title"]
+                + ": " + type(exc).__name__,
+                status="failed", entity_type="job", entity_id=job_id,
+            ))
+            skipped_count += 1
+            continue
+
         if not result.approved:
             skipped_count += 1
             continue
@@ -345,7 +377,22 @@ def discover_and_apply_cmd(
             # execute_apply already logged apply_failed.
             skipped_count += 1
             continue
-        except OperationError:
+        except OperationError as exc:
+            # ApprovalNotGranted, MalformedApproval, and ArtifactChanged are
+            # all raised before mark_executed, with no record_activity of
+            # their own — unlike FillIncomplete and BrowserUnavailable above,
+            # nothing has logged this refusal yet. Without this, a refused
+            # submission (e.g. the approved cover letter, resume, or profile
+            # bytes changed since approval — the exact tamper-or-corruption
+            # signal the digest binding exists to catch) would leave no
+            # durable trace, only a console Skipped count nobody reads the
+            # next morning.
+            runtime.record_activity(runtime.new_event(
+                "apply_error", "discover-and-apply",
+                "Error while applying to " + p["company"] + " — " + p["title"]
+                + ": " + type(exc).__name__,
+                status="failed", entity_type="job", entity_id=job_id,
+            ))
             skipped_count += 1
             continue
         except Exception as exc:
