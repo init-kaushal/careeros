@@ -4,10 +4,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from careeros.core.models import Evidence, ResumeVariant, Skill, Skills, VariantSection
-from careeros.skills.resume_evidence import normalize_quote
+from careeros.skills.resume_evidence import MAX_QUOTE_CHARS, normalize_quote, verify_quote
 from careeros.skills.resume_variant import (
     ALLOWED_HEADINGS,
     VariantResult,
+    _blocks_with_offsets,
     select_variant_content,
 )
 
@@ -264,3 +265,94 @@ def test_malformed_payload_returns_a_result_instead_of_raising(payload):
     assert result.sections == ()
     assert result.error is None
     assert isinstance(result.dropped, tuple)
+
+
+# Two employers' results in separate blank-line-separated blocks, no bullet
+# markers — the shape a markdown or word-processor export produces, and the
+# shape the Phase 11b final review reproduced the stitch against.
+#   1 EXPERIENCE
+#   2 (blank)
+#   3 Reduced infrastructure spend ... at Initech.
+#   4 (blank)
+#   5 Grew the platform ... at Globex.
+#   6 (blank)
+#   7 Led a team of nine engineers through a migration to event-driven
+#   8 services at Hooli.
+_BLOCK_MASTER = """EXPERIENCE
+
+Reduced infrastructure spend 22% across a 3,000-instance fleet at Initech.
+
+Grew the platform from 2 million to 40 million monthly active users at Globex.
+
+Led a team of nine engineers through a migration to event-driven
+services at Hooli.
+"""
+
+_STITCH = (
+    "Reduced infrastructure spend 22% across a 3,000-instance fleet at Initech. "
+    "Grew the platform from 2 million to 40 million monthly active users at Globex."
+)
+
+
+def test_blocks_with_offsets_reports_absolute_start_lines():
+    blocks = _blocks_with_offsets(_BLOCK_MASTER)
+    assert [start for _, start in blocks] == [1, 3, 5, 7]
+    assert blocks[3][0] == (
+        "Led a team of nine engineers through a migration to event-driven\n"
+        "services at Hooli."
+    )
+
+
+def test_blocks_with_offsets_handles_leading_and_repeated_blank_lines():
+    blocks = _blocks_with_offsets("\n\n  \nfirst\n\n\n\nsecond\n")
+    assert blocks == [("first", 4), ("second", 8)]
+
+
+def test_span_stitched_across_a_blank_line_is_dropped_and_named():
+    # The stitch is two genuine substrings joined across a paragraph break.
+    # It is short enough to pass the quote cap, and verify_quote accepts it
+    # against the whole document because _normalize collapses the blank
+    # line — so only block-scoped verification rejects it. A reader sees one
+    # sentence fusing two employers' results, which is a fabricated claim.
+    assert len(_STITCH) < MAX_QUOTE_CHARS
+    assert verify_quote(_STITCH, _BLOCK_MASTER) is not None
+
+    result = _call({"sections": [{"heading": "Experience", "quotes": [_STITCH]}]},
+                   master=_BLOCK_MASTER)
+    assert result.sections == ()
+    assert result.entry_count() == 0
+    assert result.dropped == (_STITCH[:80],)
+    assert result.error is None
+
+
+def test_absolute_line_is_reported_for_a_quote_in_a_later_block():
+    result = _call({"sections": [{"heading": "Experience", "quotes": [
+        "Grew the platform from 2 million to 40 million monthly active users at Globex.",
+    ]}]}, master=_BLOCK_MASTER)
+    assert result.sections[0].entries[0].line == 5
+
+    result = _call({"sections": [{"heading": "Experience", "quotes": [
+        "services at Hooli.",
+    ]}]}, master=_BLOCK_MASTER)
+    assert result.sections[0].entries[0].line == 8
+
+
+def test_span_wrapped_across_two_lines_inside_one_block_still_verifies():
+    # A wrapped bullet is one span to the model and two lines to us. Phase
+    # 11a supports this deliberately; only stitches across a blank line are
+    # rejected. The reported line is the line the quote starts on.
+    result = _call({"sections": [{"heading": "Experience", "quotes": [
+        "migration to event-driven services at Hooli.",
+    ]}]}, master=_BLOCK_MASTER)
+    assert result.entry_count() == 1
+    assert result.sections[0].entries[0].line == 7
+
+
+def test_single_block_master_verifies_exactly_as_before():
+    single = "Alice Johnson\nSenior SRE at MegaCorp\nPython, Go, Kubernetes, Terraform\n"
+    result = _call({"sections": [{"heading": "Skills", "quotes": [
+        "Python, Go, Kubernetes, Terraform",
+    ]}]}, master=single)
+    assert result.entry_count() == 1
+    assert result.sections[0].entries[0].line == 3
+    assert result.dropped == ()

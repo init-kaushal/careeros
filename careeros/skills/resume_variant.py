@@ -73,6 +73,39 @@ def _parse_json(text: str) -> dict:
     return json.loads(text)
 
 
+def _blocks_with_offsets(text: str) -> list[tuple[str, int]]:
+    """Split into blank-line-separated blocks, each with its 1-indexed start line.
+
+    A quote is verified inside ONE block so a span cannot be stitched across a
+    paragraph break. verify_quote's own normalization collapses blank lines, so
+    without this a quote fusing two unrelated blocks verifies and renders as a
+    single sentence — see the Phase 11b final review.
+    """
+    blocks: list[tuple[str, int]] = []
+    current: list[str] = []
+    start_line = 1
+    for index, line in enumerate(text.split("\n"), start=1):
+        if line.strip():
+            if not current:
+                start_line = index
+            current.append(line)
+        elif current:
+            blocks.append(("\n".join(current), start_line))
+            current = []
+    if current:
+        blocks.append(("\n".join(current), start_line))
+    return blocks
+
+
+def _verify_in_block(quote: str, blocks: list[tuple[str, int]]) -> int | None:
+    """Absolute 1-indexed line of the quote, or None if it spans blocks."""
+    for block_text, start_line in blocks:
+        local = verify_quote(quote, block_text)
+        if local is not None:
+            return start_line + local - 1
+    return None
+
+
 def _note(dropped: list[str], label: str) -> None:
     label = label[:_DROPPED_LABEL_CAP]
     if label and label not in dropped:
@@ -100,6 +133,9 @@ def select_variant_content(
     """
     effective_model = model or os.environ.get("CAREEROS_MODEL", DEFAULT_LLM_MODEL)
     capped = master_text[:_MASTER_CAP]
+    # Computed once: verification is per block, never against the whole
+    # capped text, so a quote cannot be stitched across a paragraph break.
+    blocks = _blocks_with_offsets(capped)
 
     hint = ", ".join(
         s.name for s in skills.skills if isinstance(s.name, str) and s.name
@@ -160,8 +196,12 @@ def select_variant_content(
                     # A collapsed duplicate is not a failure and must not be
                     # reported as dropped.
                     continue
-                line = verify_quote(quote, capped)
+                line = _verify_in_block(quote, blocks)
                 if line is None:
+                    # Either absent from the master, or present only as a
+                    # span fusing two blank-line-separated blocks — which
+                    # reads as one sentence on the rendered page and is a
+                    # fabricated composition, not a copied span.
                     raise ValueError("quote did not verify")
                 entries.append(Evidence(quote=quote, line=line, source_file=source_file))
                 seen.add(key)
