@@ -217,11 +217,26 @@ Every field of the `Approval` model (`careeros/core/models.py`):
 | `detail` | `str \| None` | `mark_failed` | set when moving to `failed`; the exception type name |
 
 State machine: `pending` is the only state a decision can be recorded against.
-`pending -> approved -> executed` is the happy path. `pending -> declined`, `pending ->
-superseded` (a re-propose for the same action and entity invalidates the older pending approval —
-see §7), and `approved -> failed` (the send itself raised) are the other three ways out of an open
-approval. **`declined`, `superseded`, `failed`, and `executed` are all terminal** — nothing moves
-an approval out of any of them.
+`pending -> approved -> executed` is the happy path, and on that path `executed` is durably
+terminal — nothing moves the record out of it. `pending -> declined` and `pending -> superseded`
+(a re-propose for the same action and entity invalidates the older pending approval — see §7) are
+two more ways out of an open approval, both terminal.
+
+The fourth path is not a direct `approved -> failed` edge: it is **`approved -> executed ->
+failed`**, all within one call to `execute_outreach_send`. `execute_outreach_send` calls
+`mark_executed` — writing `state="executed"` to disk — *before* it calls `send_email`, specifically
+so that a crash mid-send leaves a stale `executed` record rather than an `approved` one a second
+process could still act on (see §10). If `send_email` then raises, `mark_failed` overwrites that
+same record to `state="failed"`, which is the true terminal state on that path. So `executed` is
+written and then moved out of again, within the same function call, whenever the send itself
+fails. **`declined`, `superseded`, and `failed` are always terminal. `executed` is terminal only on
+the success path** — during a send failure it is a transient state that `execute_outreach_send`
+passes through and immediately overwrites before returning control to the caller.
+
+What this means if you are the one reading `approvals/<id>.json` later, from a different process:
+finding `state == "executed"` on disk means the send was attempted and either succeeded or the
+process died before it could record the outcome — it never means a send is still pending, and it
+is never safe to retry against that approval id (see `SendFailed` in §8).
 
 Payload keys for `send_outreach` (set by `propose_outreach_send`, read by `execute_outreach_send`
 via `payload_value`):
@@ -234,9 +249,10 @@ via `payload_value`):
 ## 7. The integrator's obligations
 
 - **An approval is single-use.** `execute_outreach_send` calls `mark_executed`, which moves the
-  record to the terminal `executed` state, before it calls `send_email`. A second `execute_*` call
-  against the same id fails `require_state`'s check (state is no longer `approved`) and raises
-  `ApprovalNotGranted` — it cannot send twice.
+  record out of `approved` to `executed`, before it calls `send_email`. Whether `send_email`
+  then succeeds (record stays `executed`) or raises (record moves on to `failed` — see §6), the
+  state is no longer `approved` either way. A second `execute_*` call against the same id fails
+  `require_state`'s check and raises `ApprovalNotGranted` — it cannot send twice.
 - **Only `approved` executes.** `execute_outreach_send` and `decline_outreach_send` both call
   `require_state` for the specific state they need (`approved`, `declined` respectively) and raise
   `ApprovalNotGranted` for anything else, including `pending`.
@@ -275,7 +291,7 @@ whole vocabulary a caller branches on.
 | `ApprovalNotGranted` | `require_state` finds the approval in a different state than the step needs (`.state` names the actual state) | retryable only by taking the correct action for that state — e.g. resolve first if `pending`, do nothing if already `executed` |
 | `MalformedApproval` | a required payload key is missing (`.key` names it) | not retryable; the approval record itself is broken |
 | `ArtifactChanged` | the draft's digest no longer matches what was approved (`.path` names the file) | not retryable as-is; re-propose so review covers the actual content |
-| `SendFailed` | `send_email` raised | the approval is already `executed`/`failed` by the time this raises — do not retry against the same approval id; a retry requires a new propose |
+| `SendFailed` | `send_email` raised | by the time this propagates to the caller, `mark_failed` has already run — the approval is `failed`, not `executed` (see §6). Do not retry against the same approval id; a retry requires a new propose |
 
 **A boundary this hierarchy does not cover:** an unknown or malformed `approval_id` does not
 surface as an `OperationError`. `Approval.load` raises a plain `FileNotFoundError` when the record
@@ -322,14 +338,15 @@ other pending decision behind it.
 
 - **A residual concurrency window.** `require_state` (`careeros/operations/approvals.py`) is a
   read-then-compare with no compare-and-swap, and there is no lock file over `approvals/`.
-  `execute_outreach_send` calls `mark_executed` — which advances the approval to the terminal
-  `executed` state — *before* calling `send_email`, specifically so that a crash between the two
-  leaves a stale `executed` record rather than an approval a second process could still execute
-  against; that ordering closes the crash-then-duplicate-send window. It does not close the
-  concurrency window: two processes racing `execute_outreach_send` against the same approval id
-  could both read `state == "approved"` before either has written `executed`, and both proceed to
-  send. Do not run two executors against the same approval id concurrently; nothing in this layer
-  prevents it.
+  `execute_outreach_send` calls `mark_executed` — which moves the approval out of `approved` to
+  `executed` (durably so if the send then succeeds or the process dies before recording an
+  outcome; overwritten to `failed` if `send_email` raises — see §6) — *before* calling
+  `send_email`, specifically so that a crash between the two leaves a record no longer in
+  `approved` state rather than one a second process could still execute against; that ordering
+  closes the crash-then-duplicate-send window. It does not close the concurrency window: two
+  processes racing `execute_outreach_send` against the same approval id could both read `state ==
+  "approved"` before either has written `executed`, and both proceed to send. Do not run two
+  executors against the same approval id concurrently; nothing in this layer prevents it.
 - **`queue_only` is the only shipped out-of-process callback.** There is no notification, no
   expiry, and no locking. It gives a safe, deny-by-default answer to a synchronous
   `request_approval` call, and that is all it does. A runtime that wants genuine asynchronous

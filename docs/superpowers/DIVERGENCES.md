@@ -6,8 +6,10 @@ This is distinct from each phase spec's own honest non-goals list — those are 
 a gap-tracking mechanism so future phase reviews catch drift before it compounds.
 
 Populated from the 2026-09-20 external review. Update this file whenever a future review, or a
-phase's own retrospective, finds another one — and remove an entry once the gap is closed,
-noting which phase closed it.
+phase's own retrospective, finds another one — and once a gap fully closes, move its row out of
+the open table below and into the "Closed" section, noting which phase closed it, rather than
+deleting it: the point is to preserve the history of what was open when, not just the current
+state.
 
 | Spec commitment | Source | Status |
 |---|---|---|

@@ -206,8 +206,9 @@ Ten phases shipped, in order:
 2. **Job pipeline** — job schema, LLM-assisted scoring against your profile
 3. **Browser search** — `browse`, scraping LinkedIn/Indeed/Wellfound via a dedicated CareerOS profile
 4. **Auto-apply** — cover letter generation, platform-specific form fillers, approval-gated submit
-5. **Agent interoperability** — `AgentRuntime` seam (`LocalRuntime`, and the interface a future
-   agent-embedded runtime plugs into) so every command's approval logic is runtime-agnostic
+5. **Agent interoperability** — `AgentRuntime` seam (`LocalRuntime`, and a `ClaudeCodeRuntime`
+   exercised so far only by an internal test — see Phase 12 in `ROADMAP.md`) so every command's
+   approval logic is runtime-agnostic
 6. **Automation** — `discover-and-apply` for unattended, scheduled runs with a score-threshold policy
 7. **People + outreach** — company/people research, role-aware drafting, approval-gated email send
 8. **Compensation research** — evidence-backed comp data with an honest confidence rating
@@ -221,8 +222,9 @@ All workspace I/O goes through the `StorageProvider` protocol, so storage backen
 swapped without touching business logic. Every meaningful action — both outcomes of any
 approval decision, not just the success path — writes to the append-only activity log.
 
-See [ROADMAP.md](ROADMAP.md) for what's planned next: a second real `AgentRuntime` and
-outreach expansion.
+See [ROADMAP.md](ROADMAP.md) for what's planned next: apply support in the operations layer
+(`careeros/operations/apply.py`, the `apply_cmd` rewire, and `discover-and-apply`
+de-duplication — Phase 12b) and then outreach expansion (Phase 13).
 
 ## License
 

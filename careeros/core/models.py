@@ -327,10 +327,16 @@ class OutreachMessage(BaseModel):
 class Approval(BaseModel):
     """A durable record of one approval-gated action, readable across processes.
 
-    States: pending -> approved -> executed, with declined, superseded, and
-    failed as the other terminal outcomes. Only `approved` may execute, and
-    executing advances the record, so one approval can never authorize two
-    external actions.
+    States: pending -> approved -> executed, with declined and superseded as
+    two other terminal outcomes reachable only from pending. executed is
+    terminal on the success path, but not always: execute_* marks the record
+    executed before attempting its external action (closing the window where
+    a crash or a race could let a second process act on a still-approved
+    record), and moves it on to failed if that action then raises. So the
+    fourth path out of pending is pending -> approved -> executed -> failed,
+    not a direct approved -> failed edge. Either way, only `approved` may
+    execute, and executing advances the record out of that state
+    immediately, so one approval can never authorize two external actions.
 
     `payload` is an open string map on purpose: it holds only the identifiers
     and workspace-relative paths execute_* needs to find its inputs, which

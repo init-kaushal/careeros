@@ -161,18 +161,27 @@ class Approval(BaseModel):
 ### 4.1 State machine
 
 ```text
-pending ──approve──> approved ──execute──> executed
-   │                    │
-   │                    └──execute fails──> failed
+pending ──approve──> approved ──execute──> executed ──send raises──> failed
+   │                                           │
+   │                                    (send succeeds: stays here)
    ├──decline──> declined
    └──superseded by a new propose──> superseded
 ```
 
-`executed`, `declined`, `failed`, and `superseded` are all terminal. `execute_*`
-requires exactly `approved`; anything else raises `ApprovalNotGranted` carrying the
-state it actually found. This is what makes double-execution impossible rather than
-merely unlikely — the concern `outreach_cmd.py:132` already warns about in-process
-("an outreach email was already sent on …"), now held across processes.
+`declined`, `superseded`, and `failed` are always terminal. `executed` is terminal on
+the success path, but the failure path routes *through* it rather than around it:
+`execute_*` marks the approval `executed` before attempting the external action, then
+overwrites that to `failed` if the action raises. This ordering was changed during
+implementation, after this diagram was first drawn: marking the approval `executed`
+*before* the external action, rather than after, closes the window where a crash
+between the two would leave the record `approved` and a retry could act on it a second
+time. The consequence recorded here is that `approved -> failed` is never a direct
+edge — it is always `approved -> executed -> failed`, both writes happening inside one
+call to `execute_*`. `execute_*` requires exactly `approved`; anything else raises
+`ApprovalNotGranted` carrying the state it actually found. This is what makes
+double-execution impossible rather than merely unlikely — the concern
+`outreach_cmd.py:132` already warns about in-process ("an outreach email was already
+sent on …"), now held across processes.
 
 ### 4.2 `payload` is deliberately `dict[str, str]`
 

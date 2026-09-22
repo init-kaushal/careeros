@@ -95,7 +95,12 @@ would save a download and is worth revisiting.
 
 ---
 
-## Phase 12 — Second Real AgentRuntime
+## Phase 12 — Runtime-Agnostic Operations + Cross-Process Approval
+
+*(Originally titled "Second Real AgentRuntime" — renamed once the phase's own work showed that
+title named the wrong gap; see the correction below. Recorded here, rather than silently
+retitled, so an older reference to "Phase 12 — Second Real AgentRuntime" still finds this
+section.)*
 
 **Why:** Phase 5 built the `AgentRuntime` seam and proved it with `LocalRuntime` plus a `ClaudeCodeRuntime` exercised only by an internal interop test — no external runtime has ever actually driven CareerOS through it. The interoperability claim is real in the sense that the interface exists and is exercised, but it's unproven against anything outside this codebase.
 
