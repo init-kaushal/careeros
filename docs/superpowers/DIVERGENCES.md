@@ -38,13 +38,20 @@ state.
   `factory.resolve_storage`: `apply_cmd`, `browse_cmd`, `browser_cmd`, `discover_and_apply_cmd`,
   `outreach_cmd`, `research_cmd`, `resume_cmd` call it directly; `job_cmd` and `workspace_cmd` call
   it through a same-named `_get_storage` wrapper kept only for its `typer.Exit`-on-
-  `WorkspaceNotConfigured` handling; `careeros/cli/portability.py` (`careeros export`/`careeros
-  import`) calls it inline. `careeros onboard` is the sole exception, and correctly so — it is the
-  command that writes the global config file the third tier reads, so it has no prior workspace to
-  discover. The split-workspace hazard this used to carry — exporting `CAREEROS_WORKSPACE` while a
-  different path was saved in the global config sent some commands to one workspace tree and the
-  rest to another, silently — no longer exists: every command now consults the same three tiers in
-  the same order, so they always agree.
+  `WorkspaceNotConfigured` handling; `careeros/cli/portability.py`'s `careeros export` calls it
+  inline. `careeros onboard` and `careeros import` are the two exceptions, and correctly so: both
+  are workspace *creation*, not discovery — `onboard` is the command that writes the global config
+  file the third tier reads, and `import_workspace_cmd` takes a required `--dest` and writes that
+  same config itself after extracting a zip there, rather than consulting any of the three tiers.
+  Neither has a prior workspace to discover. The split-workspace hazard this used to carry —
+  exporting `CAREEROS_WORKSPACE` while a different path was saved in the global config sent some
+  commands to one workspace tree and the rest to another, silently — no longer exists among the
+  commands that discover a workspace rather than create one: they all consult the same three tiers
+  in the same order, so they agree with each other. A user with `CAREEROS_WORKSPACE` exported who
+  runs `onboard` (or `import`) still creates a workspace and writes it to config while every
+  discovering command then prefers the env var over that new config entry — that is not a bug in
+  this closure, since neither command claims to discover, but it means "always agree" would
+  overclaim if stated without that scope.
 
 ## New deferrals recorded by Phase 12a
 
@@ -144,9 +151,21 @@ state.
   configured, or `CAREEROS_WORKSPACE`) path that is itself a symlink now produces a default zip
   filename from the real target directory's name, not the symlink's own name. Zip contents are
   unaffected; this changes only the default output filename when `--output` is omitted.
-- **Two residual duplicate-submission windows in `execute_apply`, both narrow and both accepted
-  rather than fixed, in the same family as the concurrency window already recorded above for
-  outreach.** Neither is softened here:
+- **Two residual duplicate-submission windows in `execute_apply` itself, neither fixed at the
+  source, in the same family as the concurrency window already recorded above for outreach.**
+  Both were parked pending the final whole-branch review, which dissented from an in-function fix
+  (an `except BaseException` handler risks masking a real interrupt) and instead closed the
+  practical resubmission risk one layer up, at `discover_and_apply_cmd`'s eligibility check: a new
+  `careeros.operations.approvals.has_executed_approval` helper lets it skip a job whose
+  `apply_to_job` approval is `executed` while `applied_at` is still `None` — logging a distinct
+  `apply_outcome_unknown` event rather than silently excluding the job forever. That closes the
+  resubmission risk for the *scheduled* path for both windows below. It does nothing for `apply_cmd`
+  (interactive): there is no equivalent scan there, so a human re-running `careeros apply <job_id>`
+  after either window fires could still resubmit. Neither window is the case
+  `ApplyResult.teardown_failed` warns about — that field is only set on the ordinary `Exception`
+  teardown failure that already returns normally (§11.4's "looks like a bug but isn't"), not on
+  either window below, both of which end in an uncaught propagation with no `ApplyResult` returned
+  at all.
   1. A `BaseException` — a `KeyboardInterrupt` from Ctrl-C, a `SystemExit` raised by a signal
      handler installed for `SIGTERM`, or any other exception that is not an `Exception` subclass —
      landing during browser context teardown, after
@@ -154,13 +173,36 @@ state.
      only exception handlers catch `ImportError`, `BrowserProfileBusy`, and `Exception`, none of
      which match a bare `BaseException`. It propagates out of `execute_apply` uncaught, leaving the
      approval `executed` (`mark_executed` already ran before the browser was launched) and the
-     job's `stage` unadvanced (`_mark_applied` never ran). The next run of `discover-and-apply`,
-     which only skips a job once its stage has advanced, would resubmit the same application.
+     job's `applied_at` unset (`_mark_applied` never ran). Neither `apply_cmd` nor
+     `discover_and_apply_cmd` catches a bare `BaseException` either, so it propagates out of the CLI
+     the same way it does out of `execute_apply` — a bare traceback in both, not a caught-and-logged
+     failure.
   2. A failure inside `_mark_applied` itself — the job-save or its `record_activity` call, on the
      line immediately following the `try`/`except` block that wraps the browser launch and fill —
      is not caught by that block either, because the call sits after it, not inside it. It escapes
-     `execute_apply` with the identical result: approval `executed`, job `stage` unadvanced. This
-     one is pre-existing, not new to Phase 12b: the pre-refactor `apply_cmd.py` had the same
-     unguarded `job.save(...)` / `record_activity(...)` pair after a successful `filler.fill`, with
-     no surrounding `try`/`except` there either — the refactor moved this code into
-     `careeros/operations/apply.py` without changing that structural property.
+     `execute_apply` with the identical result: approval `executed`, job `applied_at` unset. The two
+     CLI callers do not handle this identically: `discover_and_apply_cmd`'s per-job loop has a bare
+     `except Exception` that logs a durable `apply_error` activity event before continuing to the
+     next job, so this window does leave a trace in the unattended path. `apply_cmd` has no
+     equivalent `except Exception` — only `BoardSessionRequired`, `BrowserUnavailable`,
+     `FillIncomplete`, and `OperationError` are caught — so the same failure surfaces as a bare,
+     unlogged traceback to the interactive user instead. This one is pre-existing, not new to Phase
+     12b: the pre-refactor `apply_cmd.py` had the same unguarded `job.save(...)` /
+     `record_activity(...)` pair after a successful `filler.fill`, with no surrounding
+     `try`/`except` there either — the refactor moved this code into `careeros/operations/apply.py`
+     without changing that structural property.
+- **A crash inside `resolve_approval` itself, between the `Approval.save` that moves a record to
+  `approved` and the `record_activity` call that logs `approval_granted`, leaves a durable
+  `approved` record with no matching log entry for the decision that produced it.** Parked during
+  Task 7 for the final whole-branch review, which confirmed it is inert rather than a duplicate-
+  submission path — but the reasoning that makes it inert is stronger than "nothing currently
+  enumerates and re-executes `approved` records", which was the first-pass justification. The real
+  guard is the digest binding: `approved` is consumed only via an explicit approval id at
+  `execute_apply`'s and `execute_outreach_send`'s call sites, `make_approval_id` appends a random
+  suffix so the *next* `propose_apply`/`propose_outreach_send` for the same job mints a fresh id
+  rather than reusing this one (`open_approval`'s supersede logic only touches `pending` records,
+  never `approved` ones) — and that next propose call also overwrites the cover letter (or draft)
+  at the same workspace-relative path. So the stale approval's `cover_letter_sha256` (or
+  `draft_sha256`) no longer matches what is actually on disk, and executing it would raise
+  `ArtifactChanged`, not silently send stale content. Pre-existing, not new to Phase 12b or 12a — a
+  crash in this same gap left the same shape of record before either refactor.

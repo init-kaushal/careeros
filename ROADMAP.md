@@ -143,10 +143,12 @@ of the parent keeps matching. `discover-and-apply`'s cover-letter drafting now c
 freshly-fetched JD text rather than a possibly-stale stored one. Separately, 12b converged every
 remaining CLI command module (`browse_cmd`, `browser_cmd`, `job_cmd`, `research_cmd`, `resume_cmd`,
 `workspace_cmd`, plus `apply_cmd` and `discover_and_apply_cmd` as part of their rewire, plus
-`portability.py`) onto `factory.resolve_storage`, closing the `CAREEROS_WORKSPACE` divergence
-`docs/agent-integration.md` and `DIVERGENCES.md` had been carrying since 12a — every command now
-resolves its workspace through the same three tiers in the same order, so the split-workspace
-hazard those documents used to warn about no longer exists. `docs/agent-integration.md` §11 is the
+`careeros export` in `portability.py`) onto `factory.resolve_storage`, closing the
+`CAREEROS_WORKSPACE` divergence `docs/agent-integration.md` and `DIVERGENCES.md` had been carrying
+since 12a — every command that discovers a workspace (`careeros onboard` and `careeros import`
+create one instead, so neither is in scope for this) now resolves it through the same three tiers
+in the same order, so the split-workspace hazard those documents used to warn about no longer
+exists among that discovering set. `docs/agent-integration.md` §11 is the
 apply half of the integration contract, added by the task that closed this phase; unlike the
 outreach contract, its cross-process example has not yet been proven by a committed test running
 the propose and execute halves as two literal subprocesses the way `tests/test_agent_integration.py`

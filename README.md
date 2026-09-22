@@ -121,8 +121,8 @@ apply's cross-process contract (§11 of that document) is new for this task and,
 has not yet been proven with a committed test that runs the propose and execute halves as two
 literal subprocesses.
 
-Every CLI command honors `CAREEROS_WORKSPACE`, the explicit `--workspace` flag, and the config file
-saved by `careeros onboard`, in that precedence order — see `docs/agent-integration.md` §2.
+Every CLI command honors the explicit `--workspace` flag, then `CAREEROS_WORKSPACE`, then the config
+file saved by `careeros onboard`, in that precedence order — see `docs/agent-integration.md` §2.
 
 ## Workspace layout
 

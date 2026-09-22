@@ -68,13 +68,15 @@ non-CLI caller has no terminal to print to. Catch it; do not expect a message on
 `outreach_cmd`, `research_cmd`, `resume_cmd`, and `workspace_cmd` — resolves its storage through
 `factory.resolve_storage`, either directly or through a thin per-module wrapper (`job_cmd._get_storage`
 and `workspace_cmd._get_storage` keep that name only for their `typer.Exit`-on-`WorkspaceNotConfigured`
-handling; the resolution itself calls `resolve_storage`). `careeros/cli/portability.py` (`careeros
-export` / `careeros import`) resolves the same way. `careeros onboard` is the one command that does
-not: it is the command that writes the global config file `resolve_storage`'s third tier reads, so
-it has no prior workspace to discover. There is no longer a split-workspace hazard from exporting
-`CAREEROS_WORKSPACE` while a different path is saved in the global config — every command consults
-the same explicit-path-then-env-var-then-config-file order, so they all resolve to the same
-workspace.
+handling; the resolution itself calls `resolve_storage`). `careeros/cli/portability.py`'s `careeros
+export` resolves the same way. `careeros import` and `careeros onboard` are the two commands that do
+not: each is workspace *creation*, not discovery — `import_workspace_cmd` takes a required `--dest`
+and writes it straight into the global config after extracting the zip there, and `onboard` is the
+command that writes that same config file in the first place. Neither has a prior workspace to
+discover, so excluding both from `resolve_storage` is correct, not an oversight. There is no longer
+a split-workspace hazard from exporting `CAREEROS_WORKSPACE` while a different path is saved in the
+global config for every command that *does* discover rather than create — they all consult the same
+explicit-path-then-env-var-then-config-file order, so they resolve to the same workspace.
 
 ## 3. The `AgentRuntime` Protocol
 
@@ -100,9 +102,11 @@ class AgentRuntime(Protocol):
   it; they never construct their own storage.
 - `read_workspace` / `write_workspace` — thin wrappers over `storage.read`/`atomic_write`, decoding
   and encoding UTF-8 text.
-- `request_approval` — calls the runtime's `approval_callback` (see §4). Operations that gate an
-  action synchronously within one process (there are none left in the outreach flow — see §4) go
-  through this.
+- `request_approval` — calls the runtime's `approval_callback` (see §4). `outreach_cmd`, `apply_cmd`,
+  and `discover_and_apply_cmd` all still gate synchronously within one process through this — a
+  human at a terminal, or `AutomationPolicy`'s scheduled-run rules, deciding in the same process
+  that proposed the action. The two-process flow §5 describes is a second, independent path that
+  coexists with these, not a replacement for them.
 - `new_event` — builds an `ActivityEvent` stamped with this runtime's `agent_runtime_name`.
 - `record_activity` — appends the event to the day's `activity/<date>.jsonl` file. **It is
   append-only, and it unconditionally overwrites `event.agent_runtime` and `event.session_id` with
@@ -123,8 +127,8 @@ def record_activity(self, event: ActivityEvent) -> None:
 
 ## 4. `approval_callback`
 
-`ClaudeCodeRuntime` and `open_agent_runtime` both take `approval_callback` as a **required,
-keyword-only** parameter:
+`approval_callback` is required everywhere it appears — there is no default anywhere in this
+list — but it is only **keyword-only** on `open_agent_runtime`:
 
 ```python
 # careeros/runtime/factory.py
@@ -135,6 +139,15 @@ def open_agent_runtime(
     session_id: str | None = None,
 ) -> ClaudeCodeRuntime:
 ```
+
+`ClaudeCodeRuntime.__init__` and `open_claude_code_runtime` both take it as an ordinary
+**positional** parameter (fourth and second, respectively) — there is no `*` before it in either
+signature. Passing it by keyword to those two still works, since Python allows that for any
+parameter that isn't keyword-only; the point is only that *omitting* the keyword and passing it
+positionally also works for those two, unlike for `open_agent_runtime`. If you're integrating
+against this module, prefer `open_agent_runtime` — it's the one this document's examples use below
+— but do not assume the same call shape works verbatim against `ClaudeCodeRuntime` or
+`open_claude_code_runtime`.
 
 There is no default. Omitting it is a `TypeError` at construction time, not a silent auto-deny at
 call time — construction must fail loudly rather than let a missing approval path slip through.
@@ -359,7 +372,7 @@ whole vocabulary a caller branches on.
 | `ResumeNotFound` | `propose_apply` found no resume in `resumes/versions/` — a **subclass of `EntityNotFound`**, so an existing catch of the parent still matches it | not retryable until a resume file exists (`careeros resume ingest`), then re-propose |
 | `NoFillerAvailable` | `propose_apply` found no registered filler that can handle the job's URL (`.url` names it) — also a **subclass of `EntityNotFound`** | not retryable for that job as it stands; no filler exists yet for that ATS |
 | `BoardSessionRequired` | `propose_apply` found the filler is `LinkedInFiller` and the user is not signed in to LinkedIn in the CareerOS browser profile (`.board` names the board) | run `careeros browser login --board linkedin`, then re-propose — the check re-runs on every propose call, including a regeneration |
-| `FillIncomplete` | `execute_apply`'s filler returned `False` — the form did not submit | not retryable against the same approval id; `mark_executed` already consumed it and the approval is now `failed` (§11.3). Re-propose to get a fresh approval |
+| `FillIncomplete` | `execute_apply`'s filler returned `False` — the form did not submit | not retryable against the same approval id; `mark_executed` already consumed it and the approval is now `failed` (§11.4). Re-propose to get a fresh approval |
 | `BrowserUnavailable` | Playwright is not installed, the CareerOS browser profile is locked (`.profile_busy` is `True`), or any other browser exception — raised by both `propose_apply` (the LinkedIn session check) and `execute_apply` (the fill itself) | `.profile_busy=True` is a whole-run condition — something else holds the browser profile lock; stopping the whole run rather than skipping one job is the caller's job, not this layer's (see `discover_and_apply_cmd.py`'s handling). Any other `BrowserUnavailable` raised by `execute_apply` already left the approval `failed` (`mark_executed` already ran); not retryable against that approval id — re-propose |
 
 **A boundary this hierarchy does not cover:** an unknown or malformed `approval_id` does not
@@ -437,8 +450,8 @@ nothing apply-specific to call instead.
 Phase 12b moved job apply through the same operations-layer treatment Phase 12a gave outreach:
 `careeros/operations/apply.py` exposes `propose_apply` and `execute_apply`, both taking an
 `AgentRuntime` and reading/writing only through `storage`, over the same durable `Approval` record
-described in §6. Apply is drivable from an external agent session today, the same way outreach is —
-§1's "not yet" applies to nothing that remains in this codebase.
+described in §6. Apply is drivable from an external agent session today, the same way outreach is
+described in §1 — there is no longer any apply-specific caveat on that.
 
 ### 11.1 The sequence
 
@@ -565,8 +578,10 @@ re-reads the current profile and binds a fresh digest to it), not to retry the s
 `outreach`'s `subject` does (§6): it is computed once from the `Job` as read at propose time and
 never re-derived from a fresh reload at execute time, so editing the job's URL between approval and
 execution cannot change what gets navigated to. This is a deliberate correction to what an earlier
-draft of the design spec called for — see `docs/superpowers/DIVERGENCES.md` and the spec's own
-§6.3 correction note.
+draft of the design spec called for — see the spec's own §6.3 correction note
+(`docs/superpowers/specs/2026-09-22-phase12-second-runtime-design.md`). `docs/superpowers/DIVERGENCES.md`
+records the sibling profile-digest binding described just above, not this one — it has no entry
+for `job_url`.
 
 ### 11.4 Two behaviors that look like bugs but aren't
 
@@ -595,8 +610,12 @@ retry cannot act on it a second time. The cost is the same one §6 names for out
 Read the exception type name alone and this looks wrong — the browser call raised, so how is that
 a success? The application genuinely went out (`filler.fill`'s return value is the source of
 truth, and it said `True`); only the housekeeping after it failed. Advancing the stage anyway is
-what stops `discover-and-apply`, which only skips a job once its stage has advanced, from
-re-proposing and resubmitting the same application on its next scheduled run. An integrator whose
+what stops `discover-and-apply`, which skips a job once its `applied_at` is set (equivalently, once
+`_mark_applied` has run — stage and `applied_at` always advance together here), from re-proposing
+and resubmitting the same application on its next scheduled run. `ApplyResult.teardown_failed` is
+set `True` on exactly this path so a caller does not have to grep the activity log to notice: both
+`apply_cmd` and `discover_and_apply_cmd` check it and print a yellow warning alongside the ordinary
+success message, without changing their exit code. An integrator whose
 error handling swallows every browser exception the same way (as `BrowserUnavailable`) will never
 see this branch as an exception at all — it returns.
 
