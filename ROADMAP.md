@@ -99,12 +99,43 @@ would save a download and is worth revisiting.
 
 **Why:** Phase 5 built the `AgentRuntime` seam and proved it with `LocalRuntime` plus a `ClaudeCodeRuntime` exercised only by an internal interop test — no external runtime has ever actually driven CareerOS through it. The interoperability claim is real in the sense that the interface exists and is exercised, but it's unproven against anything outside this codebase.
 
-**What it builds:**
-- A concrete second runtime usable from a real external context — most likely a `ClaudeCodeRuntime` actually wired up for use from an agent session (this one, or one like it) via a documented integration path, rather than only a test-harness stub
-- A workspace discovery convenience for that runtime: given a workspace path, bootstrap a runtime instance in one call, matching how `open_local_runtime` already works for the CLI
-- Documentation of the integration contract (what `approval_callback` needs to do, what `record_activity` guarantees) so a third runtime could be built without reading the source
+**Correction to the premise above:** it named the gap wrong. `ClaudeCodeRuntime` already existed
+and already satisfied the `AgentRuntime` Protocol before this phase started — a second runtime was
+never the missing piece. The actual gap was that every business flow (outreach send among them)
+was locked inside a Typer command body that constructed a `LocalRuntime` and called
+`Confirm.ask` directly, and that an approval decision lived only in that process's memory — so
+even with a second runtime available, nothing could propose an action in one process and let a
+human decide and execute it in another. Phase 12a is the fix for that, not for a missing runtime.
 
-**Exit condition:** an agent session outside the CLI (not a test) opens a real workspace, reads/writes it, and completes at least one approval-gated action (e.g., drafts and sends outreach) end to end.
+**Status: 12a shipped.** It extracted the outreach-send flow into an operations layer
+(`careeros/operations/outreach.py`: `propose_outreach_send`, `execute_outreach_send`,
+`decline_outreach_send`) that takes an `AgentRuntime` instead of talking to storage, `typer`, or
+`rich` directly, over a durable `Approval` record (`careeros/core/models.py`, persisted under
+`approvals/`) that survives a process boundary. `careeros.runtime.factory.open_agent_runtime`
+bootstraps a `ClaudeCodeRuntime` over a discovered workspace in one call, matching how
+`open_local_runtime` already works for the CLI, and `resolve_storage` added the
+`CAREEROS_WORKSPACE` environment-variable discovery tier so a parent process can export the
+workspace once for every subprocess it spawns. `docs/agent-integration.md` is the integration
+contract this phase promised: the `AgentRuntime` Protocol member by member, the approval schema
+and state machine, the error vocabulary, and a two-process propose/execute example verified to
+run. `tests/test_agent_integration.py` proves the mechanism works across a real process boundary,
+not just in-process.
+
+**What 12b still needs to build**, named so it does not have to be rediscovered:
+`careeros/operations/apply.py` (`propose_apply`/`execute_apply`), the `apply_cmd` rewire onto that
+operations layer, and the `discover-and-apply` de-duplication that Phase 6's spec asserted but
+never shipped (see the `DIVERGENCES.md` row on `discover-and-apply` idempotence).
+
+**Exit condition:** an agent session outside the CLI (not a test) opens a real workspace, reads/writes it, and completes at least one approval-gated action (e.g., drafts and sends outreach) end to end. The automated half is met: `.venv/bin/python -m pytest -q` is green, and
+`tests/test_agent_integration.py` proves a propose in one process and an execute in another
+complete one send, attributed to `claude_code` across two session IDs. **The manual half — the
+phase's real exit condition — is still outstanding:** a Claude Code session proposing an outreach
+send against the user's actual workspace via `CAREEROS_WORKSPACE`, surfacing the draft in
+conversation, recording the user's real decision, and executing a real send to the user's own
+address in a second process. This requires `CAREEROS_SMTP_HOST`/`PORT`/`USER`/`PASSWORD`
+configured in the environment and a `Person` record holding the user's own email address, so the
+verifying send is real rather than patched. That is a separate, user-present step, not something a
+green test suite can claim on its own.
 
 ---
 

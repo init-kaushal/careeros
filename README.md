@@ -106,6 +106,17 @@ prompting the user directly — `LocalRuntime` blocks on a real terminal prompt 
 you set the policy threshold), and the same interface is designed for a future agent-embedded
 runtime to plug in without any command code changing.
 
+**Agent integration**
+`careeros outreach send`'s propose/decide/execute steps live in `careeros/operations/outreach.py`
+over a durable `Approval` record under `approvals/`, so one process can propose a send and a
+different, later process can carry out the human's decision and execute it. That is what lets an
+agent session that is not the CLI drive CareerOS: it can open the workspace via
+`CAREEROS_WORKSPACE`, propose an outreach send, hold a conversation about it, and execute the send
+in a later call, all without a live connection back to the first process. See
+[docs/agent-integration.md](docs/agent-integration.md) for the full contract — the `AgentRuntime`
+Protocol, the approval schema, the error vocabulary, and a runnable two-process example. **Outreach
+send is drivable from an external agent session today; job apply is not yet** — that is Phase 12b.
+
 ## Workspace layout
 
 CareerOS uses a two-directory model: the framework (this repo) and your workspace (a directory you own).
