@@ -197,6 +197,30 @@ def propose_apply(
     )
 
 
+def _record_apply_failed(
+    runtime: AgentRuntime, approval_id: str, job: Job, job_id: str,
+    action_label: str, exc: BaseException,
+) -> None:
+    """Mark the approval failed and log the attempt, exception type name only.
+
+    Never the exception's message: a Playwright or browser-profile-lock
+    exception's str() can contain the browser profile's filesystem path, and
+    both records this writes are durable — the activity log is
+    append-only — so nothing landing here could ever be scrubbed later.
+    Mutates and logs before the caller raises, so the audit trail always
+    records that the attempt happened even though the caller never returns
+    normally.
+    """
+    exc_name = type(exc).__name__
+    mark_failed(runtime, approval_id, exc_name)
+    runtime.record_activity(runtime.new_event(
+        "apply_failed", action_label,
+        "Application submission failed for " + job.company + " — " + job.title
+        + ": " + exc_name,
+        status="failed", entity_type="job", entity_id=job_id,
+    ))
+
+
 def execute_apply(
     runtime: AgentRuntime, approval_id: str, *, headless: bool, action_label: str,
 ) -> ApplyResult:
@@ -222,14 +246,21 @@ def execute_apply(
     treatment of ArtifactChanged and MissingRecipient: nothing has been
     attempted in those cases.
 
-    A browser error must never advance the job's stage. ImportError and
-    BrowserProfileBusy mean nothing was even attempted (the browser never
-    launched), so neither marks the approval failed — it is left executed,
-    a stale record an integrator must re-propose past. Any other exception
-    may have occurred mid-fill, so it does mark the approval failed, with
-    only the exception's type name persisted as detail: a browser
-    exception's message can contain a profile path, and that must never
-    land in a durable workspace file.
+    A browser error must never advance the job's stage. Every browser-failure
+    branch — Playwright missing, the browser profile locked, or any other
+    exception raised while launching or filling — marks the approval failed
+    rather than leaving it executed: mark_executed already ran, so the
+    external action was attempted (even "attempted" as narrowly as "tried
+    to launch and could not"), and executed would otherwise misrepresent
+    that as a successful send to a reader of the activity log. failed is
+    the truthful terminal state, the approval still cannot be retried
+    (mark_executed already consumed it — an integrator re-proposes rather
+    than retrying), and only the exception's type name is ever persisted,
+    to the approval's detail and to the activity log: a browser exception's
+    message can contain the browser profile's filesystem path, and both of
+    those records are durable — the log is append-only — so nothing that
+    landed there could later be scrubbed. str(exc) is used only to build
+    the in-memory BrowserUnavailable raised back to the caller.
     """
     approval = require_state(runtime.storage, approval_id, APPROVED)
     job_id = payload_value(approval, "job_id")
@@ -275,14 +306,16 @@ def execute_apply(
                 page, job, profile, cover_letter_text, cover_letter_path, resume_path
             )
     except ImportError as exc:
+        _record_apply_failed(runtime, approval_id, job, job_id, action_label, exc)
         raise BrowserUnavailable(
             "Playwright not installed. Run: pip install playwright "
             "&& playwright install chrome"
         ) from exc
     except BrowserProfileBusy as exc:
+        _record_apply_failed(runtime, approval_id, job, job_id, action_label, exc)
         raise BrowserUnavailable(str(exc), profile_busy=True) from exc
     except Exception as exc:
-        mark_failed(runtime, approval_id, type(exc).__name__)
+        _record_apply_failed(runtime, approval_id, job, job_id, action_label, exc)
         raise BrowserUnavailable(str(exc)) from exc
 
     if not success:

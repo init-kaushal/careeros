@@ -349,6 +349,13 @@ class TestExecuteApply:
         assert "playwright install" in str(exc.value)
         assert Job.load(runtime.storage, JOB_ID).stage == "saved"
         filler.fill.assert_not_called()
+        # The approval must be a truthful failed, not a stale executed: the
+        # browser never launched, so nothing was submitted, but mark_executed
+        # already ran and the attempt must be recorded as having failed.
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        assert approval.state == FAILED
+        assert approval.detail == "ImportError"
+        assert "apply_failed" in _log(runtime.storage)
 
     def test_browser_profile_busy_raises_browser_unavailable_with_the_flag_set(self, tmp_path):
         runtime = _runtime(tmp_path)
@@ -363,6 +370,10 @@ class TestExecuteApply:
         assert exc.value.profile_busy is True
         assert Job.load(runtime.storage, JOB_ID).stage == "saved"
         filler.fill.assert_not_called()
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        assert approval.state == FAILED
+        assert approval.detail == "BrowserProfileBusy"
+        assert "apply_failed" in _log(runtime.storage)
 
     def test_a_generic_browser_exception_marks_the_approval_failed(self, tmp_path):
         runtime = _runtime(tmp_path)
@@ -379,6 +390,44 @@ class TestExecuteApply:
         approval = Approval.load(runtime.storage, proposal.approval_id)
         assert approval.state == FAILED
         assert approval.detail == "RuntimeError"
+        assert "apply_failed" in _log(runtime.storage)
+
+    @pytest.mark.parametrize(
+        "exc_factory",
+        [
+            lambda: ImportError("no module named playwright"),
+            lambda: BrowserProfileBusy(
+                "The CareerOS browser profile is already in use: "
+                "/Users/fakeuser/Library/Application Support/careeros/browser (lock held)"
+            ),
+            lambda: RuntimeError(
+                "chrome crashed while reading "
+                "/Users/fakeuser/Library/Application Support/careeros/browser/SingletonLock"
+            ),
+        ],
+        ids=["import_error", "profile_busy", "generic_exception"],
+    )
+    def test_no_browser_exception_message_reaches_a_persisted_record(self, tmp_path, exc_factory):
+        """Neither the approval's detail nor the activity log may ever hold
+        the raw exception message — only its type name — because a
+        Playwright or profile-lock message can contain the browser
+        profile's filesystem path, and the activity log is append-only, so
+        anything that landed there could never be scrubbed.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        filler = _filler_mock()
+        fake_path = "/Users/fakeuser/Library/Application Support/careeros/browser"
+        with patch("careeros.operations.apply.FILLERS", [filler]), \
+             patch("careeros.operations.apply.launch_browser",
+                   MagicMock(side_effect=exc_factory())):
+            with pytest.raises(BrowserUnavailable):
+                execute_apply(runtime, proposal.approval_id, headless=True, action_label="apply")
+
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        assert fake_path not in (approval.detail or "")
+        assert fake_path not in _log(runtime.storage)
 
     def test_happy_path_marks_applied_and_logs_the_resume_used(self, tmp_path):
         runtime = _runtime(tmp_path)
