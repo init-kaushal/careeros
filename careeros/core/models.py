@@ -324,6 +324,48 @@ class OutreachMessage(BaseModel):
         return cls.model_validate_json(storage.read(path).decode())
 
 
+class Approval(BaseModel):
+    """A durable record of one approval-gated action, readable across processes.
+
+    States: pending -> approved -> executed, with declined, superseded, and
+    failed as the other terminal outcomes. Only `approved` may execute, and
+    executing advances the record, so one approval can never authorize two
+    external actions.
+
+    `payload` is an open string map on purpose: it holds only the identifiers
+    and workspace-relative paths execute_* needs to find its inputs, which
+    keeps this file a contract a third runtime can read without importing
+    CareerOS. It never holds drafted content (there would be two sources of
+    truth) and never holds absolute paths (the workspace is portable).
+    """
+
+    id: str
+    action: str
+    summary: str
+    state: str = "pending"
+    entity_type: str | None = None
+    entity_id: str | None = None
+    payload: dict[str, str] = Field(default_factory=dict)
+    created_at: str
+    decided_at: str | None = None
+    decided_by: str | None = None
+    reason: str | None = None
+    executed_at: str | None = None
+    detail: str | None = None
+
+    def save(self, storage: StorageProvider) -> None:
+        storage.atomic_write(
+            "approvals/" + self.id + ".json", self.model_dump_json(indent=2).encode()
+        )
+
+    @classmethod
+    def load(cls, storage: StorageProvider, approval_id: str) -> "Approval":
+        path = "approvals/" + approval_id + ".json"
+        if not storage.exists(path):
+            raise FileNotFoundError("Approval " + repr(approval_id) + " not found")
+        return cls.model_validate_json(storage.read(path).decode())
+
+
 class CompensationDataPoint(BaseModel):
     id: str
     job_id: str
