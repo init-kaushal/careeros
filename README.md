@@ -107,22 +107,22 @@ you set the policy threshold), and the same interface is designed for a future a
 runtime to plug in without any command code changing.
 
 **Agent integration**
-`careeros outreach send`'s propose/decide/execute steps live in `careeros/operations/outreach.py`
-over a durable `Approval` record under `approvals/`, so one process can propose a send and a
-different, later process can carry out the human's decision and execute it. That is what lets an
-agent session that is not the CLI drive CareerOS: it can open the workspace via
-`CAREEROS_WORKSPACE`, propose an outreach send, hold a conversation about it, and execute the send
-in a later call, all without a live connection back to the first process. See
+Both `careeros outreach send` and `careeros apply`'s propose/decide/execute steps live in
+`careeros/operations/` (`outreach.py` and `apply.py`) over a durable `Approval` record under
+`approvals/`, so one process can propose a send or an application and a different, later process
+can carry out the human's decision and execute it. That is what lets an agent session that is not
+the CLI drive CareerOS: it can open the workspace via `CAREEROS_WORKSPACE`, propose an outreach
+send or a job application, hold a conversation about it, and execute the action in a later call,
+all without a live connection back to the first process. See
 [docs/agent-integration.md](docs/agent-integration.md) for the full contract — the `AgentRuntime`
-Protocol, the approval schema, the error vocabulary, and a runnable two-process example. **Outreach
-send is drivable from an external agent session today; job apply is not yet** — that is Phase 12b.
+Protocol, the approval schema, the error vocabulary, and a runnable two-process example for each
+flow. **Both outreach send and job apply are drivable from an external agent session today** —
+apply's cross-process contract (§11 of that document) is new for this task and, unlike outreach's,
+has not yet been proven with a committed test that runs the propose and execute halves as two
+literal subprocesses.
 
-**Only `careeros outreach send`, `careeros outreach mark-referral-requested`, and `careeros people
-update` honor `CAREEROS_WORKSPACE`.** Every other command still resolves its workspace from an
-explicit `--workspace` flag or the config file saved by `careeros onboard`, never from the
-environment variable. Exporting `CAREEROS_WORKSPACE` while a different workspace is configured
-splits your data across two trees. Pass an explicit workspace path, or keep the two in sync, until
-this converges — see `docs/agent-integration.md` and `DIVERGENCES.md`.
+Every CLI command honors `CAREEROS_WORKSPACE`, the explicit `--workspace` flag, and the config file
+saved by `careeros onboard`, in that precedence order — see `docs/agent-integration.md` §2.
 
 ## Workspace layout
 
@@ -207,7 +207,7 @@ LLM/browser/SMTP call mocked at the boundary.
 
 ## Status
 
-Eleven phases shipped, in order, plus the first half of a twelfth:
+Twelve phases shipped. The first eleven, in order:
 
 1. **Workspace core** — onboarding, profile extraction, `StorageProvider` protocol, export/import
 2. **Job pipeline** — job schema, LLM-assisted scoring against your profile
@@ -230,18 +230,20 @@ Eleven phases shipped, in order, plus the first half of a twelfth:
     spans of the master resume, with a self-validating sidecar recording provenance for every
     bullet and header
 
-Phase 12a has also shipped: the outreach-send flow now runs through a runtime-agnostic
-`careeros/operations/` layer over a durable `Approval` record, so an agent session outside the CLI
-can propose a send in one process and a human's decision execute it in another — see "Agent
-integration" above. Job apply is not yet rewired onto that layer; that is Phase 12b.
+Phase 12 has also shipped, both halves: the outreach-send flow (12a) and the job-apply flow (12b)
+both now run through the same runtime-agnostic `careeros/operations/` layer over a durable
+`Approval` record, so an agent session outside the CLI can propose either action in one process and
+a human's decision execute it in another — see "Agent integration" above. Phase 12b also
+brought every remaining CLI command onto `CAREEROS_WORKSPACE`-aware workspace discovery and capped
+`discover-and-apply`'s JD text the same way the interactive `apply` command always has.
 
 All workspace I/O goes through the `StorageProvider` protocol, so storage backends can be
 swapped without touching business logic. Every meaningful action — both outcomes of any
 approval decision, not just the success path — writes to the append-only activity log.
 
-See [ROADMAP.md](ROADMAP.md) for what's planned next: apply support in the operations layer
-(`careeros/operations/apply.py`, the `apply_cmd` rewire, and `discover-and-apply`
-de-duplication — Phase 12b) and then outreach expansion (Phase 13).
+Phase 12's own manual exit condition — a real outreach send driven from an agent session against
+the user's actual workspace, not a test — is still outstanding; see `ROADMAP.md`. See
+[ROADMAP.md](ROADMAP.md) for what's planned next: outreach expansion (Phase 13).
 
 ## License
 

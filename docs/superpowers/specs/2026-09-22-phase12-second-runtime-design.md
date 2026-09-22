@@ -459,10 +459,43 @@ untouched, raises `FillIncomplete`. `ImportError` and `BrowserProfileBusy` becom
 `BrowserUnavailable` with the original message — preserving today's guarantee that a
 browser error never advances the stage.
 
+**Corrected during implementation, following the self-correcting convention `ROADMAP.md`
+already uses:** the paragraph above instructs `execute_apply` to "reload... profile." That
+would re-derive, at execute time, content the approval was supposed to bind — exactly the
+defect Phase 12a's final review caught in outreach's email subject, where the subject was
+computed once at propose time and never re-derived from a fresh reload. `apply.py` as shipped
+does not reload the profile: it binds a `profile_sha256` digest at propose time and
+re-verifies the profile on disk against that digest at execute time (raising
+`ArtifactChanged` on a mismatch, exactly like the cover letter and resume), because the
+profile is transmitted content here too — `filler.fill` reads it to populate the
+application form. It similarly does not "reload... the job" for navigation purposes: `job_url`
+is recorded on the payload at propose time and read back verbatim, not re-derived from a
+fresh `Job.load`, so editing the job's URL between approval and execution cannot change what
+gets navigated to. (`Job.load` does still run in `execute_apply`, but only to read the record
+that later gets mutated to `stage="applied"` and saved — not to source the URL the filler
+navigates to.) See `docs/agent-integration.md` §11.3 for the shipped behavior.
+
 `headless` is a parameter rather than a constant because the CLI runs headful
 (`apply_cmd.py:185`) and `discover-and-apply` runs headless
-(`discover_and_apply_cmd.py:300`). It is the only behavioral difference between those two
-call sites, which is precisely why they can now share one implementation.
+(`discover_and_apply_cmd.py:300`).
+
+**Corrected during implementation:** the sentence originally here claimed `headless` was
+"the only behavioral difference" between those two call sites, and used that claim to justify
+sharing one implementation. As shipped, there are five: the approval-summary content
+(`discover-and-apply` embeds its own score/threshold wording; `apply_cmd` uses
+`propose_apply`'s default), JD truncation (`discover-and-apply` passes its own freshly-fetched,
+already-capped JD text via the `jd_text` override; `apply_cmd` relies on `propose_apply`'s
+own `(job.description or "")[:_JD_CAP]` default), the per-job activity events
+`discover-and-apply` logs around calls into the operations layer that the interactive command
+has no equivalent of (`apply_error`, `cover_letter_failed`, `no_filler_available`, and others —
+see `docs/agent-integration.md` §11.5), the `job_applied` summary (`discover-and-apply`'s no
+longer embeds the score/threshold it used to — see `DIVERGENCES.md`), and locked-profile
+(`BrowserProfileBusy`)
+handling (`discover-and-apply` treats it as a whole-run stop condition via
+`BrowserUnavailable.profile_busy`; `apply_cmd` does not need to, since it only ever applies to
+one job per invocation). `headless` is still a real, load-bearing parameter — just not the
+*only* one, which is why one shared implementation still needed a five-way parameterization,
+not a one-way one.
 
 ---
 

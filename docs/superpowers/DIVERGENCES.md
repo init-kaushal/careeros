@@ -13,7 +13,6 @@ state.
 
 | Spec commitment | Source | Status |
 |---|---|---|
-| Workspace discovery via `--workspace` flag → `CAREEROS_WORKSPACE` env var → config file (three tiers) | Master §3 | **Partly closed by Phase 12a.** The env var tier is now implemented in `careeros/runtime/factory.py`'s `resolve_storage`, and honored by `careeros outreach send`, `careeros outreach mark-referral-requested`, `careeros people update`, and `open_agent_runtime`. `browse_cmd`, `browser_cmd`, `job_cmd`, `apply_cmd`, `research_cmd`, `discover_and_apply_cmd`, `resume_cmd`, and `workspace_cmd` still each carry their own private `_get_storage` helper (flag → config file only) that does not read `CAREEROS_WORKSPACE` — see the new entry below. `careeros/cli/portability.py` (`careeros export`) does not read it either — it resolves the same flag-then-config-file precedence inline, with no private helper of its own. **The hazard this splits between:** a user or agent who follows `docs/agent-integration.md`'s advice to export `CAREEROS_WORKSPACE` while also having a workspace path saved in the global config (from `careeros onboard`) gets the three converged commands writing to one workspace tree and every other command writing to another — outreach history in one tree, applications and job data in the other, with no error or warning. Until convergence lands, pass an explicit workspace path everywhere, or keep the env var and the configured path pointed at the same directory. |
 | Activity events carry a `reason` field ("why did CareerOS do that?") | Master §4.3 | **Partly closed by Phase 12a.** `careeros/operations/approvals.py`'s `resolve_approval` now populates it on `approval_granted` and `approval_declined` events, sourced from `ApprovalResult.reason`. That source is itself populated on every path that produces one today: `LocalRuntime.request_approval` now supplies a short reason ("approved/declined at a terminal confirmation prompt") rather than leaving it `None`, so the CLI path carries a real reason too, not just automation/external-agent callers that already supplied one. Every other event type still leaves `reason` `None`. |
 | Activity event `status: "blocked"` | Master §4.3 | Never emitted — there's no policy engine yet to produce a blocked outcome (tracked as Phase 9) |
 | `cat jobs/shortlisted/<id>.json` shows full match reasoning | Master §7, Phase 2 exit condition | Score and reasoning are computed and displayed at browse time, then discarded — `Job` has no field to persist either one |
@@ -33,6 +32,19 @@ state.
   surface a future external runtime uses to rediscover open decisions. No notification and no
   expiry exist — a caller has to poll `list_pending` itself; nothing pushes a decision or ages one
   out.
+- **Workspace discovery via `--workspace` flag → `CAREEROS_WORKSPACE` env var → config file (three
+  tiers)** (Master §3) — **fully closed by Phase 12b** (Tasks 6 and 8), after Phase 12a closed only
+  the env-var tier's implementation. Every command module under `careeros/cli/` now routes through
+  `factory.resolve_storage`: `apply_cmd`, `browse_cmd`, `browser_cmd`, `discover_and_apply_cmd`,
+  `outreach_cmd`, `research_cmd`, `resume_cmd` call it directly; `job_cmd` and `workspace_cmd` call
+  it through a same-named `_get_storage` wrapper kept only for its `typer.Exit`-on-
+  `WorkspaceNotConfigured` handling; `careeros/cli/portability.py` (`careeros export`/`careeros
+  import`) calls it inline. `careeros onboard` is the sole exception, and correctly so — it is the
+  command that writes the global config file the third tier reads, so it has no prior workspace to
+  discover. The split-workspace hazard this used to carry — exporting `CAREEROS_WORKSPACE` while a
+  different path was saved in the global config sent some commands to one workspace tree and the
+  rest to another, silently — no longer exists: every command now consults the same three tiers in
+  the same order, so they always agree.
 
 ## New deferrals recorded by Phase 12a
 
@@ -52,6 +64,11 @@ state.
   flag-then-config-file precedence inline in `export_cmd`. It is deferred for the same reason as
   the eight, and picking it up alongside them (or alongside `factory.resolve_storage` directly) is
   the natural fix.
+
+  **Closed by Phase 12b.** See the `Closed` section above — every remaining command module and
+  `portability.py` now route through `factory.resolve_storage`, and the `_get_storage` name that
+  survives on `job_cmd` and `workspace_cmd` is a thin wrapper over it, not a separate resolution
+  path.
 - `queue_only` (`careeros/operations/approval_queue.py`) is the only shipped approval callback for
   out-of-process use, and it only ever denies. A runtime wanting genuine asynchronous approval —
   propose now, a human approves on another machine hours later — has the durable `Approval` record
@@ -83,3 +100,67 @@ state.
   and an `outreach_send_declined` event. Before this branch, quitting the old inline command exited
   before anything was written at all. This is a real change in what a quit leaves on disk, alongside
   the two activity-log shape changes recorded above.
+
+## New deferrals and behavior changes recorded by Phase 12b
+
+- **`discover-and-apply` now caps the JD text handed to cover-letter generation at 4000
+  characters**, where it previously passed the full text. This is only a cap, not a staleness
+  regression: an earlier fix round in this same plan (`ba8273d` and its ancestors) already ensured
+  the text being capped is this run's freshly-fetched JD, not a stored, possibly-stale
+  `job.description` — see `discover_and_apply_cmd.py`'s `propose_apply(... jd_text=p["jd_text"][:4000])`
+  call and its adjacent comment. The cap itself matches what `apply_cmd`'s interactive path has
+  always applied via `propose_apply`'s own default (`(job.description or "")[:_JD_CAP]`,
+  `_JD_CAP = 4000` in `careeros/operations/apply.py`) — this closes a divergence between the two
+  callers, it does not introduce a new one, but a cover letter for a JD longer than 4000 characters
+  will now draft from a truncated view either way.
+- **`discover-and-apply`'s `job_applied` event summary no longer embeds the score and threshold
+  that triggered the auto-apply.** Before this refactor, the event logged directly by the old
+  inline command's success branch read "Auto-applied (score N >= threshold M) to Company — Title".
+  The shared `_mark_applied` helper both `apply_cmd` and `discover_and_apply_cmd` now call through
+  `execute_apply` logs only "Applied to Company — Title with <resume path>". The score and
+  threshold are not lost — they live in the approval's `summary` (built by
+  `discover_and_apply_cmd.py` before calling `propose_apply`), which is carried verbatim by the
+  `approval_requested` event when the approval opens and again, prefixed "Approved: ", by
+  `approval_granted` when it is decided — both logged against the same `entity_id` (the `job_id`)
+  as `job_applied`. Reading them together, not `job_applied` alone, reconstructs what the old
+  single event said in one line.
+- **A successful `careeros apply` now writes three activity events where it wrote one.** Before
+  this refactor, `apply_cmd`'s inline flow logged exactly `job_applied` on success — no `Approval`
+  record existed to log a request or a grant against. Now `propose_apply` logs
+  `approval_requested`, `resolve_approval` logs `approval_granted`, and `execute_apply`'s
+  `_mark_applied` logs `job_applied` — the same three-event shape Phase 12a already gave outreach,
+  extended to apply.
+- **Apply is now digest-bound on the profile, in addition to the cover letter and resume.**
+  Editing `profile/profile.json` between approving an application and executing it now fails with
+  `ArtifactChanged` — by design, not a bug: `filler.fill` reads the profile to populate the
+  application form's fields, so an edited profile between approval and execution would change what
+  gets typed into the form without a new review, exactly as an edited draft would change what an
+  approved outreach send actually says. See `docs/agent-integration.md` §11.3.
+- **`careeros export`'s default zip filename now derives from the fully resolved workspace path**,
+  where it previously derived from the path as given (only `~` expanded, symlinks left alone).
+  `export_cmd` now builds `ws_root` from `storage.resolve(".")`, which is
+  `LocalFilesystemStorage`'s own `Path(...).resolve()` — the same call that follows symlinks for
+  every other storage operation — rather than `Path(ws_path).expanduser()`. A `--workspace` (or
+  configured, or `CAREEROS_WORKSPACE`) path that is itself a symlink now produces a default zip
+  filename from the real target directory's name, not the symlink's own name. Zip contents are
+  unaffected; this changes only the default output filename when `--output` is omitted.
+- **Two residual duplicate-submission windows in `execute_apply`, both narrow and both accepted
+  rather than fixed, in the same family as the concurrency window already recorded above for
+  outreach.** Neither is softened here:
+  1. A `BaseException` — a `KeyboardInterrupt` from Ctrl-C, a `SystemExit` raised by a signal
+     handler installed for `SIGTERM`, or any other exception that is not an `Exception` subclass —
+     landing during browser context teardown, after
+     `filler.fill` already returned `True`, is caught by nothing in `execute_apply`: the function's
+     only exception handlers catch `ImportError`, `BrowserProfileBusy`, and `Exception`, none of
+     which match a bare `BaseException`. It propagates out of `execute_apply` uncaught, leaving the
+     approval `executed` (`mark_executed` already ran before the browser was launched) and the
+     job's `stage` unadvanced (`_mark_applied` never ran). The next run of `discover-and-apply`,
+     which only skips a job once its stage has advanced, would resubmit the same application.
+  2. A failure inside `_mark_applied` itself — the job-save or its `record_activity` call, on the
+     line immediately following the `try`/`except` block that wraps the browser launch and fill —
+     is not caught by that block either, because the call sits after it, not inside it. It escapes
+     `execute_apply` with the identical result: approval `executed`, job `stage` unadvanced. This
+     one is pre-existing, not new to Phase 12b: the pre-refactor `apply_cmd.py` had the same
+     unguarded `job.save(...)` / `record_activity(...)` pair after a successful `filler.fill`, with
+     no surrounding `try`/`except` there either — the refactor moved this code into
+     `careeros/operations/apply.py` without changing that structural property.

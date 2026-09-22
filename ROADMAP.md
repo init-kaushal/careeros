@@ -2,7 +2,9 @@
 
 ## Where we are
 
-Ten phases shipped. See `README.md` for the full command reference; this is the one-line version:
+Twelve phases shipped. See `README.md` for the full command reference. The first ten, one line
+each (Phase 11 and Phase 12 each get their own section below, since both have more nuance than a
+one-liner captures):
 
 1. **Workspace core** — onboarding, profile extraction, `StorageProvider` protocol, export/import
 2. **Job pipeline** — job schema, LLM-assisted scoring against your profile
@@ -112,7 +114,9 @@ was locked inside a Typer command body that constructed a `LocalRuntime` and cal
 even with a second runtime available, nothing could propose an action in one process and let a
 human decide and execute it in another. Phase 12a is the fix for that, not for a missing runtime.
 
-**Status: 12a shipped.** It extracted the outreach-send flow into an operations layer
+**Status: shipped — both halves.**
+
+**12a shipped:** it extracted the outreach-send flow into an operations layer
 (`careeros/operations/outreach.py`: `propose_outreach_send`, `execute_outreach_send`,
 `decline_outreach_send`) that takes an `AgentRuntime` instead of talking to storage, `typer`, or
 `rich` directly, over a durable `Approval` record (`careeros/core/models.py`, persisted under
@@ -126,21 +130,43 @@ and state machine, the error vocabulary, and a two-process propose/execute examp
 run. `tests/test_agent_integration.py` proves the mechanism works across a real process boundary,
 not just in-process.
 
-**What 12b still needs to build**, named so it does not have to be rediscovered:
-`careeros/operations/apply.py` (`propose_apply`/`execute_apply`), the `apply_cmd` rewire onto that
-operations layer, and the `discover-and-apply` de-duplication that Phase 6's spec asserted but
-never shipped (see the `DIVERGENCES.md` row on `discover-and-apply` idempotence).
+**12b shipped:** it gave job apply the identical treatment. `careeros/operations/apply.py`
+(`propose_apply`/`execute_apply`) is the apply-side counterpart to `outreach.py`, both `apply_cmd`
+and `discover_and_apply_cmd` are rewired to call it instead of each carrying their own inline
+apply logic, and the approval it opens (`action == "apply_to_job"`) binds three digests — cover
+letter, resume, and profile, the last because the profile populates the application form's fields
+— rather than outreach's one. Five new error types (`ResumeNotFound`, `NoFillerAvailable`,
+`BoardSessionRequired`, `FillIncomplete`, `BrowserUnavailable`) extend the shared
+`OperationError` hierarchy; the first two are subclasses of `EntityNotFound` so an existing catch
+of the parent keeps matching. `discover-and-apply`'s cover-letter drafting now caps JD text at
+4000 characters, matching `apply_cmd`'s own long-standing default, and drafts from this run's
+freshly-fetched JD text rather than a possibly-stale stored one. Separately, 12b converged every
+remaining CLI command module (`browse_cmd`, `browser_cmd`, `job_cmd`, `research_cmd`, `resume_cmd`,
+`workspace_cmd`, plus `apply_cmd` and `discover_and_apply_cmd` as part of their rewire, plus
+`portability.py`) onto `factory.resolve_storage`, closing the `CAREEROS_WORKSPACE` divergence
+`docs/agent-integration.md` and `DIVERGENCES.md` had been carrying since 12a — every command now
+resolves its workspace through the same three tiers in the same order, so the split-workspace
+hazard those documents used to warn about no longer exists. `docs/agent-integration.md` §11 is the
+apply half of the integration contract, added by the task that closed this phase; unlike the
+outreach contract, its cross-process example has not yet been proven by a committed test running
+the propose and execute halves as two literal subprocesses the way `tests/test_agent_integration.py`
+does for outreach. **Not part of 12b:** the `discover-and-apply` job-posting idempotence gap
+`DIVERGENCES.md` still tracks (`make_job_id`'s random suffix, and whether a rediscovered posting
+can be resubmitted) was never this phase's scope, despite an earlier draft of this section naming
+it as work 12b still needed to do — that was corrected once 12b's actual implementation plan was
+written, and is recorded here rather than silently dropped.
 
 **Exit condition:** an agent session outside the CLI (not a test) opens a real workspace, reads/writes it, and completes at least one approval-gated action (e.g., drafts and sends outreach) end to end. The automated half is met: `.venv/bin/python -m pytest -q` is green, and
 `tests/test_agent_integration.py` proves a propose in one process and an execute in another
 complete one send, attributed to `claude_code` across two session IDs. **The manual half — the
-phase's real exit condition — is still outstanding:** a Claude Code session proposing an outreach
-send against the user's actual workspace via `CAREEROS_WORKSPACE`, surfacing the draft in
-conversation, recording the user's real decision, and executing a real send to the user's own
-address in a second process. This requires `CAREEROS_SMTP_HOST`/`PORT`/`USER`/`PASSWORD`
-configured in the environment and a `Person` record holding the user's own email address, so the
-verifying send is real rather than patched. That is a separate, user-present step, not something a
-green test suite can claim on its own.
+phase's real exit condition — is still outstanding, for both outreach and apply:** a Claude Code
+session proposing an outreach send (or a job application) against the user's actual workspace via
+`CAREEROS_WORKSPACE`, surfacing the draft in conversation, recording the user's real decision, and
+executing a real send to the user's own address in a second process. This requires
+`CAREEROS_SMTP_HOST`/`PORT`/`USER`/`PASSWORD` configured in the environment and a `Person` record
+holding the user's own email address, so the verifying send is real rather than patched. That is a
+separate, user-present step, not something a green test suite can claim on its own, and it has not
+happened as of this document.
 
 ---
 

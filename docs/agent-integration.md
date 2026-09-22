@@ -2,15 +2,21 @@
 
 This document is the contract for driving CareerOS from a process that is not the
 `careeros` CLI — an agent session (Claude Code or otherwise), a script, or a future
-third runtime. It is scoped to **outreach send only**. Job apply (`careeros/operations/apply.py`)
-is Phase 12b work and does not exist yet in this codebase; nothing below should be read as a
-promise about it.
+third runtime. It covers both approval-gated flows the operations layer exposes today:
+outreach send (`careeros/operations/outreach.py`, Phase 12a, §1-§10) and job apply
+(`careeros/operations/apply.py`, Phase 12b, §11).
 
 Everything here is grounded in code that ships today: `careeros/operations/approvals.py`,
-`careeros/operations/outreach.py`, `careeros/operations/errors.py`,
+`careeros/operations/outreach.py`, `careeros/operations/apply.py`, `careeros/operations/errors.py`,
 `careeros/operations/approval_queue.py`, `careeros/runtime/factory.py`, `careeros/runtime/base.py`,
-and `careeros/core/models.py`. `tests/test_agent_integration.py` is the working example this
-document's snippets are drawn from.
+and `careeros/core/models.py`. `tests/test_agent_integration.py` is the worked, literally
+cross-process example for outreach that this document's outreach snippets are drawn from.
+`tests/test_operations_apply.py` is the best source of truth for apply's behavior, but it exercises
+`propose_apply`/`execute_apply` in a single process. §11's apply examples were run as two literal,
+separate Python processes while writing this document, the same way `tests/test_agent_integration.py`
+proves outreach — but that verification is not a committed, permanently-enforced test the way
+outreach's is: nothing in the test suite will fail if a future change breaks apply's cross-process
+contract the way `tests/test_agent_integration.py` would for outreach's.
 
 ## 1. What this is
 
@@ -57,20 +63,18 @@ workspace without a `--workspace` flag threaded through every call.
 `resolve_storage` **raises `WorkspaceNotConfigured`** rather than printing an error, because a
 non-CLI caller has no terminal to print to. Catch it; do not expect a message on stdout.
 
-**Warning: most CLI commands do not honor `CAREEROS_WORKSPACE` today.** Only `careeros outreach
-send`, `careeros outreach mark-referral-requested`, and `careeros people update` are routed
-through `resolve_storage`. Every other command module (`browse_cmd`, `browser_cmd`, `job_cmd`,
-`apply_cmd`, `research_cmd`, `discover_and_apply_cmd`, `resume_cmd`, `workspace_cmd`) keeps its own
-private `_get_storage` helper that reads only an explicit `--workspace` flag and the global config
-file — it never looks at the environment variable. `careeros/cli/portability.py` (`careeros
-export`) resolves the same way — flag, then the global config file — but inline rather than
-through a private helper; it too never looks at the environment variable. If you export
-`CAREEROS_WORKSPACE` while a different workspace path is already saved in the global config (from
-`careeros onboard`), those three commands and everything else will silently write to two different
-workspace trees: outreach history in one, applications and job data in the other. Until this
-converges (see `DIVERGENCES.md`), either pass an explicit workspace path to every command you
-invoke, or make sure `CAREEROS_WORKSPACE` and the configured workspace path point at the same
-directory.
+**Every CLI command now honors this same three-tier precedence.** Every command module under
+`careeros/cli/` — `apply_cmd`, `browse_cmd`, `browser_cmd`, `discover_and_apply_cmd`, `job_cmd`,
+`outreach_cmd`, `research_cmd`, `resume_cmd`, and `workspace_cmd` — resolves its storage through
+`factory.resolve_storage`, either directly or through a thin per-module wrapper (`job_cmd._get_storage`
+and `workspace_cmd._get_storage` keep that name only for their `typer.Exit`-on-`WorkspaceNotConfigured`
+handling; the resolution itself calls `resolve_storage`). `careeros/cli/portability.py` (`careeros
+export` / `careeros import`) resolves the same way. `careeros onboard` is the one command that does
+not: it is the command that writes the global config file `resolve_storage`'s third tier reads, so
+it has no prior workspace to discover. There is no longer a split-workspace hazard from exporting
+`CAREEROS_WORKSPACE` while a different path is saved in the global config — every command consults
+the same explicit-path-then-env-var-then-config-file order, so they all resolve to the same
+workspace.
 
 ## 3. The `AgentRuntime` Protocol
 
@@ -154,13 +158,19 @@ calls `request_approval` synchronously can never accidentally approve something 
 
 The outreach flow spans three operations functions, each taking an `AgentRuntime`:
 
-- `propose_outreach_send(runtime, job_id, person_id, *, model=None, action_label="outreach")` —
+- `propose_outreach_send(runtime, job_id, person_id, *, model=None, action_label)` —
   drafts the message, saves it as an `OutreachMessage`, and opens a `pending` `Approval`.
 - `resolve_approval(runtime, approval_id, result, *, action_label)` — records a human decision
   against a `pending` approval, moving it to `approved` or `declined`.
-- `execute_outreach_send(runtime, approval_id, *, action_label="outreach")` — re-verifies the
+- `execute_outreach_send(runtime, approval_id, *, action_label)` — re-verifies the
   draft against the digest recorded at proposal time, marks the approval `executed`, and calls
   `send_email`.
+
+`action_label` is required and keyword-only on every one of these — there is no default. Omitting
+it is a `TypeError` at the call site, the same fail-loudly posture §4 describes for
+`approval_callback`. An earlier version of this document (and an earlier version of the code)
+defaulted it to `"outreach"`; that default was removed before Phase 12b shipped, on every function
+that takes it, including `propose_apply` and `execute_apply` (§11).
 
 Because these take an `AgentRuntime` and read/write only through `storage`, they run correctly
 across a process boundary as long as both processes point `CAREEROS_WORKSPACE` at the same
@@ -208,8 +218,8 @@ If the human declined instead, call `resolve_approval` with `ApprovalResult(appr
 reason=...)` and then `decline_outreach_send(runtime, approval_id, action_label="agent")` — never
 `execute_outreach_send`, which requires the `approved` state and raises otherwise (§8).
 
-Section 8 below verifies this sequence actually runs, with `send_email` patched so nothing real is
-sent.
+`tests/test_agent_integration.py` verifies this sequence actually runs as two literal subprocesses,
+with `send_email` patched so nothing real is sent.
 
 ## 6. The `approvals/<id>.json` schema
 
@@ -344,8 +354,13 @@ whole vocabulary a caller branches on.
 | `MissingRecipient` | the person has no email on file at execute time | not retryable until `careeros people update <id> --email <address>` is run; the approval is untouched (still `approved`) so retrying `execute_outreach_send` after adding the address works without re-approving |
 | `ApprovalNotGranted` | `require_state` finds the approval in a different state than the step needs (`.state` names the actual state) | retryable only by taking the correct action for that state — e.g. resolve first if `pending`, do nothing if already `executed` |
 | `MalformedApproval` | a required payload key is missing (`.key` names it) | not retryable; the approval record itself is broken |
-| `ArtifactChanged` | the draft's digest no longer matches what was approved (`.path` names the file) | not retryable as-is; re-propose so review covers the actual content |
+| `ArtifactChanged` | the draft's digest (outreach) or one of the cover-letter/resume/profile digests (apply — see §11.3) no longer matches what was approved (`.path` names the file) | not retryable as-is; re-propose so review covers the actual content |
 | `SendFailed` | `send_email` raised | by the time this propagates to the caller, `mark_failed` has already run — the approval is `failed`, not `executed` (see §6). Do not retry against the same approval id; a retry requires a new propose |
+| `ResumeNotFound` | `propose_apply` found no resume in `resumes/versions/` — a **subclass of `EntityNotFound`**, so an existing catch of the parent still matches it | not retryable until a resume file exists (`careeros resume ingest`), then re-propose |
+| `NoFillerAvailable` | `propose_apply` found no registered filler that can handle the job's URL (`.url` names it) — also a **subclass of `EntityNotFound`** | not retryable for that job as it stands; no filler exists yet for that ATS |
+| `BoardSessionRequired` | `propose_apply` found the filler is `LinkedInFiller` and the user is not signed in to LinkedIn in the CareerOS browser profile (`.board` names the board) | run `careeros browser login --board linkedin`, then re-propose — the check re-runs on every propose call, including a regeneration |
+| `FillIncomplete` | `execute_apply`'s filler returned `False` — the form did not submit | not retryable against the same approval id; `mark_executed` already consumed it and the approval is now `failed` (§11.3). Re-propose to get a fresh approval |
+| `BrowserUnavailable` | Playwright is not installed, the CareerOS browser profile is locked (`.profile_busy` is `True`), or any other browser exception — raised by both `propose_apply` (the LinkedIn session check) and `execute_apply` (the fill itself) | `.profile_busy=True` is a whole-run condition — something else holds the browser profile lock; stopping the whole run rather than skipping one job is the caller's job, not this layer's (see `discover_and_apply_cmd.py`'s handling). Any other `BrowserUnavailable` raised by `execute_apply` already left the approval `failed` (`mark_executed` already ran); not retryable against that approval id — re-propose |
 
 **A boundary this hierarchy does not cover:** an unknown or malformed `approval_id` does not
 surface as an `OperationError`. `Approval.load` raises a plain `FileNotFoundError` when the record
@@ -386,7 +401,9 @@ for approval in list_pending(storage):
 ```
 
 An unparseable record is skipped rather than raised on, so one corrupt file cannot hide every
-other pending decision behind it.
+other pending decision behind it. `list_pending` is generic over `action` — it surfaces
+`apply_to_job` approvals (§11) exactly the same way it surfaces `send_outreach` ones; there is
+nothing apply-specific to call instead.
 
 ## 10. Known limitations
 
@@ -401,6 +418,12 @@ other pending decision behind it.
   processes racing `execute_outreach_send` against the same approval id could both read `state ==
   "approved"` before either has written `executed`, and both proceed to send. Do not run two
   executors against the same approval id concurrently; nothing in this layer prevents it.
+  `execute_apply` uses the identical `require_state` / `mark_executed` pattern, so the same
+  concurrency window applies to it too. Apply additionally has two narrower, accepted
+  duplicate-submission windows of its own, both in the same family as this one — a `BaseException`
+  during browser teardown after a successful submit, and a failure in the post-submit job-save —
+  recorded plainly in `DIVERGENCES.md` rather than here, since they are new-for-12b findings, not
+  a restatement of this outreach-side limitation.
 - **`queue_only` is the only shipped out-of-process callback.** There is no notification, no
   expiry, and no locking. It gives a safe, deny-by-default answer to a synchronous
   `request_approval` call, and that is all it does. A runtime that wants genuine asynchronous
@@ -408,3 +431,198 @@ other pending decision behind it.
   `Approval` record it needs (poll it with `list_pending`), but none of the machinery to be told
   when a decision lands, to expire a stale pending approval, or to prevent two callers from acting
   on the same one at once.
+
+## 11. Apply — `propose_apply` → `resolve_approval` → `execute_apply`
+
+Phase 12b moved job apply through the same operations-layer treatment Phase 12a gave outreach:
+`careeros/operations/apply.py` exposes `propose_apply` and `execute_apply`, both taking an
+`AgentRuntime` and reading/writing only through `storage`, over the same durable `Approval` record
+described in §6. Apply is drivable from an external agent session today, the same way outreach is —
+§1's "not yet" applies to nothing that remains in this codebase.
+
+### 11.1 The sequence
+
+- `propose_apply(runtime, job_id, *, model=None, action_label, summary=None, jd_text=None)` —
+  selects a resume, checks policy, detects the ATS filler, drafts a cover letter, writes it to
+  `applications/<job_id>/cover_letter.txt`, and opens a `pending` `Approval` with `action ==
+  "apply_to_job"`. `summary` and `jd_text` are optional overrides for callers that word their own
+  approval summary or supply their own view of the job description — `discover_and_apply_cmd.py`
+  uses both; the interactive `apply` command uses neither.
+- `resolve_approval(runtime, approval_id, result, *, action_label)` — the same function §5 and §7
+  already describe for outreach; it is generic over `action` and works identically here.
+- `execute_apply(runtime, approval_id, *, headless: bool, action_label)` — re-verifies three
+  digests (§11.3), marks the approval `executed`, launches a browser, fills and submits the
+  application, and on success advances the job to `stage="applied"`.
+
+`action_label` is required and keyword-only on both `propose_apply` and `execute_apply`, exactly
+as §5 now describes for the outreach functions — there is no default.
+
+This is the worked example, adapted from `tests/test_operations_apply.py`, run as two separate
+Python processes exactly like §5's outreach example. Both were run this way to verify this
+document (see the task report for the exact commands); unlike `tests/test_agent_integration.py`
+for outreach, there is no committed test that runs this specific pair of scripts as two literal
+subprocesses.
+
+**Process 1 — propose** (an agent session drafts and asks):
+
+```python
+from careeros.operations.apply import propose_apply
+from careeros.runtime.factory import open_agent_runtime
+from careeros.operations.approval_queue import queue_only
+
+runtime = open_agent_runtime(approval_callback=queue_only, session_id="agent-propose")
+proposal = propose_apply(runtime, "acme-sre-abc1", action_label="agent")
+print(proposal.approval_id, proposal.summary)
+# -> surface proposal.summary and proposal.cover_letter to the human in conversation
+```
+
+This process can exit. Nothing about the pending decision lives in memory — it is all in
+`approvals/<approval_id>.json` and `applications/<job_id>/cover_letter.txt`.
+
+**Process 2 — resolve the human's answer, then execute** (same or a later agent session, once the
+human has actually replied):
+
+```python
+from careeros.operations.approvals import resolve_approval
+from careeros.operations.apply import execute_apply
+from careeros.runtime.base import ApprovalResult
+from careeros.runtime.factory import open_agent_runtime
+from careeros.operations.approval_queue import queue_only
+
+runtime = open_agent_runtime(approval_callback=queue_only, session_id="agent-execute")
+resolve_approval(
+    runtime, approval_id,
+    ApprovalResult(approved=True, reason="user said yes in chat"),
+    action_label="agent",
+)
+result = execute_apply(runtime, approval_id, headless=True, action_label="agent")
+print(result.company, result.applied_at)
+```
+
+### 11.2 `headless`, and why this call is not quick
+
+`execute_apply` always launches a real browser (`careeros.browser.driver.launch_browser`) and
+drives it through a platform-specific filler (`GreenhouseFiller`, `LeverFiller`, `LinkedInFiller`,
+or a generic fallback) that navigates to the job posting, fills the form, uploads the resume and
+cover letter, and clicks submit. An agent runtime calling `execute_apply` must expect a
+long-running, blocking call — this is not a quick storage read like `resolve_approval`. It is a
+required keyword parameter with no default:
+
+- `headless=True` is what `discover_and_apply_cmd.py` passes for unattended, scheduled runs — no
+  window appears.
+- `headless=False` is what the interactive `apply_cmd.py` passes — a real, visible Chrome window
+  opens and drives itself. An agent session calling `execute_apply` with `headless=False` should
+  expect that window to appear on whatever machine the process is running on, not just a delay.
+
+### 11.3 The payload, and its three digests
+
+Payload keys for `apply_to_job` (set by `propose_apply`). Unlike `send_outreach`'s payload (§6),
+where `job_id` sits on the payload for audit only and is read by neither `execute_outreach_send`
+nor `decline_outreach_send`, **every one of apply's eight payload keys is read at execute time** —
+confirmed by grepping every `payload_value(approval, ...)` call in `execute_apply`; there is no
+apply-side `decline_apply` function, so `resolve_approval`'s generic decline path is the only other
+consumer, and it doesn't touch the payload at all:
+
+| Payload key | What it is |
+|---|---|
+| `job_id` | the `Job` id the payload refers to |
+| `job_url` | the URL the filler navigates to — bound at propose time, exactly like outreach's `subject` (§6), so editing the job's URL between approval and execution cannot change what gets navigated to |
+| `cover_letter_storage_path` | the workspace-relative path the drafted cover letter was written to |
+| `resume_storage_path` | the workspace-relative path of the resume chosen by `select_resume` |
+| `filler_platform` | which registered filler (`GreenhouseFiller.platform`, etc.) was detected for `job_url` — `execute_apply` re-selects the filler by matching this string, and raises `MalformedApproval` if none matches, rather than silently picking a different filler than the one that was approved |
+| `cover_letter_sha256` | `sha256` of the cover letter bytes on disk at proposal time |
+| `resume_sha256` | `sha256` of the resume bytes on disk at proposal time |
+| `profile_sha256` | `sha256` of `Profile.model_dump_json()` at proposal time |
+
+**The digest set is cover letter, resume, and profile — three digests, not one.** Outreach binds
+one digest (the draft). Apply binds three, because `filler.fill` reads three things from the
+workspace at execute time: the cover letter and resume (uploaded as files) and the profile (used
+to populate the form's name/email/other fields). `execute_apply` re-verifies all three against
+what's on disk before consuming the approval:
+
+```python
+# careeros/operations/apply.py
+cover_letter_bytes = runtime.storage.read(cl_storage_path)
+if hashlib.sha256(cover_letter_bytes).hexdigest() != expected_cl_digest:
+    raise ArtifactChanged(cl_storage_path)
+if _digest_stored(runtime.storage, resume_storage_path) != expected_resume_digest:
+    raise ArtifactChanged(resume_storage_path)
+
+profile = Profile.load_or_empty(runtime.storage)
+if _digest_text(profile.model_dump_json()) != expected_profile_digest:
+    raise ArtifactChanged("profile/profile.json")
+```
+
+**Editing your profile between approving an application and executing it fails with
+`ArtifactChanged`, by design.** This is not a bug to work around — it is the same guarantee
+outreach's digest gives the draft, applied to the profile because the profile is transmitted
+content here too: `filler.fill` reads it to populate the form. A profile edited after approval but
+before execution would change what gets typed into the form without a new review, exactly as an
+edited draft would change what gets sent. If you hit this, the fix is to re-propose (which
+re-reads the current profile and binds a fresh digest to it), not to retry the same approval id.
+
+`job_url` gets the same treatment as a direct value rather than a digest, for the same reason
+`outreach`'s `subject` does (§6): it is computed once from the `Job` as read at propose time and
+never re-derived from a fresh reload at execute time, so editing the job's URL between approval and
+execution cannot change what gets navigated to. This is a deliberate correction to what an earlier
+draft of the design spec called for — see `docs/superpowers/DIVERGENCES.md` and the spec's own
+§6.3 correction note.
+
+### 11.4 Two behaviors that look like bugs but aren't
+
+**`execute_apply` consumes the approval — `mark_executed` — before launching the browser.**
+Exactly like outreach's `execute_outreach_send` (§6), this exists to defeat process death: a crash
+between `mark_executed` and the browser call leaves the record `executed`, not `approved`, so a
+retry cannot act on it a second time. The cost is the same one §6 names for outreach:
+
+> finding `state == "executed"` on disk for an apply approval means the browser launch was
+> attempted; it does not by itself mean the application was submitted or that the job's stage
+> advanced. A crash between `mark_executed` and `filler.fill` returning leaves the approval
+> `executed` and the job's `stage` still whatever it was before (`"saved"`, typically) — not
+> `"applied"`. Check `Job.load(storage, job_id).stage` for the ground truth of whether the
+> application actually went out; do not infer it from the approval's state alone, and never retry
+> against that approval id — re-propose instead.
+
+**A browser *teardown* failure after a successful submit is treated as success, not failure.** If
+`filler.fill` returns `True` — the form was submitted — and then the browser context's teardown
+(inside the `with launch_browser(...)` block, e.g. `context.close()`) raises, `execute_apply`:
+
+- advances the job to `stage="applied"` (the same `_mark_applied` helper the ordinary success path
+  calls),
+- logs `job_applied` **and** a distinct `apply_teardown_failed` event, and
+- **returns the `ApplyResult` normally rather than raising.**
+
+Read the exception type name alone and this looks wrong — the browser call raised, so how is that
+a success? The application genuinely went out (`filler.fill`'s return value is the source of
+truth, and it said `True`); only the housekeeping after it failed. Advancing the stage anyway is
+what stops `discover-and-apply`, which only skips a job once its stage has advanced, from
+re-proposing and resubmitting the same application on its next scheduled run. An integrator whose
+error handling swallows every browser exception the same way (as `BrowserUnavailable`) will never
+see this branch as an exception at all — it returns.
+
+### 11.5 Activity events this flow emits
+
+Same discipline as §6.1: an integrator reading `activity/*.jsonl` directly should not meet an
+undocumented `event_type`. This table is what `careeros/operations/apply.py` itself emits, found by
+grepping every `record_activity`/`new_event` call in that file, plus the shared approval-lifecycle
+events from `careeros/operations/approvals.py` (§6.1):
+
+| `event_type` | Emitted by | When |
+|---|---|---|
+| `policy_blocked` | `propose_apply` | the policy engine blocks the job, before any LLM call |
+| `approval_requested` / `approval_superseded` / `approval_granted` / `approval_declined` | `careeros/operations/approvals.py` | same generic approval-lifecycle events §6.1 describes for outreach — apply uses the identical machinery |
+| `job_applied` | `_mark_applied`, called from `execute_apply` | the application was submitted — on the ordinary success path, and on the teardown-failure-after-success path described in §11.4 |
+| `apply_failed` | `_record_apply_failed`, called from `execute_apply` | a browser exception other than the teardown-after-success case marked the approval `failed` |
+| `apply_incomplete` | `execute_apply` | `filler.fill` returned `False` — nothing conclusive happened; the approval is marked `failed` with detail `"FillIncomplete"` |
+| `apply_teardown_failed` | `execute_apply` | the teardown-failure-after-success case in §11.4 — logged alongside `job_applied`, not instead of it |
+
+**`apply_error` is not in this list because `apply.py` never emits it.** It is emitted by
+`discover_and_apply_cmd.py`'s own exception handling around its calls to `propose_apply` and
+`execute_apply` — caller-side bookkeeping for a refusal the operations layer itself already raised
+but didn't log (e.g. `ArtifactChanged`, `ApprovalNotGranted`, a generic `BrowserUnavailable`),
+exactly the same relationship §6.1 describes between `outreach_send_declined` and
+`approval_declined`. `discover_and_apply_cmd.py` also logs several events entirely of its own —
+`cover_letter_failed`, `no_filler_available`, `session_unauthorized`, `source_unavailable`,
+`posting_unusable`, `job_added`, `job_merged` — that belong to that command's unattended-discovery
+loop, not to the `apply_to_job` approval flow this section documents; read that module directly if
+you need its complete vocabulary.
