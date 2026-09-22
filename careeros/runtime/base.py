@@ -20,6 +20,7 @@ class ApprovalResult:
 
 
 class AgentRuntime(Protocol):
+    agent_runtime_name: str
     storage: StorageProvider
 
     def read_workspace(self, path: str) -> str: ...
