@@ -89,10 +89,15 @@ Every caller runs the same three steps and differs only in where step 2 happens:
 | `careeros discover-and-apply` | `AutomationRuntime` | `runtime.request_approval` → auto-approve per policy, same process |
 | Shell-driven agent | `ClaudeCodeRuntime` | process exits with the proposal; agent asks its human; a **new** process resolves and executes |
 
-The `AgentRuntime` Protocol does not change. `request_approval` stays exactly as it
-is. The two-call split is what makes that seam usable *across* a process boundary, and
-it is what lets one operation be driven by three different runtimes without the
-operation knowing which one it has.
+`request_approval` stays exactly as it is, and the Protocol gains no new methods. It
+gains exactly one declaration: `agent_runtime_name: str`, which all three runtimes
+already define as a class attribute and which `record_activity`'s documented
+"stamps the runtime's identity" guarantee already depends on. `resolve_approval` needs
+to read it to record *who* decided, so the Protocol should stop omitting it.
+
+The two-call split is what makes that seam usable *across* a process boundary, and it
+is what lets one operation be driven by three different runtimes without the operation
+knowing which one it has.
 
 ---
 
@@ -196,10 +201,12 @@ Two independent mechanisms, because they close different holes:
   "regenerate" safe: re-proposing invalidates the older pending approval, so a stale
   approval ID cannot later execute against a freshly overwritten cover letter.
 - **Digest binding.** The payload records the sha256 of every artifact that will be
-  transmitted (`cover_letter_sha256`, `resume_sha256`). `execute_*` recomputes and
-  raises `ArtifactChanged` on mismatch. This catches out-of-band edits — notably
-  `careeros resume variant --job <id>` run from another terminal between propose and
-  execute, which rewrites the PDF in place at a path the approval already names.
+  transmitted — `draft_sha256` for outreach, `cover_letter_sha256` and `resume_sha256`
+  for apply. `execute_*` recomputes and raises `ArtifactChanged` on mismatch. This
+  catches what superseding cannot: an out-of-band edit rather than a re-propose. A
+  hand-edited `outreach/<id>.json`, or `careeros resume variant --job <id>` run from
+  another terminal between propose and execute, both leave a pending approval pointing
+  at content it never described.
 
 Digesting stored bytes is already the idiom here (`resume_select._digest`,
 `ResumeVariant.pdf_sha256`), so this reuses an established pattern rather than
@@ -225,19 +232,32 @@ must never reach `storage._resolve()` as a raw path component.
 
 ---
 
-## 5. Approval Lifecycle — `careeros/core/approvals.py`
+## 5. Approval Lifecycle — `careeros/operations/approvals.py`
 
-A new module beside `policy_engine.py`, `resume_select.py`, and `job_store.py`.
+The `Approval` *model* lives in `careeros/core/models.py` with every other model. Its
+lifecycle functions live in the operations layer (§6) rather than in `core/`, for two
+reasons: they take an `AgentRuntime`, and nothing in `core/` does — `PolicyEngine` takes
+a config, `job_store` takes a storage — and they raise the error types defined in
+`careeros/operations/errors.py`, which a module in `core/` importing from `operations/`
+would invert.
 
 ```python
 def open_approval(runtime, action, summary, payload, *,
                   entity_type=None, entity_id=None, action_label) -> Approval
 def resolve_approval(runtime, approval_id, result: ApprovalResult, *, action_label) -> Approval
-def mark_executed(runtime, approval_id, *, action_label) -> Approval
-def mark_failed(runtime, approval_id, detail, *, action_label) -> Approval
-def load_approval(storage, approval_id) -> Approval
+def mark_executed(runtime, approval_id) -> Approval
+def mark_failed(runtime, approval_id, detail) -> Approval
+def require_state(storage, approval_id, expected) -> Approval
+def payload_value(approval, key) -> str
 def list_pending(storage) -> list[Approval]
 ```
+
+`mark_executed` and `mark_failed` take no `action_label` because they log nothing — the
+calling flow logs its own domain event (`outreach_sent`, `outreach_send_failed`) and
+these only advance the record. `require_state` is the single state guard both
+`execute_*` and `decline_*` go through, raising `ApprovalNotGranted` with the state it
+actually found; `payload_value` raises `MalformedApproval` rather than `KeyError` on a
+missing or empty key.
 
 - `open_approval` supersedes prior pendings for the same `(action, entity_id)`, writes
   the new record, and logs `approval_requested`.
@@ -268,6 +288,7 @@ distinction is why it is a parameter and not a constant.
 careeros/operations/
 ├── __init__.py
 ├── errors.py          ← the exception hierarchy below
+├── approvals.py       ← the §5 lifecycle: open / resolve / mark / load / list
 ├── approval_queue.py  ← queue_only, the shipped out-of-process callback
 ├── outreach.py        ← propose / execute / decline_outreach_send
 └── apply.py           ← propose_apply, execute_apply
@@ -329,7 +350,16 @@ loads job/person/company (→ `EntityNotFound`), runs the policy check (logs, th
 `PolicyBlocked`), loads profile and goals, calls `generate_outreach_message` (→
 `DraftFailed`), reads any prior `OutreachMessage` to carry `referral_state` forward and
 detect a prior send, saves the `OutreachMessage`, logs `outreach_drafted`, and calls
-`open_approval` with `payload = {message_id, job_id, person_id}`. Returns the proposal.
+`open_approval` with
+`payload = {message_id, job_id, person_id, draft_sha256}`. Returns the proposal.
+
+Prior-send detection reads `existing.sent_at`, not `existing.send_state`, and the
+re-drafted message carries that `sent_at` forward while its `send_state` returns to
+`"drafted"`. This matters because propose now writes the message *before* the review
+loop rather than after it: keying off `send_state` would make the first propose erase
+the evidence of an earlier send, and the "you already sent this" warning would vanish
+on regeneration. `sent_at` is only ever set by a real send, so its presence is the
+durable fact.
 
 Regeneration is just calling this again — the new call supersedes the prior pending
 approval and overwrites the draft. No separate entry point, no loop inside the
@@ -344,13 +374,13 @@ as detail, logs `outreach_send_failed` with `status="failed"`, and raises `SendF
 
 `decline_outreach_send(runtime, approval_id)` is the symmetric counterpart: it sets
 `send_state="declined"` and logs `outreach_send_declined`. It lives in this module
-rather than inside `resolve_approval` because `careeros/core/approvals.py` must not
-know about `OutreachMessage` — `operations` imports `core` and never the reverse, so
-dispatching per-action side effects from inside `resolve_approval` would invert that
-dependency. Callers branch on the decision they already hold: `execute_*` on approve,
-`decline_*` on decline. Apply needs no counterpart, because declining an application
-changes no domain state beyond the approval record itself, which `resolve_approval`
-has already written.
+rather than inside `resolve_approval` because `approvals.py` is deliberately
+action-agnostic — it knows about approval states and nothing about outreach messages,
+job applications, or whatever a later flow adds. Dispatching per-action side effects
+from inside it would make the generic lifecycle a registry of every flow. Callers
+branch on the decision they already hold: `execute_*` on approve, `decline_*` on
+decline. Apply needs no counterpart, because declining an application changes no domain
+state beyond the approval record itself, which `resolve_approval` has already written.
 
 The draft text is never re-generated and never copied into the approval: it is read back
 from `OutreachMessage.draft_text`. The bytes that were reviewed are the bytes that send.
@@ -467,8 +497,8 @@ above the extracted section and are untouched.
 
 ```python
 import json
-from careeros.core.approvals import resolve_approval
 from careeros.operations.approval_queue import queue_only
+from careeros.operations.approvals import resolve_approval
 from careeros.operations.outreach import execute_outreach_send, propose_outreach_send
 from careeros.runtime.base import ApprovalResult
 from careeros.runtime.factory import open_agent_runtime
@@ -605,8 +635,8 @@ This is more surface than one review can hold well, so it should be planned as t
 stages in the manner of 9a/9b/9c and 11a/11b — each independently shippable, each
 ending in a working tree:
 
-- **12a — the mechanism, proved on outreach.** The migration, the `Approval` model and
-  lifecycle, `careeros/operations/` with `errors.py`, `approval_queue.py`, and
+- **12a — the mechanism, proved on outreach.** The migration, the `Approval` model,
+  `careeros/operations/` with `errors.py`, `approvals.py`, `approval_queue.py`, and
   `outreach.py`, the factory additions, the `outreach send` rewire, and
   `docs/agent-integration.md`. The phase exit condition is reachable at the end of 12a,
   since it is an outreach send.
