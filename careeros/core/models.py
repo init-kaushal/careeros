@@ -87,6 +87,11 @@ class ResumeVariant(BaseModel):
     sections: list[VariantSection] = []
     dropped: list[str] = []
 
+    # Contact-header fields as rendered, recorded for provenance. These come
+    # from profile.json, NOT from verified spans of the master resume, and are
+    # the one part of the document not backed by an Evidence line.
+    header: dict[str, str] = {}
+
     # sha256 of the rendered resume.pdf this sidecar describes, and of the master
     # resume it was generated from. A sidecar that does not match its PDF is stale
     # (a concurrent regeneration committed between the two writes); a master hash

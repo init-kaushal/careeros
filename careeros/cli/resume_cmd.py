@@ -21,6 +21,7 @@ resume_app = typer.Typer(name="resume", help="Ingest and inspect your resume.")
 
 _MASTER = "resumes/master.md"
 _SKILLS_PATH = "profile/skills.json"
+_PROFILE_PATH = "profile/profile.json"
 
 
 def _get_storage(workspace_path: str | None) -> LocalFilesystemStorage:
@@ -161,6 +162,19 @@ def variant(
     master_text = master_bytes.decode()
     skills = Skills.load_or_empty(runtime.storage)
     profile = Profile.load_or_empty(runtime.storage)
+    if not profile.name.strip():
+        # The renderer would emit an empty <h1> and `apply` would upload an
+        # anonymous resume reporting success. Same bar as an empty variant:
+        # worse than an untailored one, so refuse to write anything and leave
+        # any existing variant exactly as it was. Checked before the model
+        # call so no tokens are spent on output that cannot be used.
+        _record_variant(runtime, job, "No name in " + _PROFILE_PATH, "failed")
+        rprint("[red]No name in " + _PROFILE_PATH
+               + ", so the resume would have no name on it. No variant was "
+               + "written. Run 'careeros onboard', or add a \"name\" to "
+               + _PROFILE_PATH + ".[/red]")
+        raise typer.Exit(1)
+
     jd_text = (job_record.description or "")[:_JD_CAP]
 
     rprint("Tailoring resume for " + job_record.company + " / " + job_record.title + "...")
@@ -184,6 +198,21 @@ def variant(
             _record_variant(runtime, job, "Nothing verified against " + _MASTER, "failed")
         raise typer.Exit(1)
 
+    # From the same Profile handed to the renderer below, so variant.json
+    # accounts for every rendered line — including the contact header, which
+    # is the one part of the document not backed by a verified span. Empty
+    # fields are omitted because the renderer omits them too.
+    header = {
+        field: value.strip()
+        for field, value in (
+            ("name", profile.name or ""),
+            ("title", profile.title or ""),
+            ("location", profile.location or ""),
+            ("email", profile.email or ""),
+        )
+        if value and value.strip()
+    }
+
     variant_doc = ResumeVariant(
         job_id=job,
         job_company=job_record.company,
@@ -192,6 +221,7 @@ def variant(
         source_file=_MASTER,
         sections=list(result.sections),
         dropped=list(result.dropped),
+        header=header,
         # Of the master exactly as read above, so a later `resume ingest`
         # replacing it is detectable at selection time instead of leaving the
         # citations silently pointing at lines of a different document.

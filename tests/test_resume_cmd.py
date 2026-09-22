@@ -7,7 +7,7 @@ from playwright.sync_api import Error as PlaywrightError
 from typer.testing import CliRunner
 
 from careeros.cli.main import app
-from careeros.core.models import Evidence, Job, ResumeVariant, Skill, Skills
+from careeros.core.models import Evidence, Job, Profile, ResumeVariant, Skill, Skills
 from careeros.core.models import Evidence as _Ev
 from careeros.core.models import VariantSection
 from careeros.core.resume_select import select_resume
@@ -24,6 +24,10 @@ def _workspace(tmp_path):
     storage = LocalFilesystemStorage(str(tmp_path))
     init_workspace(storage)
     storage.atomic_write("resumes/master.md", b"SKILLS\nPython, Go\n")
+    # `resume variant` refuses to render a resume with no name on it, so a
+    # workspace an onboarded user would actually have carries a profile.
+    Profile(name="Alice Johnson", title="Senior SRE",
+            location="San Francisco, CA", email="alice@example.com").save(storage)
     return str(tmp_path), storage
 
 
@@ -591,3 +595,100 @@ def test_a_concurrent_regeneration_of_the_pdf_invalidates_the_sidecar(tmp_path):
     choice = select_resume(storage, job_id)
     assert choice.tailored is True
     assert choice.variant is None
+
+
+def test_the_sidecar_records_the_contact_header_that_was_rendered(tmp_path):
+    # The header is the one part of the document not backed by an Evidence
+    # line, so variant.json has to account for it or the sidecar does not
+    # describe every rendered line.
+    ws, storage = _workspace(tmp_path)
+    job_id = _job(storage)
+    sel, rnd = _patches(_variant_result())
+    with sel, rnd:
+        result = runner.invoke(app, ["resume", "variant", "--job", job_id, "--workspace", ws])
+    assert result.exit_code == 0
+    sidecar = ResumeVariant.model_validate_json(
+        storage.read(ResumeVariant.json_path(job_id)).decode()
+    )
+    assert sidecar.header == {
+        "name": "Alice Johnson",
+        "title": "Senior SRE",
+        "location": "San Francisco, CA",
+        "email": "alice@example.com",
+    }
+
+
+def test_a_profile_field_absent_from_the_master_is_not_an_error(tmp_path):
+    # A profile is authoritative for the user's own contact details, and may
+    # have been hand-edited. Header fields are recorded, never verified
+    # against the master.
+    ws, storage = _workspace(tmp_path)
+    Profile(name="Alice Johnson", title="Chief Vibes Officer").save(storage)
+    job_id = _job(storage)
+    sel, rnd = _patches(_variant_result())
+    with sel, rnd:
+        result = runner.invoke(app, ["resume", "variant", "--job", job_id, "--workspace", ws])
+    assert result.exit_code == 0
+    sidecar = ResumeVariant.model_validate_json(
+        storage.read(ResumeVariant.json_path(job_id)).decode()
+    )
+    assert sidecar.header["title"] == "Chief Vibes Officer"
+
+
+def test_the_sidecar_header_omits_fields_the_document_does_not_show(tmp_path):
+    ws, storage = _workspace(tmp_path)
+    Profile(name="Alice Johnson", title="", location=None, email=None).save(storage)
+    job_id = _job(storage)
+    sel, rnd = _patches(_variant_result())
+    with sel, rnd:
+        result = runner.invoke(app, ["resume", "variant", "--job", job_id, "--workspace", ws])
+    assert result.exit_code == 0
+    sidecar = ResumeVariant.model_validate_json(
+        storage.read(ResumeVariant.json_path(job_id)).decode()
+    )
+    assert sidecar.header == {"name": "Alice Johnson"}
+
+
+def test_variant_refuses_to_render_a_resume_with_no_name_on_it(tmp_path):
+    # `onboard` saves Profile() whenever extract_basic_profile raises, so
+    # this state is reachable. Without the guard the renderer emits an empty
+    # <h1>, the command exits 0, and `apply` uploads an anonymous resume.
+    storage = LocalFilesystemStorage(str(tmp_path))
+    init_workspace(storage)
+    storage.atomic_write("resumes/master.md", b"SKILLS\nPython, Go\n")
+    ws = str(tmp_path)
+    job_id = _job(storage)
+    sel, rnd = _patches(_variant_result())
+    with sel, rnd:
+        result = runner.invoke(app, ["resume", "variant", "--job", job_id, "--workspace", ws])
+
+    assert result.exit_code == 1
+    assert not storage.exists(ResumeVariant.pdf_path(job_id))
+    assert not storage.exists(ResumeVariant.json_path(job_id))
+    assert "profile/profile.json" in result.output
+    assert "careeros onboard" in " ".join(result.output.split())
+
+    events = [
+        json.loads(line)
+        for p in storage.list("activity/")
+        for line in storage.read(p).decode().splitlines() if line.strip()
+    ]
+    variant_events = [e for e in events if e["action"] == "variant"]
+    assert len(variant_events) == 1
+    assert variant_events[0]["status"] == "failed"
+
+
+def test_a_blank_name_leaves_an_existing_variant_untouched(tmp_path):
+    ws, storage = _workspace(tmp_path)
+    job_id = _job(storage)
+    sel, rnd = _patches(_variant_result(), pdf=b"%PDF-first")
+    with sel, rnd:
+        runner.invoke(app, ["resume", "variant", "--job", job_id, "--workspace", ws])
+    assert storage.read(ResumeVariant.pdf_path(job_id)) == b"%PDF-first"
+
+    Profile(name="   ").save(storage)
+    sel, rnd = _patches(_variant_result(), pdf=b"%PDF-second")
+    with sel, rnd:
+        result = runner.invoke(app, ["resume", "variant", "--job", job_id, "--workspace", ws])
+    assert result.exit_code == 1
+    assert storage.read(ResumeVariant.pdf_path(job_id)) == b"%PDF-first"
