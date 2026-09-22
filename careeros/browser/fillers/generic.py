@@ -1,8 +1,6 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
-from rich import print as rprint
-
 if TYPE_CHECKING:
     from playwright.sync_api import Page
     from careeros.core.models import Job, Profile
@@ -52,6 +50,5 @@ class GenericFiller:
         except Exception:
             pass
 
-        rprint("[yellow]Generic filler applied — review the form before submitting. Fields may be incomplete.[/yellow]")
         # Generic never auto-submits — leaves browser open for user to verify and submit
         return False
