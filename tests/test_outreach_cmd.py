@@ -90,6 +90,11 @@ class TestOutreachSend:
 
         assert result.exit_code == 1
         mock_send.assert_not_called()
+        # The remediation instruction is what makes this recoverable rather
+        # than a dead end: it must name the exact command and the person id
+        # to run it against. Not an exact full-line match -- Rich wraps and
+        # styles this output, so pin the load-bearing substring instead.
+        assert "careeros people update " + PERSON_ID in result.output
         storage = LocalFilesystemStorage(ws_path)
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         log_content = storage.read("activity/" + today + ".jsonl").decode()
