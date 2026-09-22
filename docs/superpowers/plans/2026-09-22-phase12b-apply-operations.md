@@ -27,10 +27,11 @@ Copied from the spec's Global Constraints. Every task's requirements implicitly 
 
 ## Deviations from the spec, and why
 
-The spec's §6.3 predates two things learned during 12a's final review. Both deviations are deliberate; record them in `DIVERGENCES.md` in Task 9.
+The spec's §6.3 predates two things learned during 12a's final review. All three deviations below are deliberate; record them in `DIVERGENCES.md` in Task 9.
 
 1. **The spec says `headless` is "the only behavioral difference" between `apply_cmd` and `discover-and-apply`. That is false.** They also differ in approval-summary content, JD truncation, per-job activity events, the `job_applied` summary text, and locked-profile handling. Tasks 5–7 handle each explicitly rather than assuming one parameter covers it.
 2. **The spec has `execute_apply` "reload the job and profile".** That re-derives transmitted content: `filler.fill(page, job, profile, ...)` populates form fields from `profile`, and navigates to `job.url`. This is the same defect the final review found in outreach's subject line. Tasks 4–5 digest-bind the profile and record the approved `job_url` in the payload.
+3. **The board-session check moves ahead of the cover-letter generation.** The spec orders it at step 8, after the draft — which is what `apply_cmd` does today, so a user who is not signed in to LinkedIn pays for an LLM call before being told to sign in. Task 4 checks the session at step 5 instead. The consequence, accepted: because the CLI's review loop re-calls `propose_apply` to regenerate, the check now runs once per regeneration (up to six times) rather than once, each opening the isolated browser profile. That is the right trade — re-checking also catches a session that expired during a long review, which today's single check cannot, and each repeated check is now preceded by nothing expensive.
 
 ## File Structure
 
@@ -325,7 +326,19 @@ class ApplyResult:
     applied_at: str
 ```
 
-Order inside `propose_apply`: load job (→ `EntityNotFound`); require `job.url`; `select_resume` (→ `EntityNotFound`); policy check (log `policy_blocked`, then raise `PolicyBlocked`); load profile/skills/goals; `generate_cover_letter` over `jd_text if jd_text is not None else (job.description or "")[:4000]` (→ `DraftFailed`); write the cover letter; detect the filler (→ `EntityNotFound`); if `isinstance(filler, LinkedInFiller)` check the session via `check_board_sessions(["linkedin"])`, raising `BoardSessionRequired("linkedin")` when unauthorized and `BrowserUnavailable(str(exc), profile_busy=True)` on `BrowserProfileBusy`; then `open_approval`.
+Order inside `propose_apply` — everything that can fail cheaply fails before the LLM call, which is why the sequence is what it is:
+
+1. load job (→ `EntityNotFound`); require `job.url` (→ `EntityNotFound` naming `careeros job update`)
+2. `select_resume` (→ `EntityNotFound` when `None`)
+3. policy check — log `policy_blocked`, then raise `PolicyBlocked`
+4. detect the filler from `job.url` (→ `EntityNotFound` when none can handle it)
+5. if the filler is a `LinkedInFiller`, check the session via `check_board_sessions(["linkedin"])`, raising `BoardSessionRequired("linkedin")` when unauthorized and `BrowserUnavailable(str(exc), profile_busy=True)` on `BrowserProfileBusy`
+6. load profile / skills / goals
+7. `generate_cover_letter` over `jd_text if jd_text is not None else (job.description or "")[:4000]` (→ `DraftFailed`)
+8. write `applications/<job_id>/cover_letter.txt`
+9. `open_approval` with the eight payload keys
+
+Steps 4 and 5 sit **ahead** of the cover-letter generation, which is Deviation 3 above — today's `apply_cmd` generates the letter first and only then discovers the user is not signed in.
 
 Default summary, matching today's CLI prompt text:
 
