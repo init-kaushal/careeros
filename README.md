@@ -50,6 +50,12 @@ an append-only audit trail.
   verifies — including on an API or network failure — your existing `profile/skills.json`
   is left untouched and the command exits non-zero, so a bad run is always safe to retry.
   Pass a path to replace your stored master resume, but only once ingestion succeeds.
+- **`careeros resume variant --job <id>`** — build a resume tailored to one job,
+  assembled only from verbatim spans of your master resume. The model selects and
+  orders; it never writes new text, and any span it cannot copy exactly is dropped
+  and named. Stored as `resumes/versions/<job_id>/resume.pdf` with a
+  `variant.json` sidecar recording which line of `resumes/master.md` backs every
+  line of the document. `apply` uses it automatically.
 - **`careeros workspace status` / `workspace validate`** — workspace path, schema version,
   profile/skills/goals summary, activity counts; validate checks schema and data integrity.
 - **`careeros export` / `careeros import <path>`** — zip your entire workspace, or restore one,
@@ -111,6 +117,11 @@ CareerOS uses a two-directory model: the framework (this repo) and your workspac
     preferences.json          ← target titles, locations, compensation, work arrangement
   resumes/
     master.md                 ← your stored resume, read by `careeros resume ingest`
+    versions/
+      my-resume.pdf           ← your own files; used when a job has no tailored variant
+      <job_id>/
+        resume.pdf            ← job-tailored variant, uploaded by `careeros apply`
+        variant.json          ← which line of master.md backs each line of the variant
   activity/
     2026-01-15.jsonl          ← append-only activity log, one event per line
   exports/                    ← created by `careeros export`
@@ -154,7 +165,9 @@ your career data without needing CareerOS installed.
   and `research`. These drive a **dedicated CareerOS browser profile**, not your everyday Chrome
   profile — so an unattended run never holds your banking or email sessions. Sign in to each board
   once with `careeros browser login --board <name>`.
-  `pip install playwright && playwright install chrome`.
+  `pip install playwright && playwright install chrome`. `pip install` does not install
+  either browser — `careeros resume variant` renders PDFs with Playwright's bundled
+  Chromium rather than Chrome, so it needs its own `playwright install chromium`.
 - SMTP credentials (`CAREEROS_SMTP_HOST/PORT/USER/PASSWORD` env vars) only if you use
   `careeros outreach send` — read from the environment at send time, never written to your
   workspace.
@@ -193,8 +206,8 @@ All workspace I/O goes through the `StorageProvider` protocol, so storage backen
 swapped without touching business logic. Every meaningful action — both outcomes of any
 approval decision, not just the success path — writes to the append-only activity log.
 
-See [ROADMAP.md](ROADMAP.md) for what's planned next: per-job resume variants (evidence-backed
-resume ingestion itself has shipped), a second real `AgentRuntime`, and outreach expansion.
+See [ROADMAP.md](ROADMAP.md) for what's planned next: a second real `AgentRuntime` and
+outreach expansion.
 
 ## License
 
