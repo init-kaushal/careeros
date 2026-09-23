@@ -149,3 +149,57 @@ class BrowserUnavailable(OperationError):
         # in here, and it stops a raw browser exception from leaking through
         # the operations boundary.
         self.profile_busy = profile_busy
+
+
+class NotDueForFollowUp(OperationError):
+    """The cadence policy says it is too soon to follow up again.
+
+    A refusal, not a failure: propose_follow_up must leave every record
+    untouched when this is raised, so a scheduled run that skips a relationship
+    not yet due leaves nothing behind — no approval, no draft, no state change.
+    """
+
+    def __init__(self, message_id: str, days_since: int, days_required: int) -> None:
+        super().__init__(
+            "Follow-up for " + repr(message_id) + " is not due yet: "
+            + str(days_since) + " day(s) since the last touch, "
+            + str(days_required) + " required by the cadence policy."
+        )
+        self.message_id = message_id
+        self.days_since = days_since
+        self.days_required = days_required
+
+
+class CadenceExhausted(OperationError):
+    """The relationship has already reached its maximum number of touches.
+
+    A refusal like NotDueForFollowUp's: nothing is written before this is
+    raised, so an exhausted relationship is simply skipped, not recorded as
+    failed.
+    """
+
+    def __init__(self, message_id: str, touch_count: int, max_touches: int) -> None:
+        super().__init__(
+            "Cadence exhausted for " + repr(message_id) + ": "
+            + str(touch_count) + " touch(es) already made, "
+            + str(max_touches) + " is the maximum allowed by the cadence policy."
+        )
+        self.message_id = message_id
+        self.touch_count = touch_count
+        self.max_touches = max_touches
+
+
+class RelationshipClosed(OperationError):
+    """The relationship is terminal — a referral outcome or an explicit close.
+
+    Also a refusal: a closed relationship must never accumulate follow-up
+    approvals just because a scheduled run happened to consider it again.
+    """
+
+    def __init__(self, message_id: str, reason: str) -> None:
+        super().__init__(
+            "Relationship for " + repr(message_id) + " is closed (" + reason + ") "
+            + "and is not eligible for further follow-up."
+        )
+        self.message_id = message_id
+        self.reason = reason
