@@ -97,6 +97,9 @@ def propose_outreach_send(
     message_id = make_message_id(job_id, person_id)
     referral_state = "research"
     already_sent_at: str | None = None
+    last_touched_at: str | None = None
+    touch_count = 0
+    closed_reason: str | None = None
     try:
         existing = OutreachMessage.load(runtime.storage, message_id)
         referral_state = existing.referral_state
@@ -106,6 +109,13 @@ def propose_outreach_send(
         # actual send, so it is the durable fact — and it is carried forward
         # below so the warning survives regeneration.
         already_sent_at = existing.sent_at
+        # Cadence state must survive regeneration too, for the same reason:
+        # a rewritten draft is not a new relationship, and resetting the
+        # touch count or last-touched timestamp here would let a follow-up
+        # regeneration silently restart a cadence the user is already in.
+        last_touched_at = existing.last_touched_at
+        touch_count = existing.touch_count
+        closed_reason = existing.closed_reason
     except (FileNotFoundError, ValueError):
         pass
 
@@ -113,6 +123,8 @@ def propose_outreach_send(
         id=message_id, job_id=job_id, person_id=person_id, draft_text=draft_text,
         send_state="drafted", referral_state=referral_state,
         created_at=_now(), sent_at=already_sent_at,
+        last_touched_at=last_touched_at, touch_count=touch_count,
+        closed_reason=closed_reason,
     ).save(runtime.storage)
     runtime.record_activity(runtime.new_event(
         "outreach_drafted", action_label,
@@ -223,9 +235,10 @@ def execute_outreach_send(
         raise SendFailed(str(exc)) from exc
 
     sent_at = _now()
-    message.model_copy(update={"send_state": "sent", "sent_at": sent_at}).save(
-        runtime.storage
-    )
+    message.model_copy(update={
+        "send_state": "sent", "sent_at": sent_at,
+        "last_touched_at": sent_at, "touch_count": message.touch_count + 1,
+    }).save(runtime.storage)
     runtime.record_activity(runtime.new_event(
         "outreach_sent", action_label, "Sent outreach to " + person.name,
         entity_type="outreach_message", entity_id=message_id,

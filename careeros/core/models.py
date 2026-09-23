@@ -249,6 +249,23 @@ class AutomationPolicy(BaseModel):
         return cls.model_validate_json(storage.read("config/automation_policy.json").decode())
 
 
+class CadencePolicy(BaseModel):
+    days_between_touches: int = Field(ge=1, le=90)
+    max_touches: int = Field(ge=1, le=10)  # counts the initial message, not just follow-ups
+    max_follow_ups_per_run: int = Field(ge=1, le=20)
+
+    def save(self, storage: StorageProvider) -> None:
+        storage.atomic_write("config/cadence_policy.json", self.model_dump_json(indent=2).encode())
+
+    @classmethod
+    def load(cls, storage: StorageProvider) -> "CadencePolicy":
+        # Raises rather than returning defaults: this is the property that
+        # stops a cadence starting on a schedule the user never chose.
+        if not storage.exists("config/cadence_policy.json"):
+            raise FileNotFoundError("config/cadence_policy.json not found in workspace")
+        return cls.model_validate_json(storage.read("config/cadence_policy.json").decode())
+
+
 class PolicyConfig(BaseModel):
     blocked_companies: list[str] = []
     min_salary: int | None = None
@@ -316,6 +333,18 @@ class OutreachMessage(BaseModel):
     ] = "research"
     created_at: str
     sent_at: str | None = None
+
+    # last_touched_at is deliberately NOT derived from sent_at: Phase 12a made
+    # sent_at load-bearing for the "you already sent this" warning by keying
+    # prior-send detection off it (see propose_outreach_send), and overloading
+    # it to also mean "most recent touch" would break that warning the first
+    # time a follow-up went out. It is also deliberately not derived from the
+    # activity log — that log is an append-only audit artifact, and making a
+    # scheduling decision depend on parsing it would couple cadence
+    # correctness to log format stability.
+    last_touched_at: str | None = None
+    touch_count: int = 0
+    closed_reason: str | None = None
 
     def save(self, storage: StorageProvider) -> None:
         storage.atomic_write("outreach/" + self.id + ".json", self.model_dump_json(indent=2).encode())

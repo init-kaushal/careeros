@@ -184,6 +184,39 @@ class TestExecuteOutreachSend:
         assert Approval.load(runtime.storage, proposal.approval_id).state == EXECUTED
         assert "outreach_sent" in _log(runtime.storage)
 
+    def test_a_successful_send_sets_last_touched_at_and_touch_count(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        with patch("careeros.operations.outreach.send_email"):
+            result = execute_outreach_send(runtime, proposal.approval_id, action_label="outreach")
+
+        message = OutreachMessage.load(runtime.storage, MESSAGE_ID)
+        assert message.last_touched_at == result.sent_at
+        assert message.touch_count == 1
+
+    def test_a_second_send_advances_touch_count_and_last_touched_at(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        first_proposal = _propose(runtime)
+        _approve(runtime, first_proposal.approval_id)
+        with patch("careeros.operations.outreach.send_email"):
+            first_result = execute_outreach_send(
+                runtime, first_proposal.approval_id, action_label="outreach"
+            )
+
+        second_proposal = _propose(runtime, draft="A follow-up note.")
+        _approve(runtime, second_proposal.approval_id)
+        with patch("careeros.operations.outreach.send_email"):
+            second_result = execute_outreach_send(
+                runtime, second_proposal.approval_id, action_label="outreach"
+            )
+
+        message = OutreachMessage.load(runtime.storage, MESSAGE_ID)
+        assert message.touch_count == 2
+        assert message.last_touched_at == second_result.sent_at
+        assert message.last_touched_at != first_result.sent_at
+
     @pytest.mark.parametrize(
         "state", ["pending", "declined", "superseded", "failed", "executed"]
     )
