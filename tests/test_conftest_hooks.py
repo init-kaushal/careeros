@@ -52,7 +52,10 @@ class TestIntegrationGate:
         item.add_marker.assert_not_called()
 
     def test_an_unset_marker_expression_does_not_crash(self):
-        # pytest can hand back None rather than "" depending on invocation.
+        # Defensive only: pytest's own `-m` option defaults to "" rather than
+        # None, so this case is not reachable through the real CLI. It guards
+        # the `or ""` fallback against a future caller invoking the hook
+        # directly, as these tests themselves do.
         item = _item(integration=True)
         pytest_collection_modifyitems(_config(None), [item])
         item.add_marker.assert_called_once()
