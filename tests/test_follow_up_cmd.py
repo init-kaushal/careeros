@@ -5,12 +5,18 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from careeros.cli.outreach_cmd import FOLLOW_UP_CMD_ACTION_LABEL, outreach_app
+from careeros.cli.outreach_cmd import (
+    FOLLOW_UP_CMD_ACTION_LABEL, _open_automation_runtime, outreach_app,
+)
 from careeros.core.models import (
     CadencePolicy, Company, Job, OutreachMessage, Person, PolicyConfig, Profile,
 )
+from careeros.operations.approval_queue import DEFERRED_REASON
 from careeros.operations.follow_up import ACTION as FOLLOW_UP_ACTION
+from careeros.operations.follow_up import check_follow_up_due
 from careeros.operations.outreach import make_message_id
+from careeros.runtime.base import ActionProposal
+from careeros.runtime.factory import open_automation_runtime, resolve_storage
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace
 
@@ -643,3 +649,114 @@ class TestInvalidCadencePolicy:
         assert result.exception is None or isinstance(result.exception, SystemExit)
         assert "cadence_policy.json" in result.output
         assert "not a valid cadence policy" in result.output
+
+
+class TestTheCommandWiresItsCollaborators:
+    """The two fixes that were correct but unguarded.
+
+    A re-review proved both `now=now` and `approval_callback=queue_only`
+    could be deleted from this command with the whole suite still green.
+    The mechanisms on either side were tested; the command's use of them was
+    not, which is the failure mode this branch keeps reproducing — a real
+    fix with no test that fails when it regresses.
+    """
+
+    def test_the_instant_the_filter_used_is_the_instant_propose_gets(self, tmp_path):
+        """One `now` for the whole run, threaded all the way down.
+
+        Without it the filter and each propose_follow_up read the clock
+        independently. Skewing only the operations-layer clock by two days
+        was enough to turn a genuinely due relationship into `Errors: 1`
+        plus a spurious follow_up_propose_error in the audit log, while the
+        summary still counted it as due.
+        """
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _seed_relationship(storage, 1, days_since_touch=DAYS_BETWEEN_TOUCHES + 1)
+
+        filter_instants = []
+        real_check = check_follow_up_due
+
+        def recording_check(message, policy, now):
+            filter_instants.append(now)
+            return real_check(message, policy, now)
+
+        with patch(
+            "careeros.cli.outreach_cmd.check_follow_up_due", side_effect=recording_check,
+        ), patch("careeros.cli.outreach_cmd.propose_follow_up") as mock_propose:
+            result = runner.invoke(outreach_app, ["follow-up", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        # Fails loudly rather than silently if the kwarg is dropped entirely.
+        propose_instants = [call.kwargs["now"] for call in mock_propose.call_args_list]
+        assert propose_instants, "propose_follow_up was never called"
+        assert filter_instants, "the due-ness filter was never consulted"
+        assert set(propose_instants) == set(filter_instants) == {filter_instants[0]}
+
+    def test_this_command_denies_by_default_rather_than_auto_approving(self, tmp_path):
+        """AutomationRuntime's class default is auto-approve; this route's is not.
+
+        That default is right for discover-and-apply, where a wrong decision
+        only costs an application. This command proposes and stops, so any
+        request_approval it ever reaches must refuse.
+        """
+        ws_path, _ = _setup_workspace(tmp_path, cadence=_default_cadence())
+
+        runtime = _open_automation_runtime(ws_path)
+        decision = runtime.request_approval(
+            ActionProposal(action=FOLLOW_UP_ACTION, summary="would this be approved?")
+        )
+
+        assert decision.approved is False
+        assert decision.reason == DEFERRED_REASON
+        # The class-wide default must be untouched for every other caller.
+        assert open_automation_runtime(
+            resolve_storage(ws_path)
+        ).request_approval(
+            ActionProposal(action="apply", summary="discover-and-apply's route")
+        ).approved is True
+
+
+class TestABadRecordIsNeverDroppedSilently:
+    @pytest.mark.parametrize(
+        "payload", [b"{not json", b'{"id": "wrong-schema"}', b"", b"null"],
+        ids=["unparseable", "wrong-schema", "empty", "null"],
+    )
+    def test_a_record_that_cannot_load_is_reported(self, tmp_path, payload):
+        """The silent drop was the worse of the two defects.
+
+        A malformed *timestamp* already warned, but a record that would not
+        load at all was skipped with no output whatsoever — so a
+        relationship could quietly stop being followed up forever.
+        """
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _seed_relationship(storage, 1, days_since_touch=DAYS_BETWEEN_TOUCHES + 1)
+        storage.atomic_write("outreach/broken.json", payload)
+
+        with patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+            return_value=FOLLOW_UP_DRAFT,
+        ), patch("careeros.operations.follow_up.send_email"):
+            result = runner.invoke(outreach_app, ["follow-up", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert "outreach/broken.json" in result.output
+        # The healthy relationship is still proposed: one bad record costs
+        # only itself.
+        assert "Proposed: 1" in result.output
+
+class TestDryRunPreviewsTheRealRun:
+    def test_dry_run_previews_the_cap_it_will_hit(self, tmp_path):
+        """A preview that omits the cap overstates the next run."""
+        ws_path, storage = _setup_workspace(
+            tmp_path, cadence=_default_cadence(max_follow_ups_per_run=2),
+        )
+        for idx in (1, 2, 3, 4, 5):
+            _seed_relationship(storage, idx, days_since_touch=DAYS_BETWEEN_TOUCHES + 1)
+
+        result = runner.invoke(
+            outreach_app, ["follow-up", "--workspace", ws_path, "--dry-run"],
+        )
+
+        assert result.exit_code == 0
+        assert "2 would be drafted this run" in result.output
+        assert "3 held back by max_follow_ups_per_run" in result.output

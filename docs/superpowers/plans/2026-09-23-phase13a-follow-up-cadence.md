@@ -388,7 +388,7 @@ git commit -m "feat: add careeros outreach close to end a cadence"
 
 - [ ] **Step 1: Extend the integration contract**
 
-Add `send_follow_up` to `docs/agent-integration.md`: its six payload keys, marking which are read at execute time (verify by grepping `payload_value` call sites rather than guessing — Phase 12b's equivalent claim was wrong in the first draft), the propose → resolve → execute sequence with a runnable example, the three refusal error types and what each means for a retry, and the new activity events.
+Add `send_follow_up` to `docs/agent-integration.md`: its six payload keys, marking which are read at execute time (verify by grepping `payload_value` call sites rather than guessing — Phase 12b's equivalent claim was wrong in the first draft), the propose → resolve → execute sequence with a runnable example, the four refusal error types and what each means for a retry, and the new activity events.
 
 Explain the queue model explicitly, because it is the first flow that uses it: the scheduled command leaves pending approvals and sends nothing, `list_pending` is how an agent finds them, and an agent can drain the queue instead of `careeros outreach review`. Note that re-proposing supersedes, so an un-reviewed relationship accumulates one pending follow-up rather than a backlog.
 

@@ -91,9 +91,10 @@ def _due_status(
     needs none of it — only "consider this one or not" — so it catches the
     three ordinary refusals here and answers None. A CadenceStatus rather
     than a bool comes back on the due path because the caller needs the
-    days_since and touch count the check already computed; computing them
-    again from a second `now` is precisely the drift this consolidation
-    removes.
+    days_since and touch count the check already computed, and handing back
+    the value it computed them from is what keeps one rule in one place —
+    a bool would force this command to re-derive both from the timestamp
+    itself, which is the duplicate logic this consolidation removes.
 
     MalformedTouchTimestamp is deliberately NOT caught here: an unusable
     timestamp is a workspace defect the operator has to see, not a
@@ -119,14 +120,24 @@ def _due_relationships(
     the one record.
     """
     due: list[tuple[OutreachMessage, CadenceStatus]] = []
-    seen: set[str] = set()
     for path in sorted(runtime.storage.list("outreach/")):
         if not path.endswith(".json"):
             continue
         path_id = path[len("outreach/"):-len(".json")]
         try:
             message = OutreachMessage.load(runtime.storage, path_id)
-        except (FileNotFoundError, ValueError):
+        except (FileNotFoundError, ValueError) as exc:
+            # Warned about for the same reason a bad timestamp is: a record
+            # under outreach/ that will not load at all is a worse workspace
+            # defect than one that loads and is merely not due, and only the
+            # operator can fix it. Dropping it silently meant a relationship
+            # could stop being followed up with no trace anywhere.
+            # pydantic.ValidationError subclasses ValueError, so this covers
+            # unparseable JSON and valid-JSON-wrong-schema alike.
+            rprint(
+                "[yellow]Skipping " + path + ": could not be loaded ("
+                + type(exc).__name__ + ").[/yellow]"
+            )
             continue
         # storage.list is a recursive rglob, but this slice assumes the flat
         # outreach/<id>.json layout. A nested copy — a backup, an archive/
@@ -136,10 +147,12 @@ def _due_relationships(
         # approval, and two of the per-run cap spent on one person. Keying
         # off the loaded id, and requiring it to round-trip to the path it
         # was found at, drops the copy; the canonical file is enumerated in
-        # its own right, so the relationship itself is never lost.
-        if message.id != path_id or message.id in seen:
+        # its own right, so the relationship itself is never lost. No
+        # separate seen-set is needed on top: two distinct paths cannot
+        # produce the same path_id, so requiring the round-trip already
+        # makes one id reachable from exactly one file.
+        if message.id != path_id:
             continue
-        seen.add(message.id)
         try:
             status = _due_status(message, policy, now)
         except MalformedTouchTimestamp as exc:
@@ -333,6 +346,17 @@ def follow_up_cmd(
             rprint(
                 message.id + ": touch_count=" + str(status.effective_touch_count)
                 + ", days_since_last_touch=" + str(status.days_since)
+            )
+        # The cap applies to the real run, so a preview that omits it
+        # overstates what the next run will actually do. Reported here as
+        # well as in the run summary, for the same reason: this output is
+        # the operator's only view of the cadence.
+        over_cap = len(actionable) - policy.max_follow_ups_per_run
+        if over_cap > 0:
+            rprint(
+                "Of those, " + str(policy.max_follow_ups_per_run)
+                + " would be drafted this run; " + str(over_cap)
+                + " held back by max_follow_ups_per_run."
             )
         if not due:
             rprint("No relationships are due for a follow-up.")
