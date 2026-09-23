@@ -556,8 +556,37 @@ class TestDeclineFollowUp:
         decline_follow_up(runtime, proposal.approval_id, action_label="follow_up")
 
         message = OutreachMessage.load(runtime.storage, MESSAGE_ID)
-        assert message.last_touched_at != original.last_touched_at
+        # Advanced, not merely different: a regression that wrote an *earlier*
+        # timestamp here would leave the relationship past-due and pass a
+        # plain `!=` assertion, which is exactly the bug this defers.
+        assert datetime.fromisoformat(message.last_touched_at) > datetime.fromisoformat(
+            original.last_touched_at
+        )
         assert message.touch_count == original.touch_count
+
+    def test_refuses_an_approval_belonging_to_a_different_action(self, tmp_path):
+        # Worse here than for outreach: this decline writes last_touched_at,
+        # a scheduling field, so a transposed send_outreach id would defer
+        # the wrong relationship's cadence by a full period. The two payloads
+        # share message_id and person_id, so nothing else refuses it.
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        original = OutreachMessage.load(runtime.storage, MESSAGE_ID)
+        proposal = _propose(runtime)
+        _decline(runtime, proposal.approval_id)
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        approval.model_copy(update={"action": "send_outreach"}).save(runtime.storage)
+
+        with pytest.raises(WrongApprovalAction) as exc:
+            decline_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+
+        assert exc.value.expected == "send_follow_up"
+        assert exc.value.actual == "send_outreach"
+        # Nothing was mutated — in particular the cadence was not deferred.
+        message = OutreachMessage.load(runtime.storage, MESSAGE_ID)
+        assert message.last_touched_at == original.last_touched_at
+        assert message.send_state == original.send_state
+        assert "follow_up_send_declined" not in _log(runtime.storage)
 
     def test_refuses_when_the_approval_was_not_declined(self, tmp_path):
         runtime = _runtime(tmp_path)

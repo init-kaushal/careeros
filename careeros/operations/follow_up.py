@@ -288,8 +288,17 @@ def decline_follow_up(
     into an error. The person's name is used in the activity summary when
     the record is present; the raw person id is used otherwise, so a decline
     can always be recorded.
+
+    approval.action is checked the same way execute_follow_up checks it, and
+    for a sharper reason: this decline writes last_touched_at, which is a
+    *scheduling* field. The send_outreach and send_follow_up payloads share
+    message_id and person_id, so a transposed id from the outreach flow would
+    otherwise be accepted here and would silently defer the wrong
+    relationship's cadence by a full period — and log the decline against it.
     """
     approval = require_state(runtime.storage, approval_id, DECLINED)
+    if approval.action != ACTION:
+        raise WrongApprovalAction(approval_id, ACTION, approval.action)
     message_id = payload_value(approval, "message_id")
     person_id = payload_value(approval, "person_id")
     try:

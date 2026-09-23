@@ -393,6 +393,27 @@ class TestDeclineOutreachSend:
         with pytest.raises(ApprovalNotGranted):
             decline_outreach_send(runtime, proposal.approval_id, action_label="outreach")
 
+    def test_refuses_an_approval_belonging_to_a_different_action(self, tmp_path):
+        # The send_outreach and send_follow_up payloads both carry message_id
+        # and person_id, so nothing but this check stops a follow-up approval
+        # id from marking this message declined. Must refuse before writing.
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        resolve_approval(runtime, proposal.approval_id,
+                         ApprovalResult(approved=False), action_label="outreach")
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        approval.model_copy(update={"action": "send_follow_up"}).save(runtime.storage)
+
+        with pytest.raises(WrongApprovalAction) as exc:
+            decline_outreach_send(runtime, proposal.approval_id, action_label="outreach")
+
+        assert exc.value.expected == "send_outreach"
+        assert exc.value.actual == "send_follow_up"
+        # Nothing was mutated: the message is still the drafted one, and no
+        # decline was logged against it.
+        assert OutreachMessage.load(runtime.storage, MESSAGE_ID).send_state == "drafted"
+        assert "outreach_send_declined" not in _log(runtime.storage)
+
     def test_decline_works_when_the_job_file_is_missing(self, tmp_path):
         """Decline is pure bookkeeping and does not need the job."""
         runtime = _runtime(tmp_path)

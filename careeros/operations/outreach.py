@@ -262,8 +262,17 @@ def decline_outreach_send(
     into an error. The person's name is used in the activity summary when
     the record is present; the raw person id is used otherwise, so a decline
     can always be recorded.
+
+    approval.action is checked before anything is read off the payload, for
+    the same reason execute_outreach_send checks it: the send_outreach and
+    send_follow_up payloads both carry message_id and person_id, so an
+    approval id from the follow-up flow would otherwise be accepted here and
+    would mark that relationship declined on the strength of a decision made
+    about a different action.
     """
     approval = require_state(runtime.storage, approval_id, DECLINED)
+    if approval.action != ACTION:
+        raise WrongApprovalAction(approval_id, ACTION, approval.action)
     message_id = payload_value(approval, "message_id")
     person_id = payload_value(approval, "person_id")
     try:
