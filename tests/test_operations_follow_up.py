@@ -12,11 +12,11 @@ from careeros.operations.approvals import (
 )
 from careeros.operations.errors import (
     ApprovalNotGranted, ArtifactChanged, CadenceExhausted, DraftFailed, EntityNotFound,
-    MalformedApproval, MissingRecipient, NotDueForFollowUp, PolicyBlocked,
-    RelationshipClosed, SendFailed, WrongApprovalAction,
+    MalformedApproval, MalformedTouchTimestamp, MissingRecipient, NotDueForFollowUp,
+    PolicyBlocked, RelationshipClosed, SendFailed, WrongApprovalAction,
 )
 from careeros.operations.follow_up import (
-    decline_follow_up, execute_follow_up, propose_follow_up,
+    check_follow_up_due, decline_follow_up, execute_follow_up, propose_follow_up,
 )
 from careeros.operations.outreach import make_message_id
 from careeros.runtime.base import ApprovalResult
@@ -261,6 +261,131 @@ class TestCadencePolicyMissing:
         # No CadencePolicy saved.
 
         with pytest.raises(FileNotFoundError):
+            _propose(runtime)
+
+
+class TestCheckFollowUpDue:
+    """The single shared due-ness checker.
+
+    It used to exist twice: inlined in propose_follow_up as early raises and
+    mirrored as a bool in careeros/cli/outreach_cmd.py. Two sources of truth
+    for the one rule that decides whether this project spends an LLM call
+    and interrupts the user.
+    """
+
+    def _policy(self, **overrides):
+        fields = dict(
+            days_between_touches=DAYS_BETWEEN_TOUCHES, max_touches=MAX_TOUCHES,
+            max_follow_ups_per_run=5,
+        )
+        fields.update(overrides)
+        return CadencePolicy(**fields)
+
+    def _message(self, **overrides):
+        now = datetime.now(timezone.utc).isoformat()
+        fields = dict(
+            id=MESSAGE_ID, job_id=JOB_ID, person_id=PERSON_ID, draft_text=PRIOR_DRAFT,
+            send_state="sent", created_at=now,
+            sent_at=_iso(DAYS_BETWEEN_TOUCHES + 2),
+            last_touched_at=_iso(DAYS_BETWEEN_TOUCHES + 2), touch_count=1,
+        )
+        fields.update(overrides)
+        return OutreachMessage(**fields)
+
+    def test_a_due_message_returns_what_it_computed(self):
+        status = check_follow_up_due(
+            self._message(), self._policy(), datetime.now(timezone.utc),
+        )
+        # Returned rather than left for the caller to recompute: a second
+        # datetime.now() for the same record is exactly the drift that put
+        # the CLI filter and the operation out of step.
+        assert status.days_since == DAYS_BETWEEN_TOUCHES + 2
+        assert status.effective_touch_count == 1
+
+    def test_now_is_honoured_rather_than_read_from_the_clock(self):
+        # Same record, an earlier `now`: not due. If the checker called
+        # datetime.now() itself this could not be expressed at all, and a
+        # batch caller could not hold one instant across its whole run.
+        message = self._message()
+        earlier = datetime.now(timezone.utc) - timedelta(days=DAYS_BETWEEN_TOUCHES)
+
+        with pytest.raises(NotDueForFollowUp) as exc:
+            check_follow_up_due(message, self._policy(), earlier)
+
+        assert exc.value.days_since == 2
+
+    @pytest.mark.parametrize("bad_value", [
+        "not-a-date", "2026-01-01T10:00:00", "2026-09-01",
+    ])
+    def test_an_unusable_last_touch_is_a_structured_refusal(self, bad_value):
+        # Neither a raw ValueError nor a raw TypeError may escape the
+        # operations layer: a caller enumerating many relationships has to
+        # be able to skip the one bad record.
+        with pytest.raises(MalformedTouchTimestamp) as exc:
+            check_follow_up_due(
+                self._message(last_touched_at=bad_value), self._policy(),
+                datetime.now(timezone.utc),
+            )
+
+        assert exc.value.message_id == MESSAGE_ID
+        assert exc.value.value == bad_value
+
+    def test_a_closed_relationship_with_an_unusable_timestamp_is_just_closed(self):
+        # The parse happens only where a comparison is needed, so a terminal
+        # relationship stays a plain skip rather than becoming an error.
+        with pytest.raises(RelationshipClosed):
+            check_follow_up_due(
+                self._message(referral_state="closed", last_touched_at="not-a-date"),
+                self._policy(), datetime.now(timezone.utc),
+            )
+
+    def test_the_refusals_keep_their_structured_attributes(self):
+        # The reason it raises instead of returning a bool: every caller can
+        # word its own message, and docs/agent-integration.md documents all
+        # three of these.
+        with pytest.raises(CadenceExhausted) as exhausted:
+            check_follow_up_due(
+                self._message(touch_count=MAX_TOUCHES), self._policy(),
+                datetime.now(timezone.utc),
+            )
+        assert exhausted.value.touch_count == MAX_TOUCHES
+        assert exhausted.value.max_touches == MAX_TOUCHES
+
+        with pytest.raises(RelationshipClosed) as closed:
+            check_follow_up_due(
+                self._message(closed_reason="person left the company"),
+                self._policy(), datetime.now(timezone.utc),
+            )
+        assert closed.value.reason == "person left the company"
+
+
+class TestProposeUsesTheSharedChecker:
+    def test_an_explicit_now_reaches_the_due_check(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        earlier = datetime.now(timezone.utc) - timedelta(days=DAYS_BETWEEN_TOUCHES)
+
+        with patch("careeros.operations.follow_up.generate_follow_up_message") as mock_gen:
+            with pytest.raises(NotDueForFollowUp):
+                propose_follow_up(
+                    runtime, JOB_ID, PERSON_ID, action_label="follow_up", now=earlier,
+                )
+
+        mock_gen.assert_not_called()
+
+    def test_entity_not_found_still_precedes_the_due_check(self, tmp_path):
+        """Ordering preserved deliberately through the extraction.
+
+        Checking due-ness first would flip a not-due orphan record from an
+        error into a silent skip. That might be an improvement, but it is
+        not one this refactor is entitled to make as a side effect.
+        """
+        runtime = _runtime(tmp_path)
+        # Not due (touched today) *and* orphaned (no job record).
+        _seed_message(runtime.storage, last_touched_at=_iso(0), sent_at=_iso(0))
+        runtime.storage.delete("jobs/" + JOB_ID + ".json")
+
+        with pytest.raises(EntityNotFound):
             _propose(runtime)
 
 

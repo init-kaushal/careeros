@@ -189,6 +189,32 @@ class CadenceExhausted(OperationError):
         self.max_touches = max_touches
 
 
+class MalformedTouchTimestamp(OperationError):
+    """last_touched_at/sent_at holds something no cadence decision can use.
+
+    These are unvalidated `str | None` on OutreachMessage, so the value can
+    be unparseable ("not-a-date") or a perfectly legal ISO string that is
+    offset-naive ("2026-01-01T10:00:00", or a bare "2026-09-01") — which
+    cannot be compared against an aware now at all. careeros never writes
+    either, so the trigger is always external: a hand edit or an agent
+    writing through the documented integration contract.
+
+    A structured refusal rather than a raw ValueError/TypeError escaping the
+    operations layer, so a caller enumerating many relationships can skip
+    the one bad record instead of having the whole run die on it — which is
+    exactly what the scheduled follow-up command used to do.
+    """
+
+    def __init__(self, message_id: str, value: str) -> None:
+        super().__init__(
+            "Cannot decide cadence for " + repr(message_id) + ": its last-touch "
+            "timestamp " + repr(value) + " is not a timezone-aware ISO 8601 "
+            "datetime. Fix the value in outreach/" + message_id + ".json."
+        )
+        self.message_id = message_id
+        self.value = value
+
+
 class RelationshipClosed(OperationError):
     """The relationship is terminal — a referral outcome or an explicit close.
 

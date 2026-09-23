@@ -15,8 +15,9 @@ from careeros.operations.approvals import (
     require_state,
 )
 from careeros.operations.errors import (
-    ArtifactChanged, CadenceExhausted, DraftFailed, EntityNotFound, MissingRecipient,
-    NotDueForFollowUp, PolicyBlocked, RelationshipClosed, SendFailed, WrongApprovalAction,
+    ArtifactChanged, CadenceExhausted, DraftFailed, EntityNotFound,
+    MalformedTouchTimestamp, MissingRecipient, NotDueForFollowUp, PolicyBlocked,
+    RelationshipClosed, SendFailed, WrongApprovalAction,
 )
 from careeros.operations.outreach import make_message_id
 from careeros.operations.outreach import subject_for as _outreach_subject_for
@@ -43,6 +44,20 @@ class FollowUpProposal:
 
 
 @dataclass(frozen=True)
+class CadenceStatus:
+    """What check_follow_up_due established on the way to saying "due".
+
+    Returned rather than recomputed: propose_follow_up needs days_since for
+    the FollowUpProposal it hands back and the touch count for the next
+    touch number, and a second `datetime.now()` for the same message is how
+    the CLI filter and the operation drifted apart in the first place.
+    """
+
+    days_since: int
+    effective_touch_count: int
+
+
+@dataclass(frozen=True)
 class FollowUpResult:
     message_id: str
     recipient_name: str
@@ -54,6 +69,79 @@ def subject_for(job: Job) -> str:
     return "Re: " + _outreach_subject_for(job)
 
 
+def check_follow_up_due(
+    message: OutreachMessage, policy: CadencePolicy, now: datetime,
+) -> CadenceStatus:
+    """Raise unless `message` is due for a follow-up under `policy` at `now`.
+
+    The single source of truth for the rule that decides whether this
+    project spends an LLM call and interrupts the user for a decision.
+    propose_follow_up calls it before drafting; the scheduled command calls
+    it to filter its enumeration. It used to exist twice — inlined here as
+    early raises and mirrored as a bool in the CLI — which was two sources
+    of truth for one rule.
+
+    It raises rather than returning a bool on purpose. Each refusal carries
+    structured detail a caller needs to word its own message
+    (RelationshipClosed.reason, CadenceExhausted.touch_count,
+    NotDueForFollowUp.days_since), and the agent-integration contract
+    documents all three; collapsing them into a bool would throw that away.
+    A caller that only wants a yes/no catches them, which is cheap — the
+    reverse is not recoverable.
+
+    `now` is a parameter, not a datetime.now() call inside, so a caller
+    checking many relationships can hold one instant for the whole batch.
+    Two independent now() calls could straddle a midnight boundary and have
+    the filter and the operation disagree by a day about the same record.
+    """
+    if message.referral_state in _TERMINAL_REFERRAL_STATES or message.closed_reason:
+        reason = message.closed_reason or message.referral_state
+        raise RelationshipClosed(message.id, reason)
+
+    # last_touched_at and touch_count are new fields that default to
+    # None/0 and are only populated going forward, by execute_outreach_send.
+    # A relationship whose initial message was sent before this phase has
+    # sent_at set but last_touched_at still None — reading these fields raw
+    # would treat that as "never touched" and permanently exclude it from
+    # follow-up. Falling back to sent_at, and counting a real send as one
+    # touch, makes a legacy sent message due on the same schedule as one
+    # sent after this phase shipped.
+    last_touch = message.last_touched_at or message.sent_at
+    effective_touch_count = message.touch_count or (1 if message.sent_at else 0)
+
+    if effective_touch_count >= policy.max_touches:
+        raise CadenceExhausted(message.id, effective_touch_count, policy.max_touches)
+
+    if last_touch is None:
+        # Never sent at all, so there is no touch to follow up on yet.
+        # propose_outreach_send owns the first message — modeled as "not
+        # due" rather than a distinct error, since to a caller both mean
+        # exactly the same thing: don't act yet.
+        raise NotDueForFollowUp(message.id, 0, policy.days_between_touches)
+
+    # Parsed only now that a comparison is actually needed, which keeps a
+    # closed or exhausted relationship with a garbage timestamp a plain
+    # skip rather than an error. Both failure modes are converted into one
+    # structured refusal so no raw ValueError/TypeError escapes this layer:
+    # fromisoformat rejects "not-a-date" outright, and accepts an
+    # offset-naive value like "2026-01-01T10:00:00" that then cannot be
+    # subtracted from an aware `now` at all.
+    try:
+        parsed_last_touch = datetime.fromisoformat(last_touch)
+    except (TypeError, ValueError) as exc:
+        raise MalformedTouchTimestamp(message.id, last_touch) from exc
+    if parsed_last_touch.tzinfo is None:
+        raise MalformedTouchTimestamp(message.id, last_touch)
+
+    days_since = (now - parsed_last_touch).days
+    if days_since < policy.days_between_touches:
+        raise NotDueForFollowUp(message.id, days_since, policy.days_between_touches)
+
+    return CadenceStatus(
+        days_since=days_since, effective_touch_count=effective_touch_count,
+    )
+
+
 def propose_follow_up(
     runtime: AgentRuntime,
     job_id: str,
@@ -61,16 +149,26 @@ def propose_follow_up(
     *,
     model: str | None = None,
     action_label: str,
+    now: datetime | None = None,
 ) -> FollowUpProposal:
     """Draft a cadence follow-up and record a pending approval for sending it.
 
     Only proposes against a relationship that already has an OutreachMessage
     (propose_outreach_send owns the first message to a person). Every refusal
-    below — terminal relationship, exhausted cadence, not yet due, and the
-    policy block — is checked, in that cheapest-first order, before the LLM
-    is ever called or anything is written: a refusal must leave the workspace
-    exactly as it found it, so a scheduled run that skips a relationship
-    leaves nothing behind.
+    below — terminal relationship, exhausted cadence, not yet due, an
+    unusable last-touch timestamp, and the policy block — is checked, in
+    that cheapest-first order, before the LLM is ever called or anything is
+    written: a refusal must leave the workspace exactly as it found it, so a
+    scheduled run that skips a relationship leaves nothing behind.
+
+    The cadence half of that lives in check_follow_up_due, shared with the
+    scheduled command's enumeration filter. It is called *after* the entity
+    loads, deliberately: checking due-ness first would turn a not-due orphan
+    record from an EntityNotFound into a silent skip.
+
+    `now` defaults to this instant. A caller proposing across a batch passes
+    its own single value so its filter and this call cannot disagree by a
+    day about the same record.
     """
     message_id = make_message_id(job_id, person_id)
     try:
@@ -88,34 +186,8 @@ def propose_follow_up(
     # schedule the user never chose.
     policy = CadencePolicy.load(runtime.storage)
 
-    if message.referral_state in _TERMINAL_REFERRAL_STATES or message.closed_reason:
-        reason = message.closed_reason or message.referral_state
-        raise RelationshipClosed(message_id, reason)
-
-    # last_touched_at and touch_count are new fields that default to
-    # None/0 and are only populated going forward, by execute_outreach_send.
-    # A relationship whose initial message was sent before this phase has
-    # sent_at set but last_touched_at still None — reading these fields raw
-    # would treat that as "never touched" and permanently exclude it from
-    # follow-up. Falling back to sent_at, and counting a real send as one
-    # touch, makes a legacy sent message due on the same schedule as one
-    # sent after this phase shipped.
-    last_touch = message.last_touched_at or message.sent_at
-    effective_touch_count = message.touch_count or (1 if message.sent_at else 0)
-
-    if effective_touch_count >= policy.max_touches:
-        raise CadenceExhausted(message_id, effective_touch_count, policy.max_touches)
-
-    if last_touch is None:
-        # Never sent at all, so there is no touch to follow up on yet.
-        # propose_outreach_send owns the first message — modeled as "not
-        # due" rather than a distinct error, since to a caller both mean
-        # exactly the same thing: don't act yet.
-        raise NotDueForFollowUp(message_id, 0, policy.days_between_touches)
-
-    days_since = (datetime.now(timezone.utc) - datetime.fromisoformat(last_touch)).days
-    if days_since < policy.days_between_touches:
-        raise NotDueForFollowUp(message_id, days_since, policy.days_between_touches)
+    status = check_follow_up_due(message, policy, now or datetime.now(timezone.utc))
+    days_since = status.days_since
 
     policy_result = PolicyEngine(PolicyConfig.load(runtime.storage)).check_job(job)
     if policy_result.blocked:
@@ -130,7 +202,7 @@ def propose_follow_up(
     profile = Profile.load_or_empty(runtime.storage)
     goals = Goals.load_or_empty(runtime.storage)
 
-    touch_number = effective_touch_count + 1
+    touch_number = status.effective_touch_count + 1
     draft_text = generate_follow_up_message(
         person, job, company, profile, goals, message.draft_text, touch_number,
         model=model,
