@@ -164,6 +164,12 @@ def propose_follow_up(
             "person_id": person_id,
             "draft_sha256": draft_digest(draft_text),
             "touch_number": str(touch_number),
+            # Bound here, not recomputed at execute time: an out-of-band edit
+            # to job.title/job.company between approval and execution must
+            # not change the subject of a message the user already approved.
+            # execute_outreach_send does the same, and applies the same
+            # reasoning (Phase 12a's final review).
+            "subject": subject,
         },
         entity_type="outreach_message", entity_id=message_id,
         action_label=action_label,
@@ -177,16 +183,15 @@ def propose_follow_up(
     )
 
 
-def _load_message_person_job(
-    runtime: AgentRuntime, message_id: str, person_id: str, job_id: str,
-) -> tuple[OutreachMessage, Person, Job]:
+def _load_message_and_person(
+    runtime: AgentRuntime, message_id: str, person_id: str,
+) -> tuple[OutreachMessage, Person]:
     try:
         message = OutreachMessage.load(runtime.storage, message_id)
         person = Person.load(runtime.storage, person_id)
-        job = Job.load(runtime.storage, job_id)
     except (FileNotFoundError, ValueError) as exc:
-        raise EntityNotFound("Outreach message, person, or job not found.") from exc
-    return message, person, job
+        raise EntityNotFound("Outreach message or person not found.") from exc
+    return message, person
 
 
 def execute_follow_up(
@@ -197,10 +202,13 @@ def execute_follow_up(
     Drafts nothing and calls no LLM: the text that sends is read back from
     the stored OutreachMessage and checked against the digest recorded when
     the approval was created, so the bytes reviewed are the bytes
-    transmitted. Unlike execute_outreach_send, the subject is not bound into
-    the payload — propose_follow_up never wrote one — so it is recomputed
-    from the Job here via subject_for(job), which is why the Job is loaded
-    alongside the message and person.
+    transmitted. The subject line is likewise never re-derived from the Job:
+    it was recorded on the payload at propose time (mirroring
+    execute_outreach_send) and read back verbatim here, so editing the job's
+    title or company between approval and execution cannot change what goes
+    out. The Job itself is never loaded here as a result — subject_for(job)
+    was its only consumer, and dropping the load means a missing or corrupt
+    job file no longer blocks sending an already-approved follow-up.
 
     approval.action is checked against ACTION before anything else is read
     off the payload, and before any state change: passing an approval minted
@@ -224,10 +232,10 @@ def execute_follow_up(
         raise WrongApprovalAction(approval_id, ACTION, approval.action)
     message_id = payload_value(approval, "message_id")
     person_id = payload_value(approval, "person_id")
-    job_id = payload_value(approval, "job_id")
     expected_digest = payload_value(approval, "draft_sha256")
+    subject = payload_value(approval, "subject")
 
-    message, person, job = _load_message_person_job(runtime, message_id, person_id, job_id)
+    message, person = _load_message_and_person(runtime, message_id, person_id)
 
     if draft_digest(message.draft_text) != expected_digest:
         raise ArtifactChanged("outreach/" + message_id + ".json")
@@ -242,7 +250,7 @@ def execute_follow_up(
     mark_executed(runtime, approval_id)
 
     try:
-        send_email(person.email, subject_for(job), message.draft_text)
+        send_email(person.email, subject, message.draft_text)
     except Exception as exc:
         message.model_copy(update={"send_state": "failed"}).save(runtime.storage)
         mark_failed(runtime, approval_id, type(exc).__name__)

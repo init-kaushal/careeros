@@ -112,11 +112,13 @@ class TestProposeFollowUpHappyPath:
         assert approval.state == PENDING
         assert set(approval.payload.keys()) == {
             "message_id", "job_id", "person_id", "draft_sha256", "touch_number",
+            "subject",
         }
         assert approval.payload["message_id"] == MESSAGE_ID
         assert approval.payload["job_id"] == JOB_ID
         assert approval.payload["person_id"] == PERSON_ID
         assert approval.payload["touch_number"] == "2"
+        assert approval.payload["subject"] == proposal.subject
 
         assert proposal.message_id == MESSAGE_ID
         assert proposal.draft_text == FOLLOW_UP_DRAFT
@@ -478,6 +480,52 @@ class TestExecuteFollowUp:
             side_effect=check_approval_executed,
         ):
             execute_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+
+    def test_subject_is_bound_to_the_approval_not_recomputed_from_the_job(self, tmp_path):
+        """Editing the job after approval must not change the sent subject.
+
+        The subject is recorded on the payload at propose time and read back
+        verbatim at execute time — it is not hashed and digest-compared like
+        the draft body; it is stored on the payload directly, which is a
+        stronger guarantee than digest-binding: an out-of-band edit to
+        job.title cannot change what goes out. Mirrors
+        execute_outreach_send's own binding, and the Critical finding
+        (Phase 12a's final review) that made it necessary there.
+        """
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        job = Job.load(runtime.storage, JOB_ID)
+        job.model_copy(update={"title": "A Completely Different Title"}).save(runtime.storage)
+
+        with patch("careeros.operations.follow_up.send_email") as mock_send:
+            execute_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+
+        mock_send.assert_called_once_with(
+            "jane@acme.com", EXPECTED_SUBJECT, FOLLOW_UP_DRAFT
+        )
+
+    def test_a_missing_job_at_execute_time_does_not_block_the_send(self, tmp_path):
+        """execute_follow_up never re-derives the subject, so it never needs
+        the Job. A job file deleted (or otherwise missing) between approval
+        and execution must not block sending an already-approved follow-up.
+        """
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        runtime.storage.delete("jobs/" + JOB_ID + ".json")
+
+        with patch("careeros.operations.follow_up.send_email") as mock_send:
+            result = execute_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+
+        mock_send.assert_called_once_with(
+            "jane@acme.com", EXPECTED_SUBJECT, FOLLOW_UP_DRAFT
+        )
+        assert result.recipient_name == "Jane Doe"
 
 
 class TestDeclineFollowUp:
