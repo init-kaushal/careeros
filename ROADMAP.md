@@ -164,11 +164,20 @@ complete one send, attributed to `claude_code` across two session IDs. **The man
 phase's real exit condition — is still outstanding, for both outreach and apply:** a Claude Code
 session proposing an outreach send (or a job application) against the user's actual workspace via
 `CAREEROS_WORKSPACE`, surfacing the draft in conversation, recording the user's real decision, and
-executing a real send to the user's own address in a second process. This requires
-`CAREEROS_SMTP_HOST`/`PORT`/`USER`/`PASSWORD` configured in the environment and a `Person` record
-holding the user's own email address, so the verifying send is real rather than patched. That is a
-separate, user-present step, not something a green test suite can claim on its own, and it has not
-happened as of this document.
+executing a real send to the user's own address in a second process. That is a separate,
+user-present step, not something a green test suite can claim on its own, and it has not happened
+as of this document.
+
+It needs credentials at **two** boundaries, not one — a point this paragraph previously
+understated. `CAREEROS_SMTP_HOST`/`PORT`/`USER`/`PASSWORD` must be configured so the send is real
+rather than patched, and an LLM provider credential must be available (`CAREEROS_MODEL` or the
+provider key `litellm` resolves for the default model), because `propose_outreach_send` calls
+`generate_outreach_message` before any approval exists — without it the flow fails at
+`DraftFailed` and never reaches the approval, let alone the send. A `Person` record holding the
+user's own email address is also required. Absent either credential the run cannot advance past
+what `tests/test_agent_integration.py` already covers, which patches exactly those two
+boundaries; the credentials are the entire difference between the automated half and the manual
+half.
 
 ---
 
