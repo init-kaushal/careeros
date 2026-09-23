@@ -6,12 +6,15 @@ import pytest
 from typer.testing import CliRunner
 
 from careeros.cli.outreach_cmd import (
-    FOLLOW_UP_CMD_ACTION_LABEL, _open_automation_runtime, outreach_app,
+    FOLLOW_UP_CMD_ACTION_LABEL, REVIEW_CMD_ACTION_LABEL, _open_automation_runtime,
+    outreach_app,
 )
 from careeros.core.models import (
-    CadencePolicy, Company, Job, OutreachMessage, Person, PolicyConfig, Profile,
+    Approval, CadencePolicy, Company, Job, OutreachMessage, Person, PolicyConfig,
+    Profile,
 )
 from careeros.operations.approval_queue import DEFERRED_REASON
+from careeros.operations.approvals import list_pending
 from careeros.operations.follow_up import ACTION as FOLLOW_UP_ACTION
 from careeros.operations.follow_up import check_follow_up_due
 from careeros.operations.outreach import make_message_id
@@ -760,3 +763,552 @@ class TestDryRunPreviewsTheRealRun:
         assert result.exit_code == 0
         assert "2 would be drafted this run" in result.output
         assert "3 held back by max_follow_ups_per_run" in result.output
+
+
+REGENERATED_DRAFT = "Hi Jane, one more thought on that SRE role."
+
+
+def _queue_a_follow_up(
+    storage, ws_path, idx, *, draft=FOLLOW_UP_DRAFT,
+    days_since_touch=DAYS_BETWEEN_TOUCHES + 1, touch_count=1,
+):
+    """Seed a relationship and let the scheduled proposer queue its approval.
+
+    Goes through the real `outreach follow-up` command rather than
+    hand-writing an Approval, so every review test drains a queue that was
+    filled the way production fills it — including the payload keys, which
+    are the contract between the two commands.
+
+    Calling it repeatedly queues exactly the new relationship each time: the
+    proposer skips anything that already has a pending follow-up approval,
+    which is what lets each queued item carry its own distinguishable draft.
+    """
+    ids = _seed_relationship(
+        storage, idx, days_since_touch=days_since_touch, touch_count=touch_count,
+    )
+    with patch(
+        "careeros.operations.follow_up.generate_follow_up_message", return_value=draft,
+    ), patch("careeros.operations.follow_up.send_email") as mock_send_email:
+        result = runner.invoke(outreach_app, ["follow-up", "--workspace", ws_path])
+    assert result.exit_code == 0
+    mock_send_email.assert_not_called()
+    return ids
+
+
+def _pending_follow_ups(storage):
+    return [a for a in list_pending(storage) if a.action == FOLLOW_UP_ACTION]
+
+
+def _approval_states(storage):
+    states = {}
+    for path in storage.list("approvals/"):
+        if not path.endswith(".json"):
+            continue
+        approval = Approval.load(storage, path[len("approvals/"):-len(".json")])
+        states[approval.id] = approval.state
+    return states
+
+
+class TestReviewCmd:
+    def test_an_empty_queue_says_so_and_exits_0(self, tmp_path):
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask") as mock_ask, patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert "No follow-ups" in result.output
+        # Nothing was asked and nothing was sent: an empty queue is not a
+        # prompt the user has to dismiss.
+        mock_ask.assert_not_called()
+        mock_send_email.assert_not_called()
+
+    def test_accepting_sends_the_draft_that_was_shown(self, tmp_path):
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _, _, message_id = _queue_a_follow_up(storage, ws_path, 1)
+        approval_id = _pending_follow_ups(storage)[0].id
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="a"), patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        # The bytes on screen are the bytes that transmitted.
+        assert "bumping this to the top" in result.output
+        mock_send_email.assert_called_once()
+        to_address, subject, body = mock_send_email.call_args.args
+        assert to_address == "jane@acme.com"
+        assert subject.startswith("Re: ")
+        assert body == FOLLOW_UP_DRAFT
+
+        assert Approval.load(storage, approval_id).state == "executed"
+        message = OutreachMessage.load(storage, message_id)
+        assert message.send_state == "sent"
+        assert message.touch_count == 2
+        assert "1 sent" in result.output
+
+    def test_declining_marks_it_declined_and_advances_last_touched_at(self, tmp_path):
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _, _, message_id = _queue_a_follow_up(storage, ws_path, 1)
+        approval_id = _pending_follow_ups(storage)[0].id
+        before = OutreachMessage.load(storage, message_id).last_touched_at
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="d"), patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        mock_send_email.assert_not_called()
+        assert Approval.load(storage, approval_id).state == "declined"
+        message = OutreachMessage.load(storage, message_id)
+        assert message.send_state == "declined"
+        # Deferred by one cadence period, not counted as a touch.
+        assert message.last_touched_at is not None and message.last_touched_at > before
+        assert message.touch_count == 1
+        assert "1 declined" in result.output
+
+    def test_skipping_leaves_it_pending_for_a_later_run(self, tmp_path):
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _, _, message_id = _queue_a_follow_up(storage, ws_path, 1)
+        approval_id = _pending_follow_ups(storage)[0].id
+        before = OutreachMessage.load(storage, message_id).last_touched_at
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="s"), patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        mock_send_email.assert_not_called()
+        # Still pending, and nothing about the relationship moved — so the
+        # very next review offers the same draft again.
+        assert Approval.load(storage, approval_id).state == "pending"
+        assert [a.id for a in _pending_follow_ups(storage)] == [approval_id]
+        message = OutreachMessage.load(storage, message_id)
+        assert message.last_touched_at == before
+        assert message.touch_count == 1
+        assert "1 skipped" in result.output
+
+    def test_regenerating_then_accepting_sends_the_new_draft(self, tmp_path):
+        """The approval under review changes identity on a regenerate.
+
+        propose_follow_up goes through open_approval, which supersedes the
+        approval it replaces — so resolving the id the loop started with
+        would raise ApprovalNotGranted. The loop has to switch to the new
+        proposal's approval_id and its text.
+        """
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _, _, message_id = _queue_a_follow_up(storage, ws_path, 1)
+        original_id = _pending_follow_ups(storage)[0].id
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", side_effect=["r", "a"]), patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+            return_value=REGENERATED_DRAFT,
+        ) as mock_generate, patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert mock_generate.call_count == 1
+        mock_send_email.assert_called_once()
+        _, _, body = mock_send_email.call_args.args
+        # The newly drafted text is what sent, and what was shown.
+        assert body == REGENERATED_DRAFT
+        assert "one more thought" in result.output
+        assert OutreachMessage.load(storage, message_id).draft_text == REGENERATED_DRAFT
+
+        states = _approval_states(storage)
+        assert states[original_id] == "superseded"
+        executed = [aid for aid, state in states.items() if state == "executed"]
+        assert len(executed) == 1 and executed[0] != original_id
+
+    def test_only_follow_up_approvals_are_touched(self, tmp_path):
+        """list_pending returns every pending approval regardless of action.
+
+        Filtering is this command's job, so an unrelated pending outreach or
+        apply approval must come out of a review run untouched and
+        undisplayed.
+        """
+        from careeros.operations.apply import ACTION as APPLY_ACTION
+        from careeros.operations.approvals import open_approval
+        from careeros.operations.outreach import ACTION as OUTREACH_ACTION
+        from careeros.runtime.factory import open_local_runtime
+
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        job_id, person_id, message_id = _queue_a_follow_up(storage, ws_path, 1)
+        follow_up_id = _pending_follow_ups(storage)[0].id
+
+        runtime = open_local_runtime(storage)
+        outreach_approval = open_approval(
+            runtime, OUTREACH_ACTION, "Send the first outreach email?",
+            {"message_id": message_id, "person_id": person_id, "draft_sha256": "x",
+             "subject": "Unrelated outreach"},
+            entity_type="outreach_message", entity_id=message_id,
+            action_label="outreach",
+        )
+        apply_approval = open_approval(
+            runtime, APPLY_ACTION, "Apply to this job?",
+            {"job_id": job_id}, entity_type="job", entity_id=job_id,
+            action_label="apply",
+        )
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="a") as mock_ask, patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        # One item reviewed, one email sent — not three.
+        assert mock_ask.call_count == 1
+        mock_send_email.assert_called_once()
+        states = _approval_states(storage)
+        assert states[follow_up_id] == "executed"
+        assert states[outreach_approval.id] == "pending"
+        assert states[apply_approval.id] == "pending"
+        assert "Unrelated outreach" not in result.output
+        assert "Apply to this job?" not in result.output
+
+
+class TestReviewSurvivesABadItem:
+    """One failing item must cost one item, not the rest of the queue."""
+
+    def test_a_missing_recipient_does_not_abandon_the_queue(self, tmp_path):
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _, person_id_1, _ = _queue_a_follow_up(storage, ws_path, 1)
+        _queue_a_follow_up(storage, ws_path, 2, draft=REGENERATED_DRAFT)
+        queue = _pending_follow_ups(storage)
+        assert len(queue) == 2
+        first_id, second_id = queue[0].id, queue[1].id
+        Person.load(storage, person_id_1).model_copy(
+            update={"email": None},
+        ).save(storage)
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="a") as mock_ask, patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        # A failed item makes the run exit nonzero, but only after the rest
+        # of the queue has been offered.
+        assert result.exit_code == 1
+        assert "No email on file" in result.output
+        assert mock_ask.call_count == 2
+        # The consequence, not just the exit code: the *second* item really
+        # was reviewed and sent.
+        mock_send_email.assert_called_once()
+        _, _, body = mock_send_email.call_args.args
+        assert body == REGENERATED_DRAFT
+        states = _approval_states(storage)
+        # Nothing was attempted for the first, so it stays approved and
+        # retryable rather than being consumed.
+        assert states[first_id] == "approved"
+        assert states[second_id] == "executed"
+        assert "1 failed" in result.output
+
+    def test_a_malformed_payload_does_not_abandon_the_queue(self, tmp_path):
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1)
+        _queue_a_follow_up(storage, ws_path, 2, draft=REGENERATED_DRAFT)
+        queue = _pending_follow_ups(storage)
+        first_id, second_id = queue[0].id, queue[1].id
+        Approval.load(storage, first_id).model_copy(update={"payload": {}}).save(storage)
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="a") as mock_ask, patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 1
+        assert "missing payload key" in result.output
+        # The broken item was never even offered — there is nothing to show.
+        assert mock_ask.call_count == 1
+        mock_send_email.assert_called_once()
+        _, _, body = mock_send_email.call_args.args
+        assert body == REGENERATED_DRAFT
+        states = _approval_states(storage)
+        assert states[first_id] == "pending"
+        assert states[second_id] == "executed"
+
+    def test_an_out_of_band_edit_to_the_draft_fails_only_that_item(self, tmp_path):
+        """ArtifactChanged: the stored draft moved after the approval was written."""
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _, _, message_id_1 = _queue_a_follow_up(storage, ws_path, 1)
+        _queue_a_follow_up(storage, ws_path, 2, draft=REGENERATED_DRAFT)
+        queue = _pending_follow_ups(storage)
+        first_id, second_id = queue[0].id, queue[1].id
+        OutreachMessage.load(storage, message_id_1).model_copy(
+            update={"draft_text": "Edited by hand after the approval was written."},
+        ).save(storage)
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="a"), patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 1
+        # Fragment kept short because rich wraps the message at the console
+        # width, so any longer phrase can straddle a line break.
+        assert "has changed" in result.output
+        mock_send_email.assert_called_once()
+        _, _, body = mock_send_email.call_args.args
+        assert body == REGENERATED_DRAFT
+        states = _approval_states(storage)
+        assert states[first_id] == "approved"
+        assert states[second_id] == "executed"
+
+
+class TestReviewToleratesAMissingPersonRecord:
+    def test_the_draft_is_still_shown_without_people_json(self, tmp_path):
+        """decline_follow_up already falls back to the raw person id here.
+
+        Bookkeeping must not fail on a missing person record, and neither
+        must *showing* a draft: the reviewer can still read what would be
+        sent and decide.
+        """
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _, person_id, _ = _queue_a_follow_up(storage, ws_path, 1)
+        approval_id = _pending_follow_ups(storage)[0].id
+        (tmp_path / "people" / (person_id + ".json")).unlink()
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="s") as mock_ask, patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert mock_ask.call_count == 1
+        assert "bumping this to the top" in result.output
+        # Titled with the raw person id, since there is no name to use.
+        assert person_id in result.output
+        mock_send_email.assert_not_called()
+        assert Approval.load(storage, approval_id).state == "pending"
+
+
+class TestReviewRegenerateCanBeRefused:
+    """A re-propose re-runs the full due-ness check, which can now refuse.
+
+    The cron run and the review are separate processes, so the cadence
+    policy can have been edited in between. A refusal must leave the item
+    pending — the draft the user was offered is still valid and still
+    theirs to accept.
+    """
+
+    def test_a_cadence_refusal_leaves_the_original_draft_acceptable(self, tmp_path):
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _, _, message_id = _queue_a_follow_up(storage, ws_path, 1)
+        original_id = _pending_follow_ups(storage)[0].id
+        # The user tightened the cadence after the cron run queued this.
+        CadencePolicy(
+            days_between_touches=90, max_touches=MAX_TOUCHES, max_follow_ups_per_run=5,
+        ).save(storage)
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", side_effect=["r", "a"]), patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+        ) as mock_generate, patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert "not due yet" in result.output
+        # A refusal costs nothing: no LLM call, and the original approval is
+        # still the one that executes.
+        mock_generate.assert_not_called()
+        mock_send_email.assert_called_once()
+        _, _, body = mock_send_email.call_args.args
+        assert body == FOLLOW_UP_DRAFT
+        assert _approval_states(storage)[original_id] == "executed"
+        assert OutreachMessage.load(storage, message_id).touch_count == 2
+
+    def test_an_exhausted_cadence_refusal_is_also_survivable(self, tmp_path):
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1)
+        original_id = _pending_follow_ups(storage)[0].id
+        CadencePolicy(
+            days_between_touches=DAYS_BETWEEN_TOUCHES, max_touches=1,
+            max_follow_ups_per_run=5,
+        ).save(storage)
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", side_effect=["r", "a"]), patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+        ) as mock_generate, patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert "Cadence exhausted" in result.output
+        mock_generate.assert_not_called()
+        mock_send_email.assert_called_once()
+        assert _approval_states(storage)[original_id] == "executed"
+
+    def test_a_deleted_cadence_policy_is_reported_not_a_traceback(self, tmp_path):
+        """CadencePolicy.load raises FileNotFoundError, which is not an OperationError."""
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1)
+        original_id = _pending_follow_ups(storage)[0].id
+        (tmp_path / "config" / "cadence_policy.json").unlink()
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", side_effect=["r", "a"]), patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+        ) as mock_generate, patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "cadence_policy.json" in result.output
+        mock_generate.assert_not_called()
+        # Still acceptable afterwards: the queued draft did not depend on
+        # the policy file being there.
+        mock_send_email.assert_called_once()
+        assert _approval_states(storage)[original_id] == "executed"
+
+    def test_a_failed_regeneration_leaves_the_item_acceptable(self, tmp_path):
+        """DraftFailed on a re-propose must not consume the queued draft."""
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1)
+        original_id = _pending_follow_ups(storage)[0].id
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", side_effect=["r", "a"]), patch(
+            "careeros.operations.follow_up.generate_follow_up_message", return_value="",
+        ) as mock_generate, patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert mock_generate.call_count == 1
+        mock_send_email.assert_called_once()
+        _, _, body = mock_send_email.call_args.args
+        assert body == FOLLOW_UP_DRAFT
+        assert _approval_states(storage)[original_id] == "executed"
+
+    def test_regeneration_is_bounded_by_max_regenerations(self, tmp_path):
+        """The same bound `outreach send` uses, for the same reason."""
+        from careeros.cli.outreach_cmd import MAX_REGENERATIONS
+
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1)
+
+        asked = []
+
+        def _record(prompt, **kwargs):
+            asked.append(prompt)
+            return "r" if len(asked) <= MAX_REGENERATIONS else "s"
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", side_effect=_record), patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+            return_value=REGENERATED_DRAFT,
+        ) as mock_generate, patch("careeros.operations.follow_up.send_email"):
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert mock_generate.call_count == MAX_REGENERATIONS
+        # The last prompt no longer offers regeneration at all.
+        assert "[R]egenerate" in asked[0]
+        assert "[R]egenerate" not in asked[-1]
+
+
+class TestReviewAuditTrail:
+    def test_review_events_carry_their_own_action_label(self, tmp_path):
+        """The interactive drainer is distinguishable from the cron proposer.
+
+        Task 6 stamps "outreach-follow-up" on everything the scheduled
+        command does. A reviewer sending a follow-up by hand is a different
+        entrypoint, and the audit trail has to say which one acted.
+        """
+        assert REVIEW_CMD_ACTION_LABEL == "outreach-review"
+        assert REVIEW_CMD_ACTION_LABEL != FOLLOW_UP_CMD_ACTION_LABEL
+
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1)
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="a"), patch(
+            "careeros.operations.follow_up.send_email",
+        ):
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        events = _log_events(storage)
+        sent = [e for e in events if e["event_type"] == "follow_up_sent"]
+        granted = [e for e in events if e["event_type"] == "approval_granted"]
+        assert len(sent) == 1 and len(granted) == 1
+        assert {e["action"] for e in sent + granted} == {REVIEW_CMD_ACTION_LABEL}
+        # And it is a person at a terminal, not automation.
+        assert {e["agent_runtime"] for e in sent + granted} == {"local"}
+        # The proposer's own trail is untouched by this command.
+        drafted = [e for e in events if e["event_type"] == "follow_up_drafted"]
+        assert {e["action"] for e in drafted} == {FOLLOW_UP_CMD_ACTION_LABEL}
+
+    def test_a_decline_is_recorded_under_the_review_label_too(self, tmp_path):
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1)
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="d"), patch(
+            "careeros.operations.follow_up.send_email",
+        ):
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        declined = [
+            e for e in _log_events(storage)
+            if e["event_type"] == "follow_up_send_declined"
+        ]
+        assert len(declined) == 1
+        assert declined[0]["action"] == REVIEW_CMD_ACTION_LABEL
+
+
+class TestReviewShowsTheNumbersTheDecisionTurnsOn:
+    """A third nudge after eleven days is a different call from one after three."""
+
+    def test_the_touch_number_and_days_elapsed_are_on_screen(self, tmp_path):
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(
+            storage, ws_path, 1, days_since_touch=DAYS_BETWEEN_TOUCHES + 1,
+            touch_count=2,
+        )
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="s"), patch(
+            "careeros.operations.follow_up.send_email",
+        ):
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        # The touch number rides in on the approval summary the proposer
+        # wrote; the elapsed days are recoverable from nowhere else on
+        # screen.
+        assert "follow-up #3" in result.output
+        assert str(DAYS_BETWEEN_TOUCHES + 1) + " day(s) since the last touch" in result.output
+
+    def test_an_unusable_timestamp_costs_the_line_not_the_item(self, tmp_path):
+        """The value can only have been hand-edited after the item was queued.
+
+        check_follow_up_due refuses such a record structurally, so the
+        cadence decision is safe either way; here it is a display detail,
+        and the reviewer must still get to read the draft.
+        """
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _, _, message_id = _queue_a_follow_up(storage, ws_path, 1)
+        approval_id = _pending_follow_ups(storage)[0].id
+        OutreachMessage.load(storage, message_id).model_copy(
+            update={"last_touched_at": "not-a-date", "sent_at": "not-a-date"},
+        ).save(storage)
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="s"), patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "bumping this to the top" in result.output
+        assert "day(s) since the last touch" not in result.output
+        mock_send_email.assert_not_called()
+        assert Approval.load(storage, approval_id).state == "pending"

@@ -9,15 +9,19 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from careeros.core.models import CadencePolicy, OutreachMessage, Person
+from careeros.core.models import Approval, CadencePolicy, OutreachMessage, Person
 from careeros.operations.approval_queue import queue_only
-from careeros.operations.approvals import list_pending, resolve_approval
+from careeros.operations.approvals import list_pending, payload_value, resolve_approval
 from careeros.operations.errors import (
-    CadenceExhausted, DraftFailed, MalformedTouchTimestamp, MissingRecipient,
-    NotDueForFollowUp, OperationError, PolicyBlocked, RelationshipClosed,
+    CadenceExhausted, DraftFailed, EntityNotFound, MalformedTouchTimestamp,
+    MissingRecipient, NotDueForFollowUp, OperationError, PolicyBlocked,
+    RelationshipClosed,
 )
 from careeros.operations.follow_up import ACTION as FOLLOW_UP_ACTION
-from careeros.operations.follow_up import CadenceStatus, check_follow_up_due, propose_follow_up
+from careeros.operations.follow_up import (
+    CadenceStatus, check_follow_up_due, decline_follow_up, execute_follow_up,
+    propose_follow_up,
+)
 from careeros.operations.outreach import (
     ACTION, decline_outreach_send, execute_outreach_send, make_message_id,
     propose_outreach_send,
@@ -39,6 +43,14 @@ MAX_REGENERATIONS = 5
 # activity log and any approval payload can be traced back to this specific
 # scheduled entrypoint rather than to the interactive `outreach send` flow.
 FOLLOW_UP_CMD_ACTION_LABEL = "outreach-follow-up"
+
+# And a distinct one for the interactive drainer below. The two commands
+# work the same queue from opposite ends, so folding them under one label
+# would make the audit log unable to answer the first question anyone asks
+# of it: was this follow-up drafted by the cron job and sent by a person, or
+# did one entrypoint do both? A re-propose from the review loop is stamped
+# with this too, because that draft was written at a human's request.
+REVIEW_CMD_ACTION_LABEL = "outreach-review"
 
 # Three drafting failures in a row means the LLM provider is down or the key
 # is dead, not that three relationships are individually unlucky — and every
@@ -450,6 +462,251 @@ def follow_up_cmd(
         rprint("Not examined (run aborted): " + str(unexamined_count))
         # Nonzero so a cron run that achieved nothing is not silently
         # indistinguishable from one with nothing to do.
+        raise typer.Exit(1)
+
+
+def _review_recipient_name(runtime: LocalRuntime, person_id: str) -> str:
+    """The name to show a reviewer, or the raw id if the record is gone.
+
+    Deliberately tolerant, for the same reason decline_follow_up is: a
+    missing people/<id>.json must not stop the user reading a draft and
+    deciding about it. The draft itself lives on the OutreachMessage, so
+    everything needed for the decision is still in hand — only the label is
+    degraded.
+    """
+    try:
+        return Person.load(runtime.storage, person_id).name
+    except (FileNotFoundError, ValueError):
+        return person_id
+
+
+def _review_message(runtime: LocalRuntime, message_id: str) -> OutreachMessage:
+    """The record holding the exact bytes execute_follow_up will transmit.
+
+    Where the displayed text comes from, and the one real difference from
+    `outreach send`: there is no fresh proposal in hand here, because a
+    different process — the scheduled proposer — wrote this approval.
+    execute_follow_up reads draft_text back off this same record and checks
+    it against the draft_sha256 taken at propose time, so showing it shows
+    what will actually go out rather than a reconstruction of it.
+
+    Converted to EntityNotFound so the caller's per-item handler catches
+    this the same way it catches every other single-item failure.
+    """
+    try:
+        return OutreachMessage.load(runtime.storage, message_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise EntityNotFound(
+            "Outreach message " + message_id + " not found."
+        ) from exc
+
+
+def _days_since_last_touch(message: OutreachMessage) -> int | None:
+    """Days since the last touch, or None when the timestamp is unusable.
+
+    On screen because it is the number the decision actually turns on — a
+    third nudge after eleven days is a different proposition from one after
+    three — and it is the only thing the reviewer needs that is recoverable
+    from neither the draft text nor the approval summary (which already
+    carries the touch number). FollowUpProposal exposes it for exactly this
+    reason; the initial display has no proposal in hand, so it comes off the
+    record instead.
+
+    None rather than a raise: this is a display detail, so a hand-edited
+    timestamp costs the reviewer one line, not the item. The cadence
+    decision itself is check_follow_up_due's, and it refuses such a value
+    structurally.
+    """
+    last_touch = message.last_touched_at or message.sent_at
+    if not last_touch:
+        return None
+    try:
+        parsed = datetime.fromisoformat(last_touch)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return (datetime.now(timezone.utc) - parsed).days
+
+
+def _review_one_follow_up(
+    runtime: LocalRuntime, approval: Approval, *, model: str | None,
+) -> str:
+    """Show one queued follow-up, take the decision, and carry it out.
+
+    Returns "sent", "declined", or "skipped". Every failure that belongs to
+    this one item — a missing recipient, an out-of-band edit to the draft, a
+    malformed payload, a dead SMTP server — is raised as an OperationError
+    for the caller to count and move past.
+
+    The loop lives in the command body (via this helper) rather than in the
+    operations layer on purpose: an agent draining the same queue makes its
+    own decisions about re-proposing, and non-approval prompts stay direct
+    Prompt.ask calls, both settled in an earlier phase.
+    """
+    job_id = payload_value(approval, "job_id")
+    person_id = payload_value(approval, "person_id")
+    message_id = payload_value(approval, "message_id")
+
+    approval_id = approval.id
+    summary = approval.summary
+    message = _review_message(runtime, message_id)
+    draft_text = message.draft_text
+    days_since = _days_since_last_touch(message)
+    recipient = _review_recipient_name(runtime, person_id)
+
+    regenerations = 0
+    while True:
+        rprint(summary)
+        if days_since is not None:
+            rprint(str(days_since) + " day(s) since the last touch.")
+        console.print(Panel(draft_text, title="Follow-up to " + recipient))
+        # Default is skip, not accept: a stray Enter on a queue drainer must
+        # not send an email to someone you want a referral from. `outreach
+        # send` can safely default to accept because the user got there by
+        # naming that one person; here the prompt arrives unbidden, once per
+        # queued item.
+        if regenerations >= MAX_REGENERATIONS:
+            choice = Prompt.ask(
+                "[A]ccept / [D]ecline / [S]kip", choices=["a", "d", "s"], default="s",
+            )
+        else:
+            choice = Prompt.ask(
+                "[A]ccept / [R]egenerate / [D]ecline / [S]kip",
+                choices=["a", "r", "d", "s"], default="s",
+            )
+        if choice == "s":
+            # Left pending, so the next review offers it again unchanged.
+            # Nothing is written, so last_touched_at does not advance and
+            # the relationship stays due — a skip is "not now", where a
+            # decline is "not this one".
+            return "skipped"
+        if choice == "r":
+            regenerations += 1
+            try:
+                proposal = propose_follow_up(
+                    runtime, job_id, person_id, model=model,
+                    action_label=REVIEW_CMD_ACTION_LABEL,
+                )
+            except (OperationError, FileNotFoundError, ValidationError) as exc:
+                # A re-propose re-runs the whole due-ness check against the
+                # cadence policy as it stands *now*, and the policy file can
+                # have been edited between the cron run that queued this and
+                # this review: a tightened days_between_touches raises
+                # NotDueForFollowUp, a lowered max_touches raises
+                # CadenceExhausted, and a deleted or broken
+                # config/cadence_policy.json raises FileNotFoundError or
+                # ValidationError, neither of which is an OperationError.
+                # None of them may cost the user this item, let alone the
+                # rest of the queue: propose_follow_up writes nothing when it
+                # refuses, so the approval on screen is still pending and the
+                # draft they were offered is still exactly what would send.
+                rprint(
+                    "[yellow]Could not redraft this follow-up, so the queued "
+                    "draft stays on offer:[/yellow]"
+                )
+                rprint(str(exc))
+                continue
+            # From here the loop is reviewing a different approval.
+            # propose_follow_up goes through open_approval, which supersedes
+            # the one it replaces — so resolving the id this item started
+            # with would now raise ApprovalNotGranted, and its digest no
+            # longer matches the stored draft either. Everything displayed
+            # and everything resolved switches to the new proposal.
+            approval_id = proposal.approval_id
+            summary = proposal.summary
+            draft_text = proposal.draft_text
+            days_since = proposal.days_since_last_touch
+            recipient = proposal.recipient_name
+            continue
+        break
+
+    if choice == "d":
+        resolve_approval(
+            runtime, approval_id,
+            ApprovalResult(approved=False, reason="declined at outreach review"),
+            action_label=REVIEW_CMD_ACTION_LABEL,
+        )
+        decline_follow_up(runtime, approval_id, action_label=REVIEW_CMD_ACTION_LABEL)
+        rprint("Declined the follow-up to " + recipient + ".")
+        return "declined"
+
+    # The keystroke above *is* the per-item approval, so the result is built
+    # here rather than routed through runtime.request_approval — which on a
+    # LocalRuntime would put a second confirmation prompt in front of the
+    # same decision the user just made. `outreach send` already constructs
+    # an ApprovalResult directly on its abort path for the same reason. No
+    # path here approves without that keystroke.
+    resolve_approval(
+        runtime, approval_id,
+        ApprovalResult(approved=True, reason="approved at outreach review"),
+        action_label=REVIEW_CMD_ACTION_LABEL,
+    )
+    outcome = execute_follow_up(
+        runtime, approval_id, action_label=REVIEW_CMD_ACTION_LABEL,
+    )
+    rprint(
+        "[green]Sent follow-up to " + outcome.recipient_name + " (touch #"
+        + str(outcome.touch_count) + ")[/green]"
+    )
+    return "sent"
+
+
+@outreach_app.command()
+def review(
+    workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
+    model: str = typer.Option(None, "--model", help="Override LLM model"),
+) -> None:
+    """Review the queued follow-up drafts and send the ones you accept.
+
+    The interactive drainer for the queue 'careeros outreach follow-up'
+    fills. Nothing here drafts on its own — every item on screen was queued by the
+    scheduled proposer — and nothing sends without a keystroke against that
+    specific draft.
+    """
+    runtime = _open_runtime(workspace)
+
+    # list_pending returns every pending approval regardless of action, so
+    # filtering is this command's job. An unrelated pending send_outreach or
+    # apply_to_job approval belongs to another flow's reviewer, carries a
+    # different payload shape, and must come out of this run untouched.
+    queue = [
+        approval for approval in list_pending(runtime.storage)
+        if approval.action == FOLLOW_UP_ACTION
+    ]
+    if not queue:
+        rprint("No follow-ups are waiting for review.")
+        return
+
+    counts = {"sent": 0, "declined": 0, "skipped": 0}
+    failed = 0
+    for approval in queue:
+        try:
+            counts[_review_one_follow_up(runtime, approval, model=model)] += 1
+        except OperationError as exc:
+            # One item's failure costs one item. The queue is the user's
+            # whole follow-up to-do list, and these failures are per-item and
+            # real — a person with no email address, a draft edited out of
+            # band since the approval was written, a payload missing a key —
+            # so abandoning the rest of the queue on the first one would
+            # leave the remaining relationships unreviewed with no
+            # indication that they had been reached.
+            failed += 1
+            rprint(
+                "[red]" + (approval.entity_id or approval.id) + ": " + str(exc)
+                + "[/red]"
+            )
+            continue
+
+    rprint(
+        "Reviewed " + str(len(queue)) + " follow-up(s): " + str(counts["sent"])
+        + " sent, " + str(counts["declined"]) + " declined, "
+        + str(counts["skipped"]) + " skipped, " + str(failed) + " failed."
+    )
+    if failed:
+        # Nonzero so a run where an item could not be acted on is
+        # distinguishable from a clean drain, which matters most when this is
+        # driven from a script rather than read off a terminal.
         raise typer.Exit(1)
 
 
