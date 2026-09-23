@@ -7,11 +7,16 @@ from careeros.core.models import (
     CadencePolicy, Company, Goals, Job, OutreachMessage, Person, PolicyConfig, Profile,
 )
 from careeros.core.policy_engine import PolicyEngine
+from careeros.mailer import send_email
 from careeros.operations._shared import digest_text as draft_digest
-from careeros.operations.approvals import open_approval
+from careeros.operations._shared import now as _now
+from careeros.operations.approvals import (
+    APPROVED, DECLINED, mark_executed, mark_failed, open_approval, payload_value,
+    require_state,
+)
 from careeros.operations.errors import (
-    CadenceExhausted, DraftFailed, EntityNotFound, NotDueForFollowUp, PolicyBlocked,
-    RelationshipClosed,
+    ArtifactChanged, CadenceExhausted, DraftFailed, EntityNotFound, MissingRecipient,
+    NotDueForFollowUp, PolicyBlocked, RelationshipClosed, SendFailed, WrongApprovalAction,
 )
 from careeros.operations.outreach import make_message_id
 from careeros.operations.outreach import subject_for as _outreach_subject_for
@@ -35,6 +40,14 @@ class FollowUpProposal:
     subject: str
     touch_number: int
     days_since_last_touch: int
+
+
+@dataclass(frozen=True)
+class FollowUpResult:
+    message_id: str
+    recipient_name: str
+    sent_at: str
+    touch_count: int
 
 
 def subject_for(job: Job) -> str:
@@ -162,3 +175,137 @@ def propose_follow_up(
         recipient_email=person.email, subject=subject,
         touch_number=touch_number, days_since_last_touch=days_since,
     )
+
+
+def _load_message_person_job(
+    runtime: AgentRuntime, message_id: str, person_id: str, job_id: str,
+) -> tuple[OutreachMessage, Person, Job]:
+    try:
+        message = OutreachMessage.load(runtime.storage, message_id)
+        person = Person.load(runtime.storage, person_id)
+        job = Job.load(runtime.storage, job_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise EntityNotFound("Outreach message, person, or job not found.") from exc
+    return message, person, job
+
+
+def execute_follow_up(
+    runtime: AgentRuntime, approval_id: str, *, action_label: str,
+) -> FollowUpResult:
+    """Send the follow-up an approved approval authorized, and nothing else.
+
+    Drafts nothing and calls no LLM: the text that sends is read back from
+    the stored OutreachMessage and checked against the digest recorded when
+    the approval was created, so the bytes reviewed are the bytes
+    transmitted. Unlike execute_outreach_send, the subject is not bound into
+    the payload — propose_follow_up never wrote one — so it is recomputed
+    from the Job here via subject_for(job), which is why the Job is loaded
+    alongside the message and person.
+
+    approval.action is checked against ACTION before anything else is read
+    off the payload, and before any state change: passing an approval minted
+    by a different flow here would otherwise be safe only by accident of the
+    two actions' payload keys not colliding.
+
+    The approval is consumed (mark_executed) before the send is attempted.
+    This ordering is a Critical finding inherited from an earlier phase's
+    final review of execute_outreach_send: consuming the approval after the
+    send leaves it approved — and its digest matching — for the whole
+    duration of the SMTP conversation, so a crash, a Ctrl-C, or a second
+    concurrent process could send twice. Consuming first means a crash
+    mid-send leaves a stale executed record with an unsent message, which is
+    recoverable; a duplicate email to a person you want a referral from is
+    not. The digest and recipient checks precede that consumption, so those
+    two refusals still leave the approval approved and retryable — nothing
+    was attempted yet when they fire.
+    """
+    approval = require_state(runtime.storage, approval_id, APPROVED)
+    if approval.action != ACTION:
+        raise WrongApprovalAction(approval_id, ACTION, approval.action)
+    message_id = payload_value(approval, "message_id")
+    person_id = payload_value(approval, "person_id")
+    job_id = payload_value(approval, "job_id")
+    expected_digest = payload_value(approval, "draft_sha256")
+
+    message, person, job = _load_message_person_job(runtime, message_id, person_id, job_id)
+
+    if draft_digest(message.draft_text) != expected_digest:
+        raise ArtifactChanged("outreach/" + message_id + ".json")
+
+    if not person.email:
+        # Nothing has been attempted, so the approval stays approved: adding
+        # the address and retrying must still work without re-approving.
+        raise MissingRecipient(person_id, person.name)
+
+    # Consume the approval before attempting the external action — see the
+    # ordering note in the docstring above.
+    mark_executed(runtime, approval_id)
+
+    try:
+        send_email(person.email, subject_for(job), message.draft_text)
+    except Exception as exc:
+        message.model_copy(update={"send_state": "failed"}).save(runtime.storage)
+        mark_failed(runtime, approval_id, type(exc).__name__)
+        runtime.record_activity(runtime.new_event(
+            "follow_up_send_failed", action_label,
+            "Send failed for follow-up to " + person.name + ": "
+            + type(exc).__name__,
+            status="failed", entity_type="outreach_message", entity_id=message_id,
+        ))
+        raise SendFailed(str(exc)) from exc
+
+    sent_at = _now()
+    new_touch_count = message.touch_count + 1
+    message.model_copy(update={
+        "send_state": "sent", "sent_at": sent_at,
+        "last_touched_at": sent_at, "touch_count": new_touch_count,
+    }).save(runtime.storage)
+    runtime.record_activity(runtime.new_event(
+        "follow_up_sent", action_label, "Sent follow-up to " + person.name,
+        entity_type="outreach_message", entity_id=message_id,
+    ))
+    return FollowUpResult(
+        message_id=message_id, recipient_name=person.name, sent_at=sent_at,
+        touch_count=new_touch_count,
+    )
+
+
+def decline_follow_up(
+    runtime: AgentRuntime, approval_id: str, *, action_label: str,
+) -> None:
+    """Record that a declined approval's follow-up will not be sent.
+
+    Loads only the message, not the person: this is pure bookkeeping, and a
+    missing people/<id>.json must not turn "record that the user said no"
+    into an error. The person's name is used in the activity summary when
+    the record is present; the raw person id is used otherwise, so a decline
+    can always be recorded.
+    """
+    approval = require_state(runtime.storage, approval_id, DECLINED)
+    message_id = payload_value(approval, "message_id")
+    person_id = payload_value(approval, "person_id")
+    try:
+        message = OutreachMessage.load(runtime.storage, message_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise EntityNotFound("Outreach message not found.") from exc
+
+    try:
+        recipient = Person.load(runtime.storage, person_id).name
+    except (FileNotFoundError, ValueError):
+        recipient = person_id
+
+    # Advance last_touched_at even though nothing was sent. Without this the
+    # relationship stays past-due and the very next scheduled run would
+    # re-propose the exact follow-up the user just declined. Advancing it
+    # defers by one full cadence period instead — a fresh choice to defer,
+    # not to stop. touch_count is deliberately left alone: a decline is not
+    # a touch, so a user who declines every time never exhausts max_touches
+    # on that basis. `careeros outreach close` is the explicit off switch.
+    message.model_copy(update={
+        "send_state": "declined", "last_touched_at": _now(),
+    }).save(runtime.storage)
+    runtime.record_activity(runtime.new_event(
+        "follow_up_send_declined", action_label,
+        "Send declined for follow-up to " + recipient,
+        entity_type="outreach_message", entity_id=message_id,
+    ))

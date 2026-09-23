@@ -7,13 +7,19 @@ from careeros.core.models import (
     Approval, CadencePolicy, Company, Job, OutreachMessage, Person, PolicyConfig,
     Profile,
 )
-from careeros.operations.approvals import PENDING, SUPERSEDED
-from careeros.operations.errors import (
-    CadenceExhausted, DraftFailed, EntityNotFound, NotDueForFollowUp, PolicyBlocked,
-    RelationshipClosed,
+from careeros.operations.approvals import (
+    APPROVED, DECLINED, EXECUTED, FAILED, PENDING, SUPERSEDED, resolve_approval,
 )
-from careeros.operations.follow_up import propose_follow_up
+from careeros.operations.errors import (
+    ApprovalNotGranted, ArtifactChanged, CadenceExhausted, DraftFailed, EntityNotFound,
+    MalformedApproval, MissingRecipient, NotDueForFollowUp, PolicyBlocked,
+    RelationshipClosed, SendFailed, WrongApprovalAction,
+)
+from careeros.operations.follow_up import (
+    decline_follow_up, execute_follow_up, propose_follow_up,
+)
 from careeros.operations.outreach import make_message_id
+from careeros.runtime.base import ApprovalResult
 from careeros.runtime.factory import open_local_runtime
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace
@@ -75,6 +81,20 @@ def _propose(runtime, draft=FOLLOW_UP_DRAFT, model=None):
 def _log(storage):
     date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return storage.read("activity/" + date + ".jsonl").decode()
+
+
+def _approve(runtime, approval_id, reason="user said yes"):
+    return resolve_approval(
+        runtime, approval_id, ApprovalResult(approved=True, reason=reason),
+        action_label="follow_up",
+    )
+
+
+def _decline(runtime, approval_id, reason="user said no"):
+    return resolve_approval(
+        runtime, approval_id, ApprovalResult(approved=False, reason=reason),
+        action_label="follow_up",
+    )
 
 
 class TestProposeFollowUpHappyPath:
@@ -288,3 +308,230 @@ class TestDraftFailed:
 
         assert OutreachMessage.load(runtime.storage, MESSAGE_ID).draft_text == PRIOR_DRAFT
         assert [p for p in runtime.storage.list("approvals/") if p.endswith(".json")] == []
+
+
+# subject_for(job) = "Re: " + outreach.subject_for(job); job seeded above has
+# title="Senior SRE", company="Acme Corp".
+EXPECTED_SUBJECT = "Re: Regarding Senior SRE at Acme Corp"
+
+
+class TestExecuteFollowUp:
+    def test_sends_the_approved_draft_and_marks_everything_sent(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        with patch("careeros.operations.follow_up.send_email") as mock_send:
+            result = execute_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+
+        mock_send.assert_called_once_with(
+            "jane@acme.com", EXPECTED_SUBJECT, FOLLOW_UP_DRAFT
+        )
+        assert result.message_id == MESSAGE_ID
+        assert result.recipient_name == "Jane Doe"
+        assert result.sent_at
+        assert result.touch_count == 2
+
+        message = OutreachMessage.load(runtime.storage, MESSAGE_ID)
+        assert message.send_state == "sent"
+        assert message.sent_at == result.sent_at
+        assert Approval.load(runtime.storage, proposal.approval_id).state == EXECUTED
+        assert "follow_up_sent" in _log(runtime.storage)
+
+    def test_a_successful_send_sets_last_touched_at_and_increments_touch_count(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        with patch("careeros.operations.follow_up.send_email"):
+            result = execute_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+
+        message = OutreachMessage.load(runtime.storage, MESSAGE_ID)
+        assert message.last_touched_at == result.sent_at
+        assert message.touch_count == 2
+
+    @pytest.mark.parametrize(
+        "state", [PENDING, DECLINED, SUPERSEDED, FAILED, EXECUTED]
+    )
+    def test_refuses_any_state_but_approved(self, tmp_path, state):
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        proposal = _propose(runtime)
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        approval.model_copy(update={"state": state}).save(runtime.storage)
+        with patch("careeros.operations.follow_up.send_email") as mock_send:
+            with pytest.raises(ApprovalNotGranted):
+                execute_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+        mock_send.assert_not_called()
+        # Verify the refusal did not mutate the approval's state.
+        assert Approval.load(runtime.storage, proposal.approval_id).state == state
+
+    def test_refuses_an_approval_belonging_to_a_different_action(self, tmp_path):
+        # An approval id is an opaque cross-process string; nothing else would
+        # stop execute_follow_up from acting on an approval minted by a
+        # different action. Must be caught before any state change, including
+        # before mark_executed.
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        approval.model_copy(update={"action": "send_outreach"}).save(runtime.storage)
+        with patch("careeros.operations.follow_up.send_email") as mock_send:
+            with pytest.raises(WrongApprovalAction) as exc:
+                execute_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+        assert exc.value.expected == "send_follow_up"
+        assert exc.value.actual == "send_outreach"
+        mock_send.assert_not_called()
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+
+    def test_refuses_when_the_draft_changed_after_approval(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        # Simulate an out-of-band edit that superseding cannot catch.
+        message = OutreachMessage.load(runtime.storage, MESSAGE_ID)
+        message.model_copy(update={"draft_text": "something else entirely"}).save(runtime.storage)
+
+        with patch("careeros.operations.follow_up.send_email") as mock_send:
+            with pytest.raises(ArtifactChanged):
+                execute_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+        mock_send.assert_not_called()
+        # Nothing was attempted, so the approval must stay approved and retryable.
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+
+    def test_a_malformed_payload_raises_rather_than_key_error(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        approval.model_copy(update={"payload": {}}).save(runtime.storage)
+        with patch("careeros.operations.follow_up.send_email") as mock_send:
+            with pytest.raises(MalformedApproval):
+                execute_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+        mock_send.assert_not_called()
+
+    def test_refuses_without_a_recipient_email(self, tmp_path):
+        runtime = _runtime(tmp_path, with_email=False)
+        _seed_message(runtime.storage)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        with patch("careeros.operations.follow_up.send_email") as mock_send:
+            with pytest.raises(MissingRecipient) as exc:
+                execute_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+        assert exc.value.person_name == "Jane Doe"
+        mock_send.assert_not_called()
+        # Nothing was attempted, so adding the address and retrying must work
+        # without re-approving.
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+
+    def test_smtp_failure_marks_the_message_and_approval_failed(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        with patch(
+            "careeros.operations.follow_up.send_email",
+            side_effect=RuntimeError("smtp says: bad creds for alice@example.com"),
+        ):
+            with pytest.raises(SendFailed):
+                execute_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+
+        assert OutreachMessage.load(runtime.storage, MESSAGE_ID).send_state == "failed"
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        assert approval.state == FAILED
+        # Exception type name only — never the raw message, which can quote
+        # the SMTP server's response and cannot be scrubbed from an
+        # append-only activity log.
+        assert approval.detail == "RuntimeError"
+        log = _log(runtime.storage)
+        assert "follow_up_send_failed" in log
+        assert "bad creds" not in log
+
+    def test_mark_executed_happens_before_the_send(self, tmp_path):
+        """Verify the approval is consumed before the external action.
+
+        This is the ordering a Phase 12a final review flagged as Critical
+        for execute_outreach_send: consuming the approval after the send
+        leaves it approved and retryable for the whole SMTP conversation, so
+        a crash or a second concurrent process could send twice. Consuming it
+        first means a crash mid-send leaves a stale `executed` record with an
+        unsent message — recoverable, unlike a duplicate email.
+        """
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        def check_approval_executed(*args, **kwargs):
+            # When send_email is called, the approval must already be EXECUTED.
+            approval = Approval.load(runtime.storage, proposal.approval_id)
+            assert approval.state == EXECUTED
+
+        with patch(
+            "careeros.operations.follow_up.send_email",
+            side_effect=check_approval_executed,
+        ):
+            execute_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+
+
+class TestDeclineFollowUp:
+    def test_marks_the_message_declined_and_logs(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        proposal = _propose(runtime)
+        _decline(runtime, proposal.approval_id)
+
+        decline_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+
+        message = OutreachMessage.load(runtime.storage, MESSAGE_ID)
+        assert message.send_state == "declined"
+        assert "follow_up_send_declined" in _log(runtime.storage)
+
+    def test_advances_last_touched_at_but_leaves_touch_count_alone(self, tmp_path):
+        # The whole subtlety of decline: it defers the cadence (advances
+        # last_touched_at) without counting as a real touch (touch_count is
+        # unchanged), so a user who declines every time never exhausts
+        # max_touches — a deliberate tradeoff; `careeros outreach close` is
+        # the explicit off switch.
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        original = OutreachMessage.load(runtime.storage, MESSAGE_ID)
+        proposal = _propose(runtime)
+        _decline(runtime, proposal.approval_id)
+
+        decline_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+
+        message = OutreachMessage.load(runtime.storage, MESSAGE_ID)
+        assert message.last_touched_at != original.last_touched_at
+        assert message.touch_count == original.touch_count
+
+    def test_refuses_when_the_approval_was_not_declined(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        with pytest.raises(ApprovalNotGranted):
+            decline_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+
+    def test_declining_defers_the_cadence_instead_of_letting_it_be_reproposed(self, tmp_path):
+        """The consequence that makes the last_touched_at advance load-bearing.
+
+        Without it, the relationship stays past-due and propose_follow_up
+        would immediately re-propose the very follow-up the user just
+        declined. With it, the decline defers by one full cadence period.
+        """
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        proposal = _propose(runtime)
+        _decline(runtime, proposal.approval_id)
+
+        decline_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+
+        with pytest.raises(NotDueForFollowUp):
+            _propose(runtime)
