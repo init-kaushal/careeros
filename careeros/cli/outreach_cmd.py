@@ -52,21 +52,20 @@ def _open_runtime(workspace_path: str | None) -> LocalRuntime:
 
 def _open_automation_runtime(workspace_path: str | None) -> AutomationRuntime:
     try:
-        runtime = open_automation_runtime(resolve_storage(workspace_path))
+        # AutomationRuntime's own default is auto-approve — the right default
+        # for discover-and-apply, which is the one command in this project
+        # where a wrong decision only costs an application. It is the wrong
+        # default here: this command proposes and stops, and must never
+        # accidentally approve anything if a future code path along this
+        # command's route ever calls request_approval. Passing queue_only
+        # makes that path deny-by-default instead of silently saying yes,
+        # leaving the class-wide default untouched for everyone else.
+        return open_automation_runtime(
+            resolve_storage(workspace_path), approval_callback=queue_only,
+        )
     except (WorkspaceNotConfigured, FileNotFoundError):
         rprint("[red]No workspace configured. Run 'careeros onboard' first.[/red]")
         raise typer.Exit(1)
-    # AutomationRuntime.request_approval hardcodes auto-approve — the right
-    # default for discover-and-apply, which is the one command in this
-    # project where a wrong decision only costs an application. It is the
-    # wrong default here: this command proposes and stops, and must never
-    # accidentally approve anything if a future code path along this
-    # command's route ever calls request_approval. Overriding the instance
-    # method with queue_only makes that path deny-by-default instead of
-    # silently saying yes, without changing AutomationRuntime's class-wide
-    # behavior for discover-and-apply or anything else that opens one.
-    runtime.request_approval = queue_only
-    return runtime
 
 
 def _is_due_for_follow_up(message: OutreachMessage, policy: CadencePolicy) -> bool:

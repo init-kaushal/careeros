@@ -30,9 +30,21 @@ def open_claude_code_runtime(
     return ClaudeCodeRuntime(storage, ctx, session_id or uuid.uuid4().hex, approval_callback)
 
 
-def open_automation_runtime(storage: StorageProvider, session_id: str | None = None) -> AutomationRuntime:
+def open_automation_runtime(
+    storage: StorageProvider,
+    session_id: str | None = None,
+    approval_callback: ApprovalCallback | None = None,
+) -> AutomationRuntime:
+    """Open an AutomationRuntime, optionally overriding its approval callback.
+
+    approval_callback stays optional here, unlike open_claude_code_runtime's:
+    auto-approve is a deliberate default for automation (see
+    AutomationRuntime.__init__), not an unwired path.
+    """
     ctx = open_workspace(storage)
-    return AutomationRuntime(storage, ctx, session_id or uuid.uuid4().hex)
+    return AutomationRuntime(
+        storage, ctx, session_id or uuid.uuid4().hex, approval_callback
+    )
 
 
 def resolve_storage(workspace_path: str | None = None) -> LocalFilesystemStorage:

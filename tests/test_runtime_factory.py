@@ -53,6 +53,29 @@ def test_open_automation_runtime_bootstraps_existing_workspace(tmp_path):
     assert runtime.session_id
 
 
+def test_open_automation_runtime_threads_an_approval_callback_through(tmp_path):
+    from careeros.runtime.base import ActionProposal, ApprovalResult
+
+    storage = LocalFilesystemStorage(str(tmp_path))
+    init_workspace(storage)
+    callback = MagicMock(return_value=ApprovalResult(approved=False, reason="queued"))
+
+    runtime = open_automation_runtime(storage, approval_callback=callback)
+    result = runtime.request_approval(ActionProposal(action="send_follow_up", summary="?"))
+
+    assert result.approved is False
+    assert callback.call_count == 1
+
+
+def test_open_automation_runtime_defaults_to_auto_approve(tmp_path):
+    from careeros.runtime.base import ActionProposal
+
+    storage = LocalFilesystemStorage(str(tmp_path))
+    init_workspace(storage)
+    runtime = open_automation_runtime(storage)
+    assert runtime.request_approval(ActionProposal(action="apply_to_job", summary="?")).approved
+
+
 def test_open_automation_runtime_missing_manifest_raises(tmp_path):
     storage = LocalFilesystemStorage(str(tmp_path))
     with pytest.raises(FileNotFoundError):

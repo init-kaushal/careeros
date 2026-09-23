@@ -43,6 +43,34 @@ class TestAutomationRuntime:
         result = runtime.request_approval(proposal)
         assert result.approved is True
 
+    def test_auto_approve_is_still_the_default_when_no_callback_is_passed(self):
+        # The default is load-bearing for discover-and-apply, which passes
+        # no callback and relies on this staying an unconditional yes.
+        storage = MagicMock()
+        ctx = MagicMock()
+        runtime = AutomationRuntime(storage, ctx, session_id="sess-1")
+        assert runtime._approval_callback is None
+        result = runtime.request_approval(ActionProposal(action="apply_to_job", summary="?"))
+        assert result == ApprovalResult(approved=True, reason="auto-approved by automation policy")
+
+    def test_a_passed_callback_is_the_one_consulted(self):
+        storage = MagicMock()
+        ctx = MagicMock()
+        seen = []
+
+        def _deny(proposal):
+            seen.append(proposal)
+            return ApprovalResult(approved=False, reason="nope")
+
+        runtime = AutomationRuntime(storage, ctx, session_id="sess-1", approval_callback=_deny)
+        proposal = ActionProposal(action="send_follow_up", summary="Send follow-up?")
+        result = runtime.request_approval(proposal)
+
+        # The callback, not the auto-approve default, decided — and it saw
+        # the proposal rather than being called blind.
+        assert result == ApprovalResult(approved=False, reason="nope")
+        assert seen == [proposal]
+
     def test_record_activity_stamps_agent_runtime_and_session_id(self):
         storage = MagicMock()
         ctx = MagicMock()

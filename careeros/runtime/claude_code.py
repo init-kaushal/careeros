@@ -1,11 +1,12 @@
 from __future__ import annotations
-from typing import Callable
 from careeros.core.activity import ActivityEvent, ActivityLogger
-from careeros.runtime.base import ActionProposal, ApprovalResult
+from careeros.runtime.base import ActionProposal, ApprovalCallback, ApprovalResult
 from careeros.storage.interface import StorageProvider
 from careeros.workspace.manager import WorkspaceContext
 
-ApprovalCallback = Callable[[ActionProposal], ApprovalResult]
+# Re-exported: the alias moved to careeros.runtime.base when a second
+# runtime started accepting one, and factory.py imports it from here.
+__all__ = ["ApprovalCallback", "ClaudeCodeRuntime"]
 
 
 class ClaudeCodeRuntime:

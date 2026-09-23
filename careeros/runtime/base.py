@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol
 from careeros.core.activity import ActivityEvent
 from careeros.storage.interface import StorageProvider
 
@@ -17,6 +17,13 @@ class ActionProposal:
 class ApprovalResult:
     approved: bool
     reason: str | None = None
+
+
+# Lives here, next to the two types it relates, because more than one
+# runtime now takes one: ClaudeCodeRuntime requires it, AutomationRuntime
+# accepts it optionally. careeros.runtime.claude_code re-exports the name so
+# existing importers keep working.
+ApprovalCallback = Callable[[ActionProposal], ApprovalResult]
 
 
 class AgentRuntime(Protocol):
