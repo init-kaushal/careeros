@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from pydantic import ValidationError
 
 from careeros.core.ids import make_approval_id
 from careeros.core.models import Approval
+from careeros.operations._shared import now as _now
 from careeros.operations.errors import ApprovalNotGranted, MalformedApproval
 from careeros.runtime.base import AgentRuntime, ApprovalResult
 from careeros.storage.interface import StorageProvider
@@ -19,10 +18,6 @@ SUPERSEDED = "superseded"
 
 _PREFIX = "approvals/"
 _SUFFIX = ".json"
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def list_pending(storage: StorageProvider) -> list[Approval]:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
 from careeros.browser.driver import BrowserProfileBusy, launch_browser
 from careeros.browser.fillers.generic import GenericFiller
@@ -13,6 +12,9 @@ from careeros.browser.session import check_board_sessions
 from careeros.core.models import Goals, Job, PolicyConfig, Profile, Skills
 from careeros.core.policy_engine import PolicyEngine
 from careeros.core.resume_select import ResumeChoice, select_resume
+from careeros.operations._shared import digest_stored as _digest_stored
+from careeros.operations._shared import digest_text as _digest_text
+from careeros.operations._shared import now as _now
 from careeros.operations.approvals import (
     APPROVED, mark_executed, mark_failed, open_approval, payload_value,
     require_state,
@@ -24,7 +26,6 @@ from careeros.operations.errors import (
 )
 from careeros.runtime.base import AgentRuntime
 from careeros.skills.cover_letter import generate_cover_letter
-from careeros.storage.interface import StorageProvider
 
 ACTION = "apply_to_job"
 
@@ -59,24 +60,6 @@ class ApplyResult:
     # should surface this as a warning, not silently print unqualified
     # success while that anomaly sits unread in the activity log.
     teardown_failed: bool = False
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _digest_stored(storage: StorageProvider, path: str) -> str:
-    """sha256 of the bytes actually on disk at `path`.
-
-    Not a digest of the in-memory value that produced them: the payload
-    must bind to what execute_apply will read back later, not to what
-    propose happened to hold a moment before the write.
-    """
-    return hashlib.sha256(storage.read(path)).hexdigest()
-
-
-def _digest_text(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def propose_apply(

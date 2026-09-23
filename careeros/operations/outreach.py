@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
 from careeros.core.ids import slugify
 from careeros.core.models import (
@@ -10,6 +8,8 @@ from careeros.core.models import (
 )
 from careeros.core.policy_engine import PolicyEngine
 from careeros.mailer import send_email
+from careeros.operations._shared import digest_text as draft_digest
+from careeros.operations._shared import now as _now
 from careeros.operations.approvals import (
     APPROVED, DECLINED, mark_executed, mark_failed, open_approval, payload_value,
     require_state,
@@ -43,10 +43,6 @@ class OutreachResult:
     sent_at: str
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def make_message_id(job_id: str, person_id: str) -> str:
     # job/person arrive from CLI arguments or an agent call; slugify before
     # using them as path segments so an arbitrary or malformed value never
@@ -58,10 +54,6 @@ def make_message_id(job_id: str, person_id: str) -> str:
 
 def subject_for(job: Job) -> str:
     return "Regarding " + job.title + " at " + job.company
-
-
-def draft_digest(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def propose_outreach_send(

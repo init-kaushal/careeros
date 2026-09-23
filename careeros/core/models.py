@@ -311,7 +311,9 @@ class OutreachMessage(BaseModel):
     person_id: str
     draft_text: str
     send_state: str = "drafted"
-    referral_state: str = "research"
+    referral_state: Literal[
+        "research", "referral_requested", "referral_confirmed", "closed"
+    ] = "research"
     created_at: str
     sent_at: str | None = None
 

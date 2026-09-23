@@ -1,5 +1,7 @@
 import pytest
-from careeros.core.models import Profile, Skill, Skills, Preferences, Goals
+from pydantic import ValidationError
+
+from careeros.core.models import Profile, Skill, Skills, Preferences, Goals, OutreachMessage
 
 
 def test_profile_save_and_load(tmp_workspace):
@@ -77,3 +79,14 @@ def test_goals_round_trip(tmp_workspace):
     loaded = Goals.load_or_empty(storage)
     assert loaded.short_term == ["Get a staff role"]
     assert loaded.non_negotiables == ["No on-call"]
+
+
+def test_outreach_message_referral_state_rejects_unknown_value(tmp_workspace):
+    storage = tmp_workspace.storage
+    storage.atomic_write(
+        "outreach/bad.json",
+        b'{"id":"bad","job_id":"j1","person_id":"p1","draft_text":"hi",'
+        b'"referral_state":"banana","created_at":"2026-09-22T00:00:00+00:00"}',
+    )
+    with pytest.raises(ValidationError):
+        OutreachMessage.load(storage, "bad")
