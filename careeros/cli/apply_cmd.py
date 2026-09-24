@@ -6,6 +6,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
+from careeros.cli._display import verbatim_panel_args
 from careeros.operations.apply import ACTION, execute_apply, propose_apply
 from careeros.operations.approvals import resolve_approval
 from careeros.operations.errors import (
@@ -69,10 +70,18 @@ def apply_cmd(
         # Review loop
         regenerations = 0
         while True:
-            console.print(Panel(
+            # Both rendered verbatim: the cover letter is LLM-authored and is
+            # what gets transmitted to the employer, and the title is built
+            # from a scraped company and job title. With Rich's default
+            # markup on, a bracketed span in either is deleted from the
+            # display or — if it looks like a closing tag — raises
+            # MarkupError, so the reviewer would approve text that is not
+            # the text that gets submitted.
+            body, title = verbatim_panel_args(
                 proposal.cover_letter,
-                title="Cover Letter — " + proposal.company + " / " + proposal.title,
-            ))
+                "Cover Letter — " + proposal.company + " / " + proposal.title,
+            )
+            console.print(Panel(body, title=title))
 
             if regenerations >= MAX_REGENERATIONS:
                 choice = Prompt.ask("[A]ccept / [Q]uit", choices=["a", "q"], default="a")

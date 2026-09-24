@@ -582,3 +582,68 @@ class TestApplyResumeSelection:
         assert "superseded master" in result.output
         assert "resumes/master.md" in _unwrapped(result.output)
         assert "careeros resume variant --job acme-sre-abc1" in _unwrapped(result.output)
+
+
+# A cover letter shaped the way an LLM actually writes one. Rich's default
+# markup parsing silently *deletes* every bracketed span below, and the
+# second one looks like a closing tag, which raises rich.errors.MarkupError
+# outright.
+BRACKETED_COVER_LETTER = (
+    "Dear Hiring Manager,\n\n"
+    "I saw the [posting](https://boards.greenhouse.io/acme) and am [available] "
+    "from June. Attaching my CV [resume.pdf].\n\nBest,\nAlice"
+)
+CLOSING_TAG_COVER_LETTER = "Dear Hiring Manager,\n\nI am a [/b] strong fit.\n\nBest,\nAlice"
+
+
+class TestCoverLetterIsDisplayedVerbatim:
+    """The reviewed bytes must be the submitted bytes.
+
+    `apply` shows the cover letter for approval and then submits it to an
+    employer, so the same fidelity argument that applies to an outreach
+    draft applies here — with markup on, the reviewer approves text that
+    has words missing from what actually gets sent.
+    """
+
+    def _run(self, tmp_path, cover_letter):
+        runtime = _mock_runtime(tmp_path)
+        mock_filler = MagicMock()
+        mock_filler.can_handle.return_value = True
+        mock_filler.fill.return_value = True
+        mock_filler.platform = "Greenhouse"
+
+        with patch("careeros.cli.apply_cmd.resolve_storage", return_value=MagicMock()), \
+             patch("careeros.cli.apply_cmd.open_local_runtime", return_value=runtime), \
+             patch("careeros.operations.apply.Job.load", return_value=_make_job()), \
+             patch("careeros.operations.apply.Profile.load_or_empty", return_value=_make_profile()), \
+             patch("careeros.operations.apply.Skills.load_or_empty", return_value=Skills()), \
+             patch("careeros.operations.apply.Goals.load_or_empty", return_value=Goals()), \
+             patch("careeros.operations.apply.generate_cover_letter", return_value=cover_letter), \
+             patch("careeros.operations.apply.FILLERS", [mock_filler]), \
+             patch("careeros.operations.apply.launch_browser") as mock_browser, \
+             patch("careeros.cli.apply_cmd.Prompt.ask", side_effect=["a"]):
+            mock_browser.return_value.__enter__ = MagicMock(return_value=(MagicMock(), MagicMock()))
+            mock_browser.return_value.__exit__ = MagicMock(return_value=False)
+            return runner.invoke(apply_app, ["acme-sre-abc1"])
+
+    def test_every_bracketed_span_survives_to_the_screen(self, tmp_path):
+        result = self._run(tmp_path, BRACKETED_COVER_LETTER)
+
+        assert result.exit_code == 0
+        shown = _unwrapped(result.output)
+        # Asserted span by span rather than as one substring, because rich
+        # wraps the panel body: it is the *characters* that must survive,
+        # and each of these is deleted outright when markup is on.
+        for span in ("[posting]", "[available]", "[resume.pdf]"):
+            assert span in shown, span + " was eaten by rich markup"
+
+    def test_a_closing_tag_shaped_span_does_not_crash_the_review(self, tmp_path):
+        """MarkupError is raised at print time, before any prompt.
+
+        So with markup on this aborted the command outright — the user could
+        not approve or reject an application they never got to read.
+        """
+        result = self._run(tmp_path, CLOSING_TAG_COVER_LETTER)
+
+        assert result.exit_code == 0
+        assert "[/b]" in _unwrapped(result.output)
