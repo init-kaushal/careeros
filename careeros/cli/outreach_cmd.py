@@ -8,6 +8,7 @@ from rich import print as rprint
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
+from rich.text import Text
 
 from careeros.core.models import Approval, CadencePolicy, OutreachMessage, Person
 from careeros.operations.approval_queue import queue_only
@@ -65,6 +66,32 @@ MAX_CONSECUTIVE_DRAFT_FAILURES = 3
 @people_app.callback()
 def _people_app_callback() -> None:
     """Manage researched people."""
+
+
+def _verbatim(value: str) -> Text:
+    """Wrap text that must reach the screen unaltered.
+
+    Rich console markup is on by default, so a bracketed span in a string
+    handed to console.print/Panel is *interpreted*: it is either deleted
+    from the display or, if it looks like a closing tag, raises
+    rich.errors.MarkupError. Neither is acceptable for anything derived
+    from an LLM draft, a scraped job title, or a researched person's name,
+    and both were happening here. A draft reading "See the
+    [posting](https://x.com/job) I mentioned" displayed as "See the
+    (https://x.com/job) I mentioned" while execute_* emailed the raw
+    stored bytes — which destroys the only safety argument these review
+    loops have, that the bytes on screen are the bytes transmitted. And a
+    draft containing "[/b]" raised MarkupError, which is not an
+    OperationError, so it escaped `review`'s per-item guard and abandoned
+    the rest of the queue with a traceback and no summary.
+
+    A rich Text instance carries no markup by definition, so passing one
+    is what makes the rendered characters the source characters. Applied
+    to panel titles as well as bodies: a title is built from job.company,
+    job.title and person.name, all of which are external data this project
+    never authored.
+    """
+    return Text(value)
 
 
 def _open_runtime(workspace_path: str | None) -> LocalRuntime:
@@ -220,7 +247,10 @@ def send(
 
         regenerations = 0
         while True:
-            console.print(Panel(proposal.draft_text, title="Outreach to " + proposal.recipient_name))
+            console.print(Panel(
+                _verbatim(proposal.draft_text),
+                title=_verbatim("Outreach to " + proposal.recipient_name),
+            ))
             if regenerations >= MAX_REGENERATIONS:
                 choice = Prompt.ask("[A]ccept / [Q]uit", choices=["a", "q"], default="a")
             else:
@@ -487,8 +517,12 @@ def _review_message(runtime: LocalRuntime, message_id: str) -> OutreachMessage:
     `outreach send`: there is no fresh proposal in hand here, because a
     different process — the scheduled proposer — wrote this approval.
     execute_follow_up reads draft_text back off this same record and checks
-    it against the draft_sha256 taken at propose time, so showing it shows
-    what will actually go out rather than a reconstruction of it.
+    it against the draft_sha256 taken at propose time, so this record's
+    draft_text is what will actually go out rather than a reconstruction of
+    it. Displaying it byte-for-byte is a separate obligation, discharged by
+    _verbatim at the point of printing: this docstring used to claim the
+    display was faithful while Rich markup was silently deleting bracketed
+    spans from it.
 
     Converted to EntityNotFound so the caller's per-item handler catches
     this the same way it catches every other single-item failure.
@@ -557,10 +591,14 @@ def _review_one_follow_up(
 
     regenerations = 0
     while True:
-        rprint(summary)
+        # Verbatim for the same reason the panel is: the summary the proposer
+        # wrote embeds job.company and job.title straight from the posting.
+        console.print(_verbatim(summary))
         if days_since is not None:
             rprint(str(days_since) + " day(s) since the last touch.")
-        console.print(Panel(draft_text, title="Follow-up to " + recipient))
+        console.print(Panel(
+            _verbatim(draft_text), title=_verbatim("Follow-up to " + recipient),
+        ))
         # Default is skip, not accept: a stray Enter on a queue drainer must
         # not send an email to someone you want a referral from. `outreach
         # send` can safely default to accept because the user got there by

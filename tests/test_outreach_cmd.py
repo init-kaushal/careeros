@@ -288,3 +288,48 @@ class TestOutreachSendApprovalRecord:
         assert mock_send.call_args[0][2] == "second draft"
         storage = LocalFilesystemStorage(ws_path)
         assert OutreachMessage.load(storage, MESSAGE_ID).draft_text == "second draft"
+
+
+class TestSendShowsTheBytesItSends:
+    """`outreach send` had the same latent Rich-markup bug as `review`.
+
+    Rich console markup is on by default, so a bracketed span in a draft
+    handed to Panel is deleted from the display (or, if it looks like a
+    closing tag, raises MarkupError) while execute_outreach_send mails the
+    raw stored bytes. `review` is where it mattered most, but the class of
+    bug is the same and so is the fix.
+    """
+
+    BRACKETED = (
+        "Hi Jane, see the [posting](https://x.com/job) I mentioned. "
+        "Attaching my CV [resume.pdf]. I am [available] from June."
+    )
+
+    def test_a_bracketed_draft_is_displayed_as_it_is_sent(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path)
+        with patch("careeros.operations.outreach.generate_outreach_message", return_value=self.BRACKETED), \
+             patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="a"), \
+             patch("careeros.runtime.local.Confirm.ask", return_value=True), \
+             patch("careeros.operations.outreach.send_email") as mock_send:
+            result = runner.invoke(outreach_app, ["send", "--job", JOB_ID, "--person", PERSON_ID, "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert mock_send.call_args[0][2] == self.BRACKETED
+        # Every bracketed span survived to the screen. Asserted span by span
+        # rather than as one substring because Rich wraps the panel body.
+        for span in ("[posting]", "[resume.pdf]", "[available]"):
+            assert span in result.output
+
+    def test_a_closing_tag_in_a_draft_is_not_a_traceback(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path)
+        draft = "Hi Jane, following up. [/b] Best, Alice"
+        with patch("careeros.operations.outreach.generate_outreach_message", return_value=draft), \
+             patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="a"), \
+             patch("careeros.runtime.local.Confirm.ask", return_value=True), \
+             patch("careeros.operations.outreach.send_email") as mock_send:
+            result = runner.invoke(outreach_app, ["send", "--job", JOB_ID, "--person", PERSON_ID, "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "[/b]" in result.output
+        assert mock_send.call_args[0][2] == draft

@@ -1312,3 +1312,139 @@ class TestReviewShowsTheNumbersTheDecisionTurnsOn:
         assert "day(s) since the last touch" not in result.output
         mock_send_email.assert_not_called()
         assert Approval.load(storage, approval_id).state == "pending"
+
+
+# A draft shaped the way an LLM actually writes one. Every bracketed span
+# here is silently *deleted* by Rich's default markup parsing, so with
+# markup on, the reviewer reads text that is not the text that gets mailed.
+BRACKETED_DRAFT = (
+    "Hi Jane, see the [posting](https://x.com/job) I mentioned. "
+    "Attaching my CV [resume.pdf]. My rate is [dim] negotiable and "
+    "I am [available] from June. Thanks [i] appreciate it."
+)
+
+# And a draft whose bracketed span looks like a *closing* tag. Rich raises
+# rich.errors.MarkupError on this, which is not an OperationError, so it
+# used to escape review's per-item guard entirely.
+CLOSING_TAG_DRAFT = "Hi Jane, just following up. [/b] Best, Alice"
+
+
+class TestTheTextOnScreenIsTheTextThatGetsEmailed:
+    """The whole safety argument of `review` is that those two are equal.
+
+    Rich console markup is enabled by default, so handing a raw string to
+    Panel or console.print has the display interpret bracketed spans while
+    execute_follow_up mails the raw stored bytes. This class pins the
+    equality directly rather than asserting a bracket-free substring, which
+    is what let the bug live under a green suite.
+    """
+
+    def _panel_body(self, output):
+        """The draft lines lifted back out of the rendered Rich panel.
+
+        Rich draws a box and pads to the console width, so the bytes cannot
+        be compared to the draft as-is. Stripping the border characters and
+        rejoining gives back the wrapped draft text, which is enough to
+        assert that no character of it went missing.
+        """
+        lines = []
+        for line in output.splitlines():
+            if line.startswith("│") and line.endswith("│"):
+                lines.append(line[1:-1].strip())
+        return " ".join(part for part in lines if part)
+
+    def test_a_bracketed_draft_is_displayed_exactly_as_it_is_sent(self, tmp_path):
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1, draft=BRACKETED_DRAFT)
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="a"), patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        mock_send_email.assert_called_once()
+        _, _, body = mock_send_email.call_args.args
+        assert body == BRACKETED_DRAFT
+        # The discriminating assertion: the bytes handed to send_email are
+        # recoverable, character for character, from what was on screen.
+        assert self._panel_body(result.output) == " ".join(BRACKETED_DRAFT.split())
+        # And spelled out span by span, so a failure says which one vanished.
+        for span in ("[posting]", "[resume.pdf]", "[dim]", "[available]", "[i]"):
+            assert span in result.output
+
+    def test_a_closing_tag_in_a_draft_does_not_abandon_the_queue(self, tmp_path):
+        """MarkupError is not an OperationError, so the guard never saw it.
+
+        Before the fix this raised out of the first item's panel render:
+        item 2 was never offered, both approvals stayed pending, and no
+        summary line printed.
+        """
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1, draft=CLOSING_TAG_DRAFT)
+        _queue_a_follow_up(storage, ws_path, 2, draft=FOLLOW_UP_DRAFT)
+        queue = _pending_follow_ups(storage)
+        assert len(queue) == 2
+        first_id, second_id = queue[0].id, queue[1].id
+
+        with patch(
+            "careeros.cli.outreach_cmd.Prompt.ask", return_value="a",
+        ) as mock_ask, patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        # Both items were offered, and both sent.
+        assert mock_ask.call_count == 2
+        assert mock_send_email.call_count == 2
+        bodies = [call.args[2] for call in mock_send_email.call_args_list]
+        assert CLOSING_TAG_DRAFT in bodies
+        # The tag reached the screen as text rather than being parsed.
+        assert "[/b]" in result.output
+        # And the summary — the thing a MarkupError escape destroyed — printed.
+        assert "2 sent" in result.output
+        states = _approval_states(storage)
+        assert states[first_id] == "executed"
+        assert states[second_id] == "executed"
+
+    def test_a_bracketed_title_and_summary_do_not_abandon_the_queue(self, tmp_path):
+        """The panel title and the approval summary are external data too.
+
+        The summary the proposer wrote embeds job.company and job.title
+        straight off a scraped posting, and the panel title is built from a
+        researched Person's name. A closing-tag-shaped span in either raised
+        MarkupError from those two print calls, exactly as one in the draft
+        did — so both are rendered verbatim now.
+        """
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        # Seeded and then edited *before* the proposer runs, so the bracketed
+        # company name is baked into the approval summary it writes.
+        job_id, person_id, _ = _seed_relationship(
+            storage, 1, days_since_touch=DAYS_BETWEEN_TOUCHES + 1,
+            company_name="Acme [/b] Corp",
+        )
+        Person.load(storage, person_id).model_copy(
+            update={"name": "Jane [/i] Doe"},
+        ).save(storage)
+        with patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+            return_value=FOLLOW_UP_DRAFT,
+        ):
+            assert runner.invoke(
+                outreach_app, ["follow-up", "--workspace", ws_path],
+            ).exit_code == 0
+        assert "[/b]" in _pending_follow_ups(storage)[0].summary
+
+        with patch("careeros.cli.outreach_cmd.Prompt.ask", return_value="s"), patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        mock_send_email.assert_not_called()
+        assert "Acme [/b] Corp" in result.output
+        assert "Jane [/i] Doe" in result.output
+        assert "1 skipped" in result.output
