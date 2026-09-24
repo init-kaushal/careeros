@@ -664,3 +664,185 @@ documents; read that module directly if you need its complete vocabulary.
 finds an `executed` `apply_to_job` approval for a job whose `applied_at` is still unset, and the
 job is skipped rather than re-proposed — see `docs/superpowers/DIVERGENCES.md` for why that state
 is reachable and why skipping, not resubmitting, is the safe choice.
+
+## 12. Follow-ups — `propose_follow_up` → `resolve_approval` → `execute_follow_up`
+
+The third flow, and the first one built around a **queue**. Outreach and apply are both driven by
+a human who is present: something proposes, the same command asks, and the answer comes back
+within one process. A follow-up is proposed by a scheduled command that runs with nobody watching,
+so the proposal and the decision are always in different processes, minutes or days apart. That
+makes this the flow whose shape an integrator most needs to understand before using it.
+
+### 12.1 The queue model
+
+`careeros outreach follow-up` is a proposer and nothing else. It finds every relationship due for a
+follow-up under `config/cadence_policy.json`, drafts a message for each, opens a `pending`
+`Approval` for each, and exits. **It sends nothing and it approves nothing.** There is no code path
+from that command to `send_email`; it does not even consult `request_approval`, because
+`propose_follow_up` reaches `open_approval` directly.
+
+What it leaves behind is a queue in `approvals/`. Two things can drain it:
+
+- `careeros outreach review`, the interactive command, which is what a human uses; or
+- **your agent**, which is an equal citizen here rather than a fallback. `list_pending(storage)`
+  returns every pending approval; filter to `action == "send_follow_up"` and you have exactly the
+  queue `review` shows. Nothing about draining it requires the CLI.
+
+`list_pending` returns approvals for **every** action, so filtering is the caller's job. If you skip
+that filter you will pick up `send_outreach` and `apply_to_job` approvals and hand them to
+`execute_follow_up`, which refuses them with `WrongApprovalAction` — safely, but only because that
+guard exists.
+
+**An unreviewed relationship accumulates one pending follow-up, not a backlog.** Re-proposing for
+the same `(action, entity_id)` supersedes the prior open approval (§7), so a daily cron against a
+relationship nobody reviews leaves one `pending` record, not thirty. The scheduled command also
+skips any relationship that already has a pending follow-up, so it will not even redraft — which
+matters because a redraft costs an LLM call. Those are two separate mechanisms and you get both.
+
+### 12.2 The sequence
+
+- `propose_follow_up(runtime, job_id, person_id, *, model=None, action_label, now=None)` — checks
+  that the relationship is live and due, drafts the next touch, writes it to the
+  `OutreachMessage`'s `draft_text`, and opens a `pending` approval with `action ==
+  "send_follow_up"`. Returns a `FollowUpProposal` (`approval_id`, `message_id`, `summary`,
+  `draft_text`, `recipient_name`, `recipient_email`, `subject`, `touch_number`,
+  `days_since_last_touch`). `now` is an injectable clock: pass one value for a whole batch so that
+  the enumeration and each proposal cannot disagree across a midnight boundary.
+- `resolve_approval(runtime, approval_id, result, *, action_label)` — the generic function §5 and
+  §7 describe. It is not specific to any action.
+- `execute_follow_up(runtime, approval_id, *, action_label)` — verifies the action, refuses a closed
+  relationship, re-verifies the draft digest, requires a recipient address, marks the approval
+  `executed`, and only then sends. Returns a `FollowUpResult` (`message_id`, `recipient_name`,
+  `sent_at`, `touch_count`).
+- `decline_follow_up(runtime, approval_id, *, action_label)` — the domain-side bookkeeping after a
+  `declined` decision. Call it; see §12.4 for why declining without it re-proposes tomorrow.
+
+`action_label` is required and keyword-only on all four, exactly as for outreach and apply.
+
+**Process 1 — propose** (or just let the scheduled command do this):
+
+```python
+from careeros.operations.approval_queue import queue_only
+from careeros.operations.follow_up import propose_follow_up
+from careeros.runtime.factory import open_agent_runtime
+
+runtime = open_agent_runtime(approval_callback=queue_only, session_id="agent-propose")
+proposal = propose_follow_up(runtime, "acme-sre-abc1", "acme-corp-jane-doe", action_label="agent")
+print(proposal.approval_id, proposal.touch_number, proposal.days_since_last_touch)
+# -> surface proposal.summary and proposal.draft_text to the human in conversation
+```
+
+**Process 2 — find the queue and drain it** (a later session, with no memory of the first):
+
+```python
+from careeros.operations.approvals import list_pending, resolve_approval
+from careeros.operations.follow_up import ACTION, execute_follow_up
+from careeros.runtime.base import ApprovalResult
+from careeros.operations.approval_queue import queue_only
+from careeros.runtime.factory import open_agent_runtime
+
+runtime = open_agent_runtime(approval_callback=queue_only, session_id="agent-drain")
+
+for approval in list_pending(runtime.storage):
+    if approval.action != ACTION:
+        continue  # not this flow's business — see §12.1
+    print(approval.summary)
+    # -> ask the human about THIS approval, then:
+    resolve_approval(
+        runtime, approval.id,
+        ApprovalResult(approved=True, reason="user said yes in chat"),
+        action_label="agent",
+    )
+    result = execute_follow_up(runtime, approval.id, action_label="agent")
+    print(result.recipient_name, result.touch_count)
+```
+
+**Show the draft from the record, not from a reconstruction.** You are displaying text some earlier
+process wrote, so read it back: `OutreachMessage.load(storage, payload["message_id"]).draft_text`
+is the exact string `execute_follow_up` will transmit, because the digest check ties them together.
+Do not re-render it through anything that interprets markup — the CLI had a bug where Rich deleted
+bracketed spans from the display while the raw bytes were emailed, so a draft reading
+`See the [posting](https://…)` was approved by someone who never saw the word "posting".
+
+### 12.3 The payload, and the four keys `execute_follow_up` actually reads
+
+Six keys are written at propose time:
+
+| key | read at execute? | notes |
+|---|---|---|
+| `message_id` | **yes** | which `OutreachMessage` to load; also read by `decline_follow_up` |
+| `person_id` | **yes** | the recipient to load; also read by `decline_follow_up` |
+| `draft_sha256` | **yes** | re-verified against the stored `draft_text`; mismatch raises `ArtifactChanged` |
+| `subject` | **yes** | read back verbatim, never re-derived — see below |
+| `job_id` | no | audit only |
+| `touch_number` | no | audit only; the touch count that actually persists is recomputed at execute time |
+
+Verified by grepping every `payload_value` call site in `careeros/operations/follow_up.py` rather
+than by inference: four in `execute_follow_up`, two in `decline_follow_up`, none anywhere else.
+Treat `job_id` and `touch_number` as a record of what was proposed, not as inputs — changing them
+changes nothing about what sends.
+
+`subject` is bound into the payload at propose time and read back verbatim, so editing the job's
+title or company between approval and execution cannot change the subject line of a message the
+user already approved. `execute_follow_up` does not load the `Job` at all as a result, which also
+means a missing or corrupt job file cannot block an already-approved send.
+
+### 12.4 The refusals, and what each means for a retry
+
+`propose_follow_up` refuses a relationship that is not due, with **four** distinct types. The
+distinction matters because it tells you whether to retry, when, or never:
+
+| raised | means | retry? |
+|---|---|---|
+| `NotDueForFollowUp(message_id, days_since, days_between_touches)` | too soon, or never contacted at all | **yes**, after the remaining days |
+| `CadenceExhausted(message_id, touch_count, max_touches)` | the configured number of touches is used up | no — not without the user raising `max_touches` |
+| `RelationshipClosed(message_id, reason)` | `referral_confirmed`, or `careeros outreach close` was run | **never** |
+| `MalformedTouchTimestamp(message_id, value)` | `last_touched_at`/`sent_at` holds something no cadence decision can use | not until a human fixes the record |
+
+`MalformedTouchTimestamp` is the one to actually handle. Those fields are unvalidated `str | None`,
+so the value can be unparseable, or a perfectly legal ISO string that is offset-naive
+(`"2026-09-01"` does it) and therefore not comparable to an aware `now`. CareerOS never writes
+either, so the trigger is always external — a hand edit, or **your own** write through this
+contract. If you enumerate many relationships, catch it per record and keep going; letting it
+escape kills the whole batch, which is exactly the bug the CLI shipped with.
+
+`propose_follow_up` can also raise `EntityNotFound` (a missing job, person or company),
+`PolicyBlocked` (logged before it raises, so the audit trail shows the block) and `DraftFailed`
+(the LLM returned nothing — note this is raised *after* the call is paid for, so bound your retries).
+
+`execute_follow_up` refuses with `WrongApprovalAction` (an approval from another flow),
+`RelationshipClosed` (**checked again at the point of action**, so an approval minted before a close
+can never send), `ArtifactChanged` (the stored draft changed since approval), `MissingRecipient`
+(no `person.email`) and `SendFailed` (SMTP raised). The first four all fire *before* the approval is
+consumed, so they leave it `approved` and retryable once you fix the cause. `SendFailed` does not:
+by then the approval is `executed`, then `failed`, and is finished.
+
+**Declining is two calls, not one.** `resolve_approval(..., approved=False)` records the decision;
+`decline_follow_up` does the domain bookkeeping, which is advancing `last_touched_at`. Skip the
+second and the relationship is still due, so the next scheduled run drafts it again — the user
+declines the same relationship every day. Note that a decline deliberately does **not** increment
+`touch_count` (a decline is not a touch, nothing was sent), which is why declining defers by one
+period rather than counting toward `max_touches`. To stop a cadence permanently, close it.
+
+### 12.5 Activity events this flow emits
+
+Same discipline as §6.1 and §11.5. From `careeros/operations/follow_up.py`:
+
+| `event_type` | Emitted by | When |
+|---|---|---|
+| `policy_blocked` | `propose_follow_up` | the policy engine blocks the job, before any LLM call |
+| `follow_up_drafted` | `propose_follow_up` | every successful draft, before any human review — including each regeneration |
+| `approval_requested` / `approval_superseded` / `approval_granted` / `approval_declined` | `careeros/operations/approvals.py` | the generic approval-lifecycle events §6.1 describes; this flow uses the identical machinery |
+| `follow_up_sent` | `execute_follow_up` | `send_email` succeeded |
+| `follow_up_send_failed` | `execute_follow_up` | `send_email` raised; the approval has already moved `executed -> failed` by the time this is logged |
+| `follow_up_send_declined` | `decline_follow_up` | the domain bookkeeping for a declined approval — separate from `approval_declined`, which records only the decision |
+
+And these are emitted by `careeros/cli/outreach_cmd.py`, not by the operations layer — caller-side
+bookkeeping you will only see if a CLI command produced them, and which **your** integration is
+responsible for emitting an equivalent of if you want the same audit trail:
+
+| `event_type` | Emitted by | When |
+|---|---|---|
+| `follow_up_propose_error` | `outreach follow-up` | `propose_follow_up` raised something other than `PolicyBlocked`, which logs itself — the only durable trace that a relationship was considered and failed rather than simply not being due |
+| `follow_up_run_aborted` | `outreach follow-up` | three consecutive `DraftFailed` ended the run early, on the assumption the LLM provider is down and further attempts would be paid for and discarded |
+| `cadence_closed` | `outreach close` | the cadence was ended deliberately. The summary names the *prior* `referral_state`, because setting `"closed"` overwrites it and the append-only log is then the only place a confirmed referral that was later closed out is still visible |

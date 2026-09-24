@@ -97,7 +97,21 @@ an append-only audit trail.
   same review loop as `apply`, then sends it by email only after explicit approval — the one place
   in CareerOS that makes a real, irreversible external action.
 - **`careeros people update <id> --email <address>`** — CareerOS never guesses an email address;
-  add one manually once you've found it.
+  add one manually once you've found it. This is a deliberate permanent refusal, not a missing
+  feature: every way to obtain a stranger's work address automatically is pattern-guessing, and a
+  wrong guess means mailing someone who never entered this system.
+
+**Follow-up cadence**
+- **`careeros outreach follow-up`** — the scheduled proposer, meant for cron. Finds every
+  relationship due for another touch under `config/cadence_policy.json`, drafts one, and stops.
+  **It never sends.** Every draft is left as a pending approval, so nothing reaches a human's
+  inbox that you did not read first. `--dry-run` shows what it would draft without drafting it.
+- **`careeros outreach review`** — drains that queue interactively: shows each draft, then accept,
+  regenerate, decline, or skip. Accepting is the only path that sends.
+- **`careeros outreach close --job <id> --person <id> --reason <text>`** — ends a cadence for good.
+  `--reason` is required, because a cadence that stopped for an unrecorded reason is exactly what
+  you will not remember in three months. Declining a follow-up only defers it by one interval;
+  closing is the actual off switch.
 
 **Automation seam**
 Every command above routes through an `AgentRuntime` interface rather than talking to storage or
@@ -116,10 +130,15 @@ send or a job application, hold a conversation about it, and execute the action 
 all without a live connection back to the first process. See
 [docs/agent-integration.md](docs/agent-integration.md) for the full contract — the `AgentRuntime`
 Protocol, the approval schema, the error vocabulary, and a runnable two-process example for each
-flow. **Both outreach send and job apply are drivable from an external agent session today** —
-apply's cross-process contract (§11 of that document) is new for this task and, unlike outreach's,
-has not yet been proven with a committed test that runs the propose and execute halves as two
-literal subprocesses.
+flow. **Outreach send, job apply and follow-ups are all drivable from an external agent session
+today.** Apply's cross-process contract (§11 of that document) and the follow-up contract (§12)
+have not been proven with a committed test that runs the propose and execute halves as two literal
+subprocesses, as outreach's has; both sections' snippets were run that way by hand to verify them.
+
+Follow-ups are the first flow built around a *queue*, and §12 documents it as a first-class entry
+point rather than a CLI detail: the scheduled command leaves pending approvals behind and
+`list_pending` is how any caller finds them, so an agent can drain that queue instead of
+`careeros outreach review` with no loss of function.
 
 Every CLI command honors the explicit `--workspace` flag, then `CAREEROS_WORKSPACE`, then the config
 file saved by `careeros onboard`, in that precedence order — see `docs/agent-integration.md` §2.
@@ -207,7 +226,7 @@ LLM/browser/SMTP call mocked at the boundary.
 
 ## Status
 
-Twelve phases shipped. The first eleven, in order:
+Twelve phases shipped, plus the first half of the thirteenth. The first eleven, in order:
 
 1. **Workspace core** — onboarding, profile extraction, `StorageProvider` protocol, export/import
 2. **Job pipeline** — job schema, LLM-assisted scoring against your profile
@@ -241,9 +260,19 @@ All workspace I/O goes through the `StorageProvider` protocol, so storage backen
 swapped without touching business logic. Every meaningful action — both outcomes of any
 approval decision, not just the success path — writes to the append-only activity log.
 
-Phase 12's own manual exit condition — a real outreach send driven from an agent session against
-the user's actual workspace, not a test — is still outstanding; see `ROADMAP.md`. See
-[ROADMAP.md](ROADMAP.md) for what's planned next: outreach expansion (Phase 13).
+Phase 13a has shipped the follow-up cadence: a relationship now carries from its first message
+through repeated touches on a schedule you configure, stopping on its own at `max_touches` and on
+request at `careeros outreach close`, without you having to remember any of that state. The
+scheduled half proposes and never sends, so every message still passes a human first. Automated
+email discovery was declined rather than deferred — see `docs/superpowers/DIVERGENCES.md` for the
+reasoning, along with the LinkedIn Terms-of-Service decision that 13b rests on.
+
+Two manual verifications are outstanding, and a green test suite does not discharge either. Phase
+12's — a real outreach send driven from an agent session against a real workspace rather than a
+test — remains open, and Phase 13a does not discharge it. Phase 13a's own exit condition needs an
+LLM credential for the drafting step, which is not configured here; the automated half is green but
+the end-to-end run against a real model has not happened. See [ROADMAP.md](ROADMAP.md) for both,
+and for what remains in Phase 13b: LinkedIn connection requests.
 
 ## License
 

@@ -185,7 +185,7 @@ half.
 
 **Why:** Phase 7 deliberately scoped outreach down to email-only sending and dropped LinkedIn connection-request automation entirely — no LinkedIn write access, no automated email discovery. Those were the right calls for a first outreach phase, but "complete capabilities" means revisiting them now that the approval-gated send pattern is proven.
 
-**Note on scope honesty:** this phase's own text below gates LinkedIn *connection-request automation* on a ToS investigation, while Phases 3 and 7 already ship LinkedIn job scraping and LinkedIn people-search scraping without one. That inconsistency was flagged by the 2026-09-20 review and isn't resolved by this document alone — either the ToS concern applies to what's already shipped (in which case Phases 3/7 need their own look, tracked as a follow-up item, not silently rewritten here) or it doesn't apply to connection automation either. This phase's design session should settle that question explicitly rather than inherit an unexamined double standard.
+**Note on scope honesty — SETTLED.** This phase's text below gated LinkedIn *connection-request automation* on a ToS investigation while Phases 3 and 7 already shipped LinkedIn scraping without one. The 2026-09-20 review flagged the inconsistency and the Phase 13 design session settled it, as that review asked: the relevant line is **approved action versus unapproved volume**, not reads versus writes. A scripted read and a scripted write are the same kind of act; what makes either defensible is that a human authorised *that* act. On that reading Phases 3 and 7 need no retroactive review, and 13b needs per-item approval, which it has. The decision — full automation, risk accepted by the owner of the account being automated — and the four things it explicitly does *not* license are recorded in `docs/superpowers/DIVERGENCES.md`.
 
 **What it builds:**
 - LinkedIn connection-request drafting with the same review-and-approve pattern as email send, if a ToS-compliant automation path exists
@@ -193,6 +193,30 @@ half.
 - Revisiting automated email discovery only if a genuinely reliable, non-guessing public source is identified — otherwise this stays manual by design, not an oversight
 
 **Exit condition:** `careeros outreach` can carry a referral relationship from first message through a tracked follow-up cadence without the user needing to remember state themselves; LinkedIn connection automation ships only if the ToS investigation clears it — otherwise this phase ships the referral-tracking half and documents why LinkedIn automation was declined.
+
+### Phase 13a — shipped (follow-up cadence)
+
+The referral-tracking half is built. `careeros outreach follow-up` is a scheduled proposer that
+finds every relationship due under `config/cadence_policy.json`, drafts the next touch, leaves each
+as a pending approval, and **sends nothing**; `careeros outreach review` drains that queue
+interactively; `careeros outreach close --reason` ends a cadence for good. The cadence itself lives
+in `careeros/operations/follow_up.py` behind one shared `check_follow_up_due` predicate, so the
+enumeration filter and the operation cannot disagree about what is due. Follow-ups are also the
+first flow an external agent can drive as a *queue* — `docs/agent-integration.md` §12 documents
+draining it via `list_pending` as a first-class entry point rather than a CLI detail.
+
+Automated email discovery was **declined, not deferred** — the reasoning is recorded in
+`DIVERGENCES.md` so a later phase does not read it as an open gap.
+
+**13b remains:** LinkedIn connection requests (`careeros outreach connect`), gated on the ToS
+decision recorded above rather than on an open question.
+
+**Outstanding manual verification, not dischargeable by a green suite:**
+- **Phase 12's** manual exit condition — a real outreach send driven from an agent session — is
+  still outstanding. Phase 13a does **not** discharge it.
+- **Phase 13a's own** exit condition needs an LLM credential for the drafting step, which this
+  environment does not have. The automated half is green; the end-to-end run against a real model
+  has not happened.
 
 ---
 
