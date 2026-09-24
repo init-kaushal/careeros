@@ -12,7 +12,9 @@ from rich.text import Text
 
 from careeros.core.models import Approval, CadencePolicy, OutreachMessage, Person
 from careeros.operations.approval_queue import queue_only
-from careeros.operations.approvals import list_pending, payload_value, resolve_approval
+from careeros.operations.approvals import (
+    APPROVED, list_by_state, list_pending, payload_value, resolve_approval,
+)
 from careeros.operations.errors import (
     CadenceExhausted, DraftFailed, EntityNotFound, MalformedTouchTimestamp,
     MissingRecipient, NotDueForFollowUp, OperationError, PolicyBlocked,
@@ -690,6 +692,47 @@ def _review_one_follow_up(
     return "sent"
 
 
+def _report_stranded_follow_ups(runtime: LocalRuntime) -> None:
+    """Name the approved-but-unsent follow-ups this command cannot touch.
+
+    A send refused *before* it was attempted — no address on file, or the
+    stored draft edited out from under the approval — deliberately leaves
+    the approval `approved` so the refusal stays retryable. But
+    `list_pending` does not report an `approved` record, so the queue above
+    cannot see it and the reviewer has no way to learn it exists. It is a
+    decision the user already made that silently produced nothing.
+
+    Reported, not retried, and that limit is structural rather than a
+    choice to defer work: `resolve_approval` requires `pending`, so the
+    accept path raises ApprovalNotGranted against an `approved` record
+    immediately, and the decline path has no legal transition at all —
+    `resolve_approval` is the only writer of `declined`, and
+    `decline_follow_up` then requires `declined`. Retrying in place would
+    need either a new approved->declined edge or a reopen-to-pending
+    operation, and neither is worth widening the approval state machine for
+    when the scheduled proposer already recovers the relationship: since
+    nothing was sent, `last_touched_at` never advanced, so it is still due,
+    and open_approval now supersedes `approved` as well as `pending`.
+
+    Deliberately prints nothing when there are none: this is an anomaly
+    notice, and a clean run must not carry a line about it.
+    """
+    stranded = [
+        approval for approval in list_by_state(runtime.storage, APPROVED)
+        if approval.action == FOLLOW_UP_ACTION
+    ]
+    if not stranded:
+        return
+    rprint(
+        "[yellow]" + str(len(stranded)) + " follow-up(s) were approved but "
+        "never sent: the send was refused before it was attempted (no email "
+        "address on file, or the draft changed under the approval). They "
+        "cannot be decided again here — only a pending approval can be "
+        "decided. The next 'careeros outreach follow-up' run supersedes each "
+        "one and re-drafts it if the relationship is still due.[/yellow]"
+    )
+
+
 @outreach_app.command()
 def review(
     workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
@@ -714,6 +757,11 @@ def review(
     ]
     if not queue:
         rprint("No follow-ups are waiting for review.")
+        # Still worth saying on this path — in fact most worth saying here.
+        # A relationship whose send was refused pre-attempt has an approved
+        # approval and no pending one, so "nothing is waiting" was the whole
+        # of what this command told the user about it.
+        _report_stranded_follow_ups(runtime)
         return
 
     counts = {"sent": 0, "declined": 0, "skipped": 0}
@@ -741,6 +789,10 @@ def review(
         + " sent, " + str(counts["declined"]) + " declined, "
         + str(counts["skipped"]) + " skipped, " + str(failed) + " failed."
     )
+    # Read after the loop, so a missing recipient hit *this* run is included:
+    # its approval is approved-and-unexecuted by now, exactly like one
+    # stranded by an earlier run.
+    _report_stranded_follow_ups(runtime)
     if failed:
         # Nonzero so a run where an item could not be acted on is
         # distinguishable from a clean drain, which matters most when this is

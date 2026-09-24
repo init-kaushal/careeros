@@ -1718,3 +1718,158 @@ class TestAStrandedApprovedApprovalCannotSendTwice:
             )
         assert result.exit_code == 0
         assert mock_third.call_count == 1
+
+
+class TestReviewReportsStrandedApprovals:
+    """Reported, never retried.
+
+    resolve_approval requires `pending`, so an `approved` item has no legal
+    transition from this command: accepting raises ApprovalNotGranted, and
+    declining is unreachable because resolve_approval is the only writer of
+    `declined` and decline_follow_up then requires `declined`. So `review`
+    says the item exists and leaves it exactly as it found it.
+    """
+
+    def _strand_one(self, ws_path, storage, idx=1):
+        """Produce one approved-but-unexecuted follow-up approval.
+
+        The only way in: accept an item whose recipient has no address, so
+        execute_follow_up refuses before mark_executed.
+        """
+        _, person_id, _ = _seed_relationship(
+            storage, idx, days_since_touch=DAYS_BETWEEN_TOUCHES + 1,
+        )
+        Person.load(storage, person_id).model_copy(
+            update={"email": None},
+        ).save(storage)
+        with patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+            return_value=FOLLOW_UP_DRAFT,
+        ):
+            assert runner.invoke(
+                outreach_app, ["follow-up", "--workspace", ws_path],
+            ).exit_code == 0
+        approval_id = _pending_follow_ups(storage)[0].id
+        with patch("careeros.operations.follow_up.send_email"):
+            assert runner.invoke(
+                outreach_app, ["review", "--workspace", ws_path], input="a\n",
+            ).exit_code == 1
+        assert Approval.load(storage, approval_id).state == "approved"
+        return approval_id
+
+    def test_the_notice_names_the_count_and_the_remedy(self, tmp_path):
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        approval_id = self._strand_one(ws_path, storage)
+        states_before = _approval_states(storage)
+
+        # A second run, with nothing pending at all: "nothing is waiting" was
+        # previously the whole of what this command said about the stranded
+        # item.
+        with patch("careeros.operations.follow_up.send_email") as mock_send_email:
+            result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert "No follow-ups are waiting for review" in result.output
+        assert "1 follow-up(s) were approved but never sent" in result.output
+        assert "careeros outreach follow-up" in result.output
+        # No state changes, no sending, no prompting.
+        mock_send_email.assert_not_called()
+        assert _approval_states(storage) == states_before
+        assert Approval.load(storage, approval_id).state == "approved"
+
+    def test_the_notice_prints_alongside_a_drained_queues_summary(self, tmp_path):
+        """A stranded item and a healthy one in the same run.
+
+        Note the shape this has to take. A stranded approval cannot outlive
+        a proposer run any more — the proposer supersedes it and re-drafts
+        the relationship — so "one approved leftover plus a fresh pending
+        queue" is only reachable when the strand happens *during* the run
+        being reported on, which is exactly this.
+        """
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _, person_id_1, _ = _seed_relationship(
+            storage, 1, days_since_touch=DAYS_BETWEEN_TOUCHES + 1,
+        )
+        _seed_relationship(storage, 2, days_since_touch=DAYS_BETWEEN_TOUCHES + 1)
+        Person.load(storage, person_id_1).model_copy(
+            update={"email": None},
+        ).save(storage)
+        with patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+            return_value=FOLLOW_UP_DRAFT,
+        ):
+            assert runner.invoke(
+                outreach_app, ["follow-up", "--workspace", ws_path],
+            ).exit_code == 0
+        assert len(_pending_follow_ups(storage)) == 2
+
+        with patch("careeros.operations.follow_up.send_email") as mock_send_email:
+            result = runner.invoke(
+                outreach_app, ["review", "--workspace", ws_path], input="a\na\n",
+            )
+
+        assert result.exit_code == 1
+        mock_send_email.assert_called_once()
+        # The whole summary printed, and the notice sits next to it.
+        assert "Reviewed 2 follow-up(s): 1 sent, 0 declined, 0 skipped, 1 failed" in result.output
+        assert "1 follow-up(s) were approved but never sent" in result.output
+
+    def test_an_item_stranded_by_this_very_run_is_reported(self, tmp_path):
+        """The notice is read after the loop, not before it."""
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _, person_id, _ = _queue_a_follow_up(storage, ws_path, 1)
+        Person.load(storage, person_id).model_copy(
+            update={"email": None},
+        ).save(storage)
+
+        with patch("careeros.operations.follow_up.send_email") as mock_send_email:
+            result = runner.invoke(
+                outreach_app, ["review", "--workspace", ws_path], input="a\n",
+            )
+
+        assert result.exit_code == 1
+        mock_send_email.assert_not_called()
+        assert "1 failed" in result.output
+        assert "1 follow-up(s) were approved but never sent" in result.output
+
+    def test_no_notice_when_there_are_none(self, tmp_path):
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1)
+
+        with patch("careeros.operations.follow_up.send_email"):
+            result = runner.invoke(
+                outreach_app, ["review", "--workspace", ws_path], input="a\n",
+            )
+
+        assert result.exit_code == 0
+        assert "1 sent" in result.output
+        assert "approved but never sent" not in result.output
+
+    def test_an_approved_approval_of_another_action_is_not_reported(self, tmp_path):
+        """The filter is this command's, exactly as it is for the queue."""
+        from careeros.operations.apply import ACTION as APPLY_ACTION
+        from careeros.operations.approvals import open_approval
+        from careeros.runtime.base import ApprovalResult
+        from careeros.operations.approvals import resolve_approval
+        from careeros.runtime.factory import open_local_runtime
+
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        job_id, _, _ = _seed_relationship(
+            storage, 1, days_since_touch=DAYS_BETWEEN_TOUCHES + 1,
+        )
+        runtime = open_local_runtime(storage)
+        apply_approval = open_approval(
+            runtime, APPLY_ACTION, "Apply to this job?", {"job_id": job_id},
+            entity_type="job", entity_id=job_id, action_label="apply",
+        )
+        resolve_approval(
+            runtime, apply_approval.id, ApprovalResult(approved=True),
+            action_label="apply",
+        )
+        assert Approval.load(storage, apply_approval.id).state == "approved"
+
+        result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        assert "approved but never sent" not in result.output
+        assert Approval.load(storage, apply_approval.id).state == "approved"
