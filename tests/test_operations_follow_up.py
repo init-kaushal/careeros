@@ -556,6 +556,83 @@ class TestExecuteFollowUp:
         # without re-approving.
         assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
 
+    def test_refuses_to_send_to_a_relationship_closed_after_approval(self, tmp_path):
+        """A closed relationship is refused at the point of action, not only
+        at propose time.
+
+        The approval is reached the production way: a pre-send refusal (no
+        address on file) deliberately leaves it `approved` and retryable, and
+        that is precisely how an authorization comes to outlive the
+        relationship it was granted against. The close itself is out of band —
+        `careeros outreach close` supersedes the approvals it can see, but an
+        approval an agent minted before the user closed the record by some
+        other route is stopped only here.
+        """
+        runtime = _runtime(tmp_path, with_email=False)
+        _seed_message(runtime.storage)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        with patch("careeros.operations.follow_up.send_email") as mock_send:
+            with pytest.raises(MissingRecipient):
+                execute_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+        mock_send.assert_not_called()
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+
+        # The user supplies the missing address — and ends the relationship.
+        person = Person.load(runtime.storage, PERSON_ID)
+        person.model_copy(update={"email": "jane@acme.com"}).save(runtime.storage)
+        message = OutreachMessage.load(runtime.storage, MESSAGE_ID)
+        message.model_copy(update={
+            "referral_state": "closed", "closed_reason": "took another offer",
+        }).save(runtime.storage)
+
+        with patch("careeros.operations.follow_up.send_email") as mock_send:
+            with pytest.raises(RelationshipClosed) as exc:
+                execute_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+
+        # The recorded reason, not the bare state: it is what the refusal is
+        # for, and a caller has to be able to word its own message.
+        assert exc.value.reason == "took another offer"
+        mock_send.assert_not_called()
+        # Before any state change, so a relationship closed by mistake and
+        # re-opened leaves the authorization intact.
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+        assert "follow_up_sent" not in _log(runtime.storage)
+
+    @pytest.mark.parametrize(
+        "update, expected_reason",
+        [
+            ({"referral_state": "closed"}, "closed"),
+            ({"referral_state": "referral_confirmed"}, "referral_confirmed"),
+            ({"closed_reason": "they ghosted me"}, "they ghosted me"),
+        ],
+    )
+    def test_every_terminal_relationship_marker_refuses_the_send(
+        self, tmp_path, update, expected_reason,
+    ):
+        """The whole terminal-state rule binds the send path, not just the
+        `closed` half of it.
+
+        Same disjunction check_follow_up_due applies, because it is literally
+        the same function: referral_confirmed is terminal too, and a
+        closed_reason on its own is terminal even if referral_state was never
+        moved.
+        """
+        runtime = _runtime(tmp_path)
+        _seed_message(runtime.storage)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        message = OutreachMessage.load(runtime.storage, MESSAGE_ID)
+        message.model_copy(update=update).save(runtime.storage)
+
+        with patch("careeros.operations.follow_up.send_email") as mock_send:
+            with pytest.raises(RelationshipClosed) as exc:
+                execute_follow_up(runtime, proposal.approval_id, action_label="follow_up")
+
+        assert exc.value.reason == expected_reason
+        mock_send.assert_not_called()
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+
     def test_smtp_failure_marks_the_message_and_approval_failed(self, tmp_path):
         runtime = _runtime(tmp_path)
         _seed_message(runtime.storage)

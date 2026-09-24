@@ -1,3 +1,4 @@
+import json
 import pytest
 
 from careeros.core.models import Approval
@@ -54,6 +55,7 @@ from careeros.operations.approvals import (
     APPROVED, DECLINED, EXECUTED, FAILED, PENDING, SUPERSEDED,
     has_executed_approval, list_by_state, list_pending, mark_executed, mark_failed,
     open_approval, payload_value, require_state, resolve_approval,
+    supersede_approval,
 )
 from careeros.operations.errors import ApprovalNotGranted, MalformedApproval
 from careeros.runtime.base import ApprovalResult
@@ -128,6 +130,51 @@ class TestOpenApproval:
         # `approved` means an approval a human had already granted was
         # invalidated, which is not the same news as a superseded pending.
         assert "Superseded earlier approved approval " + first.id in _log(runtime.storage)
+
+    def test_a_cause_is_recorded_on_the_event_when_there_is_no_replacement(
+        self, tmp_path,
+    ):
+        """`careeros outreach close` supersedes with nothing to replace it.
+
+        open_approval's summary explains itself — a newer proposal took over —
+        but a caller invalidating an approval because the relationship ended
+        has to say so, or the log leaves a granted authorization revoked for
+        no stated reason.
+        """
+        runtime = _runtime(tmp_path)
+        approval = _open(runtime)
+        resolve_approval(
+            runtime, approval.id, ApprovalResult(approved=True), action_label="outreach",
+        )
+
+        returned = supersede_approval(
+            runtime, Approval.load(runtime.storage, approval.id),
+            action_label="outreach-close", cause="cadence closed: took another offer",
+        )
+
+        assert returned.state == SUPERSEDED
+        assert Approval.load(runtime.storage, approval.id).state == SUPERSEDED
+        events = [json.loads(line) for line in _log(runtime.storage).splitlines() if line]
+        event = [e for e in events if e["event_type"] == "approval_superseded"][-1]
+        assert "Superseded earlier approved approval " + approval.id in event["summary"]
+        assert "cadence closed: took another offer" in event["summary"]
+        assert event["reason"] == "cadence closed: took another offer"
+        assert event["action"] == "outreach-close"
+
+    def test_no_cause_leaves_the_summary_and_reason_exactly_as_before(self, tmp_path):
+        """The supersede open_approval performs is unchanged by the extraction."""
+        runtime = _runtime(tmp_path)
+        approval = _open(runtime)
+
+        supersede_approval(
+            runtime, Approval.load(runtime.storage, approval.id), action_label="outreach",
+        )
+
+        events = [json.loads(line) for line in _log(runtime.storage).splitlines() if line]
+        event = [e for e in events if e["event_type"] == "approval_superseded"][-1]
+        assert event["summary"] == "Superseded earlier pending approval " + approval.id
+        assert event["reason"] is None
+
 
     def test_a_superseded_pending_still_says_pending_in_the_log(self, tmp_path):
         runtime = _runtime(tmp_path)

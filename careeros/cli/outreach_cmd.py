@@ -14,6 +14,7 @@ from careeros.core.models import Approval, CadencePolicy, OutreachMessage, Perso
 from careeros.operations.approval_queue import queue_only
 from careeros.operations.approvals import (
     APPROVED, list_by_state, list_pending, payload_value, resolve_approval,
+    supersede_approval,
 )
 from careeros.operations.errors import (
     CadenceExhausted, DraftFailed, EntityNotFound, MalformedTouchTimestamp,
@@ -353,40 +354,50 @@ def _decline_queued_follow_ups(
     return len(queued)
 
 
-def _warn_about_irrevocable_follow_ups(runtime: LocalRuntime, message_id: str) -> None:
-    """Name any approved-but-unsent follow-up this close cannot revoke.
+def _supersede_stranded_follow_ups(
+    runtime: LocalRuntime, message_id: str, reason: str,
+) -> int:
+    """Invalidate any approved-but-unsent follow-up this close leaves behind.
 
-    A send refused before it was attempted — no address on file, or the
+    A send refused *before* it was attempted — no address on file, or the
     stored draft edited out from under the approval — leaves the approval
-    `approved` on purpose, so the refusal stays retryable. There is no legal
-    transition out of `approved` except executing it: `resolve_approval`
-    requires `pending`, and `open_approval`'s supersede is reached only by
-    proposing a replacement. Closing the relationship means no replacement
-    will ever be proposed, so unlike the case `outreach review` reports —
-    where the next scheduled run supersedes the stranded record — this one
-    stays a live authorization to email a person the user has finished with,
-    indefinitely.
+    `approved` on purpose, so the refusal stays retryable. Normally the next
+    scheduled run supersedes that record by proposing a replacement, which is
+    what `outreach review`'s stranded-approval warning tells the user. Closing
+    the relationship means no replacement will ever be proposed, so left alone
+    the record would sit `approved`, with a digest still matching the stored
+    draft, forever.
 
-    Said out loud rather than quietly forced into a terminal state. Widening
-    the state machine with an approved->revoked edge is a design change that
-    belongs to the approval layer, not to this command, and `mark_failed` —
-    the one helper that writes a terminal state without requiring `pending` —
-    means "the send was attempted and raised", so using it here would put a
-    failure that never happened into the audit trail.
+    `execute_follow_up` now refuses a closed relationship at the point of
+    action, so such a record cannot send whatever anyone does with the id.
+    This is hygiene on top of that guarantee, not the guarantee: an approval
+    that can never be acted on should not still read `approved` in the audit
+    trail, and `outreach review` reports exactly this set as stranded work
+    the user might chase.
+
+    `superseded` is the existing transition for precisely this
+    approved-and-unexecuted case — `open_approval` writes it, for the same
+    records, for the same reason — so this reuses it rather than widening the
+    state machine with a `revoked` state whose only gain would be a nicer
+    label. `mark_failed` would be the wrong terminal state: it means "the send
+    was attempted and raised", so it would file a failure that never happened.
+    The cause is carried on the activity event, which is where the real
+    explanation belongs either way.
+
+    Scoped to this message's `send_follow_up` approvals, like the decline
+    above: an approved approval from another flow, or for another
+    relationship, is not this command's business.
     """
     stranded = [
         approval for approval in list_by_state(runtime.storage, APPROVED)
         if approval.action == FOLLOW_UP_ACTION and approval.entity_id == message_id
     ]
-    if not stranded:
-        return
-    rprint(
-        "[yellow]Warning: " + str(len(stranded)) + " follow-up(s) for this "
-        "relationship were already approved but never sent, and closing "
-        "cannot revoke them — only a pending approval can be decided. "
-        "Nothing in CareerOS will send them, but an agent calling "
-        "execute_follow_up with the approval id still could.[/yellow]"
-    )
+    for approval in stranded:
+        supersede_approval(
+            runtime, approval, action_label=CLOSE_CMD_ACTION_LABEL,
+            cause="cadence closed: " + reason,
+        )
+    return len(stranded)
 
 
 @outreach_app.command()
@@ -442,12 +453,13 @@ def close(
         console.print(verbatim(message.closed_reason or "(none recorded)"))
         raise typer.Exit(1)
 
-    # Queue first, record second. If this run dies between the two, a
-    # declined draft with an open relationship is the benign failure — the
-    # next scheduled run finds it still due and re-drafts. The reverse order
-    # would leave a closed relationship with a live pending draft that
+    # Approvals first, record second. If this run dies between the two, a
+    # resolved draft against a still-open relationship is the benign failure —
+    # the next scheduled run finds it still due and re-drafts. The reverse
+    # order would leave a closed relationship with a live pending draft that
     # `review` would offer and sending would mail.
     declined = _decline_queued_follow_ups(runtime, message_id, recorded_reason)
+    superseded = _supersede_stranded_follow_ups(runtime, message_id, recorded_reason)
 
     # Read before the copy overwrites it: it goes into the log line below.
     prior_state = message.referral_state
@@ -475,7 +487,11 @@ def close(
             "Declined " + str(declined) + " queued follow-up draft(s) that were "
             "awaiting review."
         )
-    _warn_about_irrevocable_follow_ups(runtime, message_id)
+    if superseded:
+        rprint(
+            "Superseded " + str(superseded) + " follow-up draft(s) that were "
+            "already approved but never sent."
+        )
 
 
 @outreach_app.command(name="follow-up")

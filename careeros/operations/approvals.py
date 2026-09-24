@@ -165,16 +165,7 @@ def open_approval(
     for existing in open_approvals:
         if existing.action != action or existing.entity_id != entity_id:
             continue
-        existing.model_copy(update={"state": SUPERSEDED}).save(runtime.storage)
-        runtime.record_activity(runtime.new_event(
-            "approval_superseded", action_label,
-            # The state it was superseded *from* is named: the two are not
-            # equally alarming to a reader of the log. A superseded
-            # `approved` means an approval a human had already granted was
-            # invalidated, which is worth being able to grep for.
-            "Superseded earlier " + existing.state + " approval " + existing.id,
-            entity_type=existing.entity_type, entity_id=existing.entity_id,
-        ))
+        supersede_approval(runtime, existing, action_label=action_label)
 
     approval = Approval(
         id=make_approval_id(action, entity_id),
@@ -192,6 +183,50 @@ def open_approval(
         entity_type=entity_type, entity_id=entity_id,
     ))
     return approval
+
+
+def supersede_approval(
+    runtime: AgentRuntime,
+    approval: Approval,
+    *,
+    action_label: str,
+    cause: str | None = None,
+) -> Approval:
+    """Invalidate an open approval, so nothing can ever act on it.
+
+    The one implementation of the `pending`/`approved` -> `superseded`
+    transition. open_approval reaches it by proposing a replacement, which is
+    the usual route; `careeros outreach close` reaches it with no replacement
+    to propose, because the relationship is over. Both need exactly this
+    write and exactly this event, and a second copy of a state transition in
+    the CLI layer is how the two drift apart.
+
+    `cause` is for the caller whose reason is not "a newer proposal replaced
+    this one". It is appended to the summary and set on the event's
+    structured `reason` field, so why a granted authorization was revoked is
+    recoverable from the log rather than inferred from what happened to be
+    written next to it.
+
+    Takes the loaded Approval rather than an id: every caller has already
+    read the record — open_approval from its two list_by_state scans — and
+    the state this names in the log has to be the one that was read, not one
+    re-fetched after the fact.
+    """
+    superseded = approval.model_copy(update={"state": SUPERSEDED})
+    superseded.save(runtime.storage)
+    # The state it was superseded *from* is named: the two are not equally
+    # alarming to a reader of the log. A superseded `approved` means an
+    # approval a human had already granted was invalidated, which is worth
+    # being able to grep for.
+    summary = "Superseded earlier " + approval.state + " approval " + approval.id
+    if cause:
+        summary = summary + " (" + cause + ")"
+    runtime.record_activity(runtime.new_event(
+        "approval_superseded", action_label, summary,
+        entity_type=approval.entity_type, entity_id=approval.entity_id,
+        reason=cause,
+    ))
+    return superseded
 
 
 def resolve_approval(

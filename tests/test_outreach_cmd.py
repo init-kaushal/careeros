@@ -12,12 +12,14 @@ from careeros.core.models import (
     Profile,
 )
 from careeros.operations.approvals import (
-    APPROVED, DECLINED, PENDING, list_by_state, list_pending, open_approval,
+    APPROVED, DECLINED, PENDING, SUPERSEDED, list_by_state, list_pending,
+    open_approval, resolve_approval,
 )
-from careeros.operations.errors import RelationshipClosed
+from careeros.operations.errors import ApprovalNotGranted, RelationshipClosed
 from careeros.operations.follow_up import ACTION as FOLLOW_UP_ACTION
-from careeros.operations.follow_up import propose_follow_up
+from careeros.operations.follow_up import execute_follow_up, propose_follow_up
 from careeros.operations.outreach import ACTION as OUTREACH_ACTION
+from careeros.runtime.base import ApprovalResult
 from careeros.runtime.factory import open_local_runtime, resolve_storage
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace
@@ -47,6 +49,11 @@ def _setup_workspace(tmp_path, with_email=True):
         researched_at=now,
     ).save(storage)
     return str(tmp_path)
+
+
+def _outreach_events(storage):
+    """Today's activity log parsed into events, or [] when there is none."""
+    return [json.loads(line) for line in _outreach_log(storage).splitlines() if line]
 
 
 def _outreach_log(storage):
@@ -647,18 +654,16 @@ class TestOutreachClose:
 
         assert Approval.load(storage, other_flow.id).state == PENDING
 
-    def test_closing_warns_about_an_approved_follow_up_it_cannot_revoke(self, tmp_path):
-        """An approved-but-unsent follow-up survives the close, loudly.
+    def _strand_an_approved_follow_up(self, ws_path, storage):
+        """Leave an approval `approved` but unsent, the way production does.
 
-        Reached the way it is reached in production: the reviewer accepts,
-        and execute_follow_up refuses before attempting anything because the
-        person has no address, which deliberately leaves the approval
-        `approved` and retryable. There is no legal transition out of
-        `approved` other than executing it, and closing means no re-propose
-        will ever supersede it — so the close cannot revoke it and must say
-        so rather than implying the relationship is inert.
+        The reviewer accepts, and execute_follow_up refuses *before*
+        attempting anything because the person has no address on file — a
+        refusal that deliberately leaves the approval approved and
+        retryable. Reached through the real review loop rather than by
+        hand-writing an Approval, so the state is the one the code actually
+        produces.
         """
-        ws_path, storage = self._setup(tmp_path, with_email=False)
         approval = self._queue_a_follow_up(ws_path)
         with patch("careeros.operations.follow_up.send_email") as mock_send:
             review_result = runner.invoke(
@@ -667,12 +672,89 @@ class TestOutreachClose:
         assert review_result.exit_code == 1, review_result.output
         mock_send.assert_not_called()
         assert Approval.load(storage, approval.id).state == APPROVED
+        return approval
+
+    def test_closing_supersedes_an_approved_but_unsent_follow_up(self, tmp_path):
+        """The stranded record is tidied, not left reading `approved`.
+
+        Nothing can send it either way — execute_follow_up refuses a closed
+        relationship at the point of action — but an authorization that can
+        never be acted on must not still read `approved` in the audit trail,
+        and `outreach review` reports exactly this set as stranded work the
+        user might otherwise go chasing. `superseded` is the transition
+        open_approval already applies to this same approved-and-unexecuted
+        case, so no new state was invented for it.
+        """
+        ws_path, storage = self._setup(tmp_path, with_email=False)
+        approval = self._strand_an_approved_follow_up(ws_path, storage)
 
         result = self._close(ws_path)
 
         assert result.exit_code == 0, result.output
         assert OutreachMessage.load(storage, MESSAGE_ID).referral_state == "closed"
-        assert "cannot revoke" in result.output
-        # Still approved: nothing here forces a terminal state it has no
-        # legal edge to.
-        assert Approval.load(storage, approval.id).state == APPROVED
+        assert Approval.load(storage, approval.id).state == SUPERSEDED
+        assert list_by_state(storage, APPROVED) == []
+        assert "Superseded 1" in result.output
+
+        # Why a granted authorization was revoked is recoverable from the
+        # log, not inferred from whatever happens to be logged next to it.
+        events = _outreach_events(storage)
+        superseded = [e for e in events if e["event_type"] == "approval_superseded"]
+        assert len(superseded) == 1
+        assert superseded[0]["action"] == "outreach-close"
+        assert self.REASON in superseded[0]["summary"]
+        assert superseded[0]["reason"] == "cadence closed: " + self.REASON
+
+    def test_a_superseded_follow_up_can_no_longer_be_executed(self, tmp_path):
+        """The consequence that matters: the id is inert afterwards."""
+        ws_path, storage = self._setup(tmp_path, with_email=False)
+        approval = self._strand_an_approved_follow_up(ws_path, storage)
+        assert self._close(ws_path).exit_code == 0
+
+        runtime = open_local_runtime(resolve_storage(ws_path))
+        with patch("careeros.operations.follow_up.send_email") as mock_send:
+            with pytest.raises(ApprovalNotGranted):
+                execute_follow_up(runtime, approval.id, action_label="test")
+        mock_send.assert_not_called()
+
+    def test_closing_leaves_another_relationships_approved_follow_up_alone(self, tmp_path):
+        """The supersede is scoped the same way the decline is.
+
+        With only one relationship in the workspace, "supersedes the right
+        record" is indistinguishable from "supersedes everything approved".
+        """
+        ws_path, storage = self._setup(tmp_path, with_email=False)
+        # Stranded first: _queue_a_follow_up runs the real scheduled command
+        # and asserts it queued exactly one draft, which a second due
+        # relationship in the workspace would break.
+        mine = self._strand_an_approved_follow_up(ws_path, storage)
+        self._seed_other_relationship(storage)
+        runtime = open_local_runtime(resolve_storage(ws_path))
+        # An approved approval for the *other* relationship, and an approved
+        # approval for a different action against the one being closed.
+        other = open_approval(
+            runtime, FOLLOW_UP_ACTION, "Send follow-up to John?",
+            {"message_id": self.OTHER_MESSAGE_ID, "person_id": self.OTHER_PERSON_ID},
+            entity_type="outreach_message", entity_id=self.OTHER_MESSAGE_ID,
+            action_label="test",
+        )
+        same_entity_other_action = open_approval(
+            runtime, OUTREACH_ACTION, "Send the first message?",
+            {"message_id": MESSAGE_ID, "person_id": PERSON_ID},
+            entity_type="outreach_message", entity_id=MESSAGE_ID,
+            action_label="test",
+        )
+        for seeded in (other, same_entity_other_action):
+            resolve_approval(
+                runtime, seeded.id, ApprovalResult(approved=True, reason="yes"),
+                action_label="test",
+            )
+
+        assert self._close(ws_path).exit_code == 0
+
+        assert Approval.load(storage, mine.id).state == SUPERSEDED
+        assert Approval.load(storage, other.id).state == APPROVED
+        assert Approval.load(storage, same_entity_other_action.id).state == APPROVED
+        assert sorted(a.id for a in list_by_state(storage, APPROVED)) == sorted(
+            [other.id, same_entity_other_action.id]
+        )

@@ -69,6 +69,30 @@ def subject_for(job: Job) -> str:
     return "Re: " + _outreach_subject_for(job)
 
 
+def _require_live_relationship(message: OutreachMessage) -> None:
+    """Raise unless `message`'s relationship is still open for a follow-up.
+
+    The one copy of the terminal-relationship rule, shared by the propose
+    path (check_follow_up_due, which calls it first) and the send path
+    (execute_follow_up). It used to live only on the propose path, and that
+    was a hole rather than an omission: an approval minted while the
+    relationship was live stays `approved` with a matching digest across a
+    close, and every other check execute_follow_up makes — state, action,
+    digest, recipient address — still passes, so the send went out to a
+    person the user had declared themselves finished with.
+
+    `careeros outreach close` supersedes the approvals it can see, which
+    keeps the workspace tidy, but it cannot be the guarantee: it only runs on
+    the close path, and an approval stranded by any other route — minted by
+    an agent before an out-of-band close, or held by an integrator who kept
+    the id — is stopped only here, at the point of action.
+    """
+    if message.referral_state in _TERMINAL_REFERRAL_STATES or message.closed_reason:
+        raise RelationshipClosed(
+            message.id, message.closed_reason or message.referral_state,
+        )
+
+
 def check_follow_up_due(
     message: OutreachMessage, policy: CadencePolicy, now: datetime,
 ) -> CadenceStatus:
@@ -94,9 +118,7 @@ def check_follow_up_due(
     Two independent now() calls could straddle a midnight boundary and have
     the filter and the operation disagree by a day about the same record.
     """
-    if message.referral_state in _TERMINAL_REFERRAL_STATES or message.closed_reason:
-        reason = message.closed_reason or message.referral_state
-        raise RelationshipClosed(message.id, reason)
+    _require_live_relationship(message)
 
     # last_touched_at and touch_count are new fields that default to
     # None/0 and are only populated going forward, by execute_outreach_send.
@@ -295,9 +317,9 @@ def execute_follow_up(
     concurrent process could send twice. Consuming first means a crash
     mid-send leaves a stale executed record with an unsent message, which is
     recoverable; a duplicate email to a person you want a referral from is
-    not. The digest and recipient checks precede that consumption, so those
-    two refusals still leave the approval approved and retryable — nothing
-    was attempted yet when they fire.
+    not. The closed-relationship, digest and recipient checks all precede
+    that consumption, so those three refusals still leave the approval
+    approved and retryable — nothing was attempted yet when they fire.
     """
     approval = require_state(runtime.storage, approval_id, APPROVED)
     if approval.action != ACTION:
@@ -308,6 +330,16 @@ def execute_follow_up(
     subject = payload_value(approval, "subject")
 
     message, person = _load_message_and_person(runtime, message_id, person_id)
+
+    # Checked here and not only at propose time. This is the refusal that
+    # actually closes the hole: an approval granted before the relationship
+    # was closed passes every other gate above, so without this the user's
+    # explicit off switch did not bind the one path that sends mail. First of
+    # the post-load checks because it outranks them — a closed relationship
+    # is not a draft to re-digest or an address to go and find — and, like
+    # them, it fires before mark_executed, so a relationship closed by
+    # mistake and re-opened leaves the approval still approved.
+    _require_live_relationship(message)
 
     if draft_digest(message.draft_text) != expected_digest:
         raise ArtifactChanged("outreach/" + message_id + ".json")
