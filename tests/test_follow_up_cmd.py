@@ -1873,3 +1873,125 @@ class TestReviewReportsStrandedApprovals:
         assert result.exit_code == 0
         assert "approved but never sent" not in result.output
         assert Approval.load(storage, apply_approval.id).state == "approved"
+
+
+class TestARefusedRedraftCostsNothing:
+    """The regeneration bound caps *paid LLM calls*, and a refusal is free.
+
+    propose_follow_up re-runs the whole due-ness check and reloads the
+    cadence policy, so it can refuse without ever reaching the provider.
+    The counter used to be incremented before that call, which meant five
+    consecutive refusals — one corrupt config/cadence_policy.json refuses
+    every single time — permanently withdrew regenerate for that item even
+    though nothing had been drafted.
+    """
+
+    CORRUPT_POLICY = b'{"days_between_touches": "banana", "max_touches": 3}'
+
+    def test_a_refused_redraft_does_not_spend_the_bound(self, tmp_path):
+        from careeros.cli.outreach_cmd import MAX_REGENERATIONS
+
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1)
+        approval_id = _pending_follow_ups(storage)[0].id
+        # Corrupted after the cron run queued the item, which is the only way
+        # to get here: the proposer would not have run at all otherwise.
+        storage.atomic_write("config/cadence_policy.json", self.CORRUPT_POLICY)
+
+        attempts = MAX_REGENERATIONS + 1
+        with patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+        ) as mock_generate, patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(
+                outreach_app, ["review", "--workspace", ws_path],
+                input="r\n" * attempts + "s\n",
+            )
+
+        assert result.exit_code == 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        # Every one of the attempts was accepted and refused. One fewer would
+        # mean the bound had been spent by refusals; a rejected keystroke
+        # would show up as rich's own choices complaint.
+        assert result.output.count("Could not redraft this follow-up") == attempts
+        assert "Please select one of the available options" not in result.output
+        # No provider call and no send: a refusal costs nothing at all.
+        mock_generate.assert_not_called()
+        mock_send_email.assert_not_called()
+        assert Approval.load(storage, approval_id).state == "pending"
+
+    def test_a_corrupt_cadence_policy_is_reported_not_a_traceback(self, tmp_path):
+        """ValidationError is not an OperationError, so it needs its own arm.
+
+        CadencePolicy.load raises pydantic's ValidationError, which the
+        regenerate-refusal except tuple lists alongside OperationError and
+        FileNotFoundError. That member was uncovered: dropping it from the
+        tuple left the suite green. This is the test that notices.
+        """
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1)
+        original_id = _pending_follow_ups(storage)[0].id
+        storage.atomic_write("config/cadence_policy.json", self.CORRUPT_POLICY)
+
+        with patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+        ) as mock_generate, patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(
+                outreach_app, ["review", "--workspace", ws_path], input="r\na\n",
+            )
+
+        assert result.exit_code == 0
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "Could not redraft this follow-up" in result.output
+        # The pydantic detail is shown, not a traceback.
+        assert "days_between_touches" in result.output
+        mock_generate.assert_not_called()
+        # And the queued draft is still exactly what sends.
+        mock_send_email.assert_called_once()
+        assert mock_send_email.call_args.args[2] == FOLLOW_UP_DRAFT
+        assert _approval_states(storage)[original_id] == "executed"
+
+
+class TestTheProposerDedupsOnlyFollowUpApprovals:
+    """_entity_ids_with_pending_follow_up filters on the action, and must.
+
+    Pre-existing from Task 6: dropping the `action == send_follow_up` filter
+    shipped green. Approval entity_ids are not namespaced by action, so an
+    unrelated pending approval whose entity_id happens to equal a due
+    relationship's message id would silently stop that relationship being
+    followed up — forever, since nothing ever advances its last_touched_at.
+    """
+
+    def test_a_pending_apply_approval_does_not_block_a_follow_up(self, tmp_path):
+        from careeros.operations.apply import ACTION as APPLY_ACTION
+        from careeros.operations.approvals import open_approval
+        from careeros.runtime.factory import open_local_runtime
+
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        job_id, _, message_id = _seed_relationship(
+            storage, 1, days_since_touch=DAYS_BETWEEN_TOUCHES + 1,
+        )
+        runtime = open_local_runtime(storage)
+        # entity_id deliberately collides with the outreach message id.
+        apply_approval = open_approval(
+            runtime, APPLY_ACTION, "Apply to this job?", {"job_id": job_id},
+            entity_type="job", entity_id=message_id, action_label="apply",
+        )
+        assert apply_approval.entity_id == message_id
+
+        with patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+            return_value=FOLLOW_UP_DRAFT,
+        ) as mock_generate:
+            result = runner.invoke(outreach_app, ["follow-up", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        mock_generate.assert_called_once()
+        assert "1 actionable, 0 awaiting review" in result.output
+        assert "Proposed: 1" in result.output
+        assert len(_pending_follow_ups(storage)) == 1
+        # The unrelated approval is untouched.
+        assert Approval.load(storage, apply_approval.id).state == "pending"

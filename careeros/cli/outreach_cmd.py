@@ -622,7 +622,6 @@ def _review_one_follow_up(
             # decline is "not this one".
             return "skipped"
         if choice == "r":
-            regenerations += 1
             try:
                 proposal = propose_follow_up(
                     runtime, job_id, person_id, model=model,
@@ -653,6 +652,13 @@ def _review_one_follow_up(
             # with would now raise ApprovalNotGranted, and its digest no
             # longer matches the stored draft either. Everything displayed
             # and everything resolved switches to the new proposal.
+            # Counted only now that a draft actually came back. It used to
+            # be incremented before the call, so MAX_REGENERATIONS refusals
+            # in a row — a corrupt cadence policy refuses every time —
+            # permanently withdrew regenerate for this item even though
+            # nothing had ever been drafted. The bound exists to cap paid
+            # LLM calls; a refusal costs none.
+            regenerations += 1
             approval_id = proposal.approval_id
             summary = proposal.summary
             draft_text = proposal.draft_text
