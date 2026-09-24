@@ -1448,3 +1448,185 @@ class TestTheTextOnScreenIsTheTextThatGetsEmailed:
         assert "Acme [/b] Corp" in result.output
         assert "Jane [/i] Doe" in result.output
         assert "1 skipped" in result.output
+
+
+class TestReviewDrivesTheRealPrompt:
+    """Every other review test patches Prompt.ask with a Mock.
+
+    A Mock never looks at `choices=` or `default=`, so four
+    safety-relevant mutations shipped green: flipping the main prompt's
+    default from "s" to "a" (a stray Enter mails instead of skipping),
+    deleting the choices list entirely (no input validation at all),
+    re-adding "r" to the withdrawn prompt's choices (the regeneration bound
+    becomes bypassable), and flipping the withdrawn prompt's default to "a"
+    (a stray Enter mails at the bound). These tests feed real keystrokes
+    through CliRunner(input=...) instead, the way test_browse_cmd.py and
+    test_job_cmd.py already do, so the prompt's own arguments are executed.
+
+    Rich echoes the choices and the default into its prompt line as
+    "[a/r/d/s] (s):", which is why those strings are asserted directly:
+    they are the only on-screen evidence of the two arguments.
+    """
+
+    def test_a_bare_enter_skips_rather_than_sending(self, tmp_path):
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1)
+        approval_id = _pending_follow_ups(storage)[0].id
+
+        with patch("careeros.operations.follow_up.send_email") as mock_send_email:
+            result = runner.invoke(
+                outreach_app, ["review", "--workspace", ws_path], input="\n",
+            )
+
+        assert result.exit_code == 0
+        # The load-bearing assertion: an unbidden prompt on a queue drainer
+        # must not mail someone you want a referral from on a stray Enter.
+        mock_send_email.assert_not_called()
+        assert "1 skipped" in result.output
+        assert Approval.load(storage, approval_id).state == "pending"
+        # And the default is visibly skip, not accept.
+        assert "[a/r/d/s] (s)" in result.output
+
+    def test_an_invalid_choice_is_rejected_and_re_prompted(self, tmp_path):
+        """Without `choices=`, "x" falls through the s/r/d branches and sends."""
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1)
+        approval_id = _pending_follow_ups(storage)[0].id
+
+        with patch("careeros.operations.follow_up.send_email") as mock_send_email:
+            result = runner.invoke(
+                outreach_app, ["review", "--workspace", ws_path], input="x\ns\n",
+            )
+
+        assert result.exit_code == 0
+        mock_send_email.assert_not_called()
+        assert "Please select one of the available options" in result.output
+        assert "1 skipped" in result.output
+        assert Approval.load(storage, approval_id).state == "pending"
+
+    def test_r_is_genuinely_refused_once_the_bound_is_reached(self, tmp_path):
+        """The bound is enforced by `choices`, not by the prompt's wording.
+
+        The pre-existing bound test asserted only that the label no longer
+        reads "[R]egenerate", so re-adding "r" to the withdrawn prompt's
+        choices shipped green. Here the sixth "r" is a real keystroke: it
+        has to be rejected, and the Enter after it has to skip rather than
+        send.
+        """
+        from careeros.cli.outreach_cmd import MAX_REGENERATIONS
+
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1)
+        keystrokes = "r\n" * MAX_REGENERATIONS + "r\n" + "\n"
+
+        with patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+            return_value=REGENERATED_DRAFT,
+        ) as mock_generate, patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send_email:
+            result = runner.invoke(
+                outreach_app, ["review", "--workspace", ws_path], input=keystrokes,
+            )
+
+        assert result.exit_code == 0
+        # Exactly the bound's worth of paid LLM calls, and no more.
+        assert mock_generate.call_count == MAX_REGENERATIONS
+        assert "Please select one of the available options" in result.output
+        # The withdrawn prompt offers three options and still defaults to skip.
+        assert "[a/d/s] (s)" in result.output
+        # The Enter that followed the refused "r" skipped; it did not mail.
+        mock_send_email.assert_not_called()
+        assert "1 skipped" in result.output
+
+    def test_accepting_through_the_real_prompt_still_sends(self, tmp_path):
+        """The counterpart to the three refusals above.
+
+        Without this, a `choices` list that rejected *everything* would also
+        pass the tests above, so the accept keystroke has to be pinned too.
+        """
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1)
+
+        with patch("careeros.operations.follow_up.send_email") as mock_send_email:
+            result = runner.invoke(
+                outreach_app, ["review", "--workspace", ws_path], input="a\n",
+            )
+
+        assert result.exit_code == 0
+        mock_send_email.assert_called_once()
+        assert mock_send_email.call_args.args[2] == FOLLOW_UP_DRAFT
+        assert "1 sent" in result.output
+
+
+class TestReviewWiresItsCollaborators:
+    """Three currently-correct behaviours with no guard of their own."""
+
+    def test_a_regenerate_is_stamped_with_the_review_label(self, tmp_path):
+        """Not the proposer's label — a redraft asked for by a human is a
+        different entrypoint from the cron job that queued the original, and
+        the audit log's first question is which one acted.
+        """
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1)
+
+        with patch("careeros.operations.follow_up.generate_follow_up_message",
+                   return_value=REGENERATED_DRAFT), patch(
+            "careeros.operations.follow_up.send_email",
+        ):
+            result = runner.invoke(
+                outreach_app, ["review", "--workspace", ws_path], input="r\na\n",
+            )
+
+        assert result.exit_code == 0
+        drafted = [
+            e for e in _log_events(storage) if e["event_type"] == "follow_up_drafted"
+        ]
+        assert len(drafted) == 2
+        # The cron run drafted the first; the review loop drafted the second.
+        assert drafted[0]["action"] == FOLLOW_UP_CMD_ACTION_LABEL
+        assert drafted[1]["action"] == REVIEW_CMD_ACTION_LABEL
+        # The approval the redraft opened is stamped the same way.
+        requested = [
+            e for e in _log_events(storage) if e["event_type"] == "approval_requested"
+        ]
+        assert requested[-1]["action"] == REVIEW_CMD_ACTION_LABEL
+
+    def test_the_model_override_reaches_the_re_propose(self, tmp_path):
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _queue_a_follow_up(storage, ws_path, 1)
+
+        with patch("careeros.operations.follow_up.generate_follow_up_message",
+                   return_value=REGENERATED_DRAFT) as mock_generate, patch(
+            "careeros.operations.follow_up.send_email",
+        ):
+            result = runner.invoke(
+                outreach_app,
+                ["review", "--workspace", ws_path, "--model", "some/cheap-model"],
+                input="r\na\n",
+            )
+
+        assert result.exit_code == 0
+        assert mock_generate.call_args.kwargs["model"] == "some/cheap-model"
+
+    def test_the_recipient_shown_comes_from_the_person_record(self, tmp_path):
+        """A raw person id on screen is not a name a reviewer can decide on.
+
+        The fallback to the id when people/<id>.json is gone is covered
+        elsewhere; this pins the ordinary case, where always returning the
+        id would otherwise ship green.
+        """
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _, person_id, _ = _queue_a_follow_up(storage, ws_path, 1)
+        Person.load(storage, person_id).model_copy(
+            update={"name": "Priya Raman"},
+        ).save(storage)
+
+        with patch("careeros.operations.follow_up.send_email"):
+            result = runner.invoke(
+                outreach_app, ["review", "--workspace", ws_path], input="s\n",
+            )
+
+        assert result.exit_code == 0
+        assert "Follow-up to Priya Raman" in result.output
+        assert "Follow-up to " + person_id not in result.output
