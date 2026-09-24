@@ -1,8 +1,51 @@
 # CareerOS Roadmap
 
+## What is still pending
+
+Stated up front and in one place, because it was previously spread across this file,
+`README.md` and `docs/superpowers/DIVERGENCES.md`, and because two of these items cannot be
+closed by anyone but the workspace owner.
+
+**Feature work not built**
+
+- **Phase 13b — LinkedIn connection requests.** The only remaining *planned* phase. Needs
+  `careeros/browser/connect/`, `careeros/operations/connect.py`,
+  `careeros/skills/connection_note.py`, a `careeros outreach connect` command, and a
+  `max_connection_requests_per_run` cap. The Terms-of-Service question it was gated on is
+  settled (see Phase 13 below); the code is not written.
+
+**Manual verification outstanding — a green test suite does not discharge either of these**
+
+- **Phase 12's exit condition:** a real outreach send driven from an agent session against a
+  real workspace rather than a test. Needs `CAREEROS_SMTP_*` configured and a `Person` record
+  holding an address the owner is willing to mail. Phase 13a did **not** discharge this.
+- **Phase 13a's exit condition:** carrying a relationship through a real follow-up on the
+  configured cadence. Needs an LLM credential, because `propose_follow_up` drafts *before* any
+  approval exists, so there is no way to exercise the path without one.
+
+Everything automated is green (1047 tests). Neither item above is blocked on code.
+
+**Commitments the master design spec made that were never built**
+
+Tracked as a table in `docs/superpowers/DIVERGENCES.md`; the substantive ones are `careeros
+history` (the activity log has no reader), `careeros approvals` and `careeros settings` (never
+built as named), a `CredentialProvider` interface (`careeros/mailer.py` reads `os.environ`
+directly), match reasoning not persisted on `Job`, and `status: "blocked"` never appearing on an
+activity event.
+
+**Known deferred defects, each recorded with why it was not fixed**
+
+The two that matter most, both in `DIVERGENCES.md`: **`discover-and-apply` is not idempotent** —
+`make_job_id` carries a random suffix and there is no dedup at that seam, so re-running against
+the same postings can submit a real application twice — and **two residual duplicate-submission
+windows inside `execute_apply`**. The rest are smaller and individually argued.
+
+---
+
 ## Where we are
 
-Twelve phases shipped. See `README.md` for the full command reference. The first ten, one line
+Twelve phases shipped, plus the first half of the thirteenth (13a, the follow-up cadence). See
+`README.md` for the full command reference. The first ten, one line
 each (Phase 11 and Phase 12 each get their own section below, since both have more nuance than a
 one-liner captures):
 

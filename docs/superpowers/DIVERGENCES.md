@@ -317,3 +317,31 @@ attempts at 20 per run, and three consecutive drafting failures abort the run.
 What remains is log growth and a stale counter, both low-harm. Revisit in
 Phase 13b, most plausibly by giving `OutreachMessage` a field that records the
 last refusal so a repeat can be recognised rather than re-derived.
+
+- **Four smaller Phase 13a deferrals, recorded so they are not rediscovered as bugs.**
+  - *A non-`OperationError` still aborts a scheduled follow-up run.* The enumeration loop in
+    `outreach follow-up` guards per record against `OperationError` and against
+    `MalformedTouchTimestamp`, but an `OSError` from a workspace write (disk full, permissions)
+    escapes and ends the run. Mid-batch state stays coherent — earlier relationships keep their
+    pending approvals, and the interrupted one is redrafted next run because `last_touched_at`
+    never moved — so this is a robustness gap, not a correctness one. Not fixed because a
+    disk-level failure ending a cron run is defensible, where a hand-edited timestamp doing it
+    (which *was* fixed) is not.
+  - *A crashed `careeros outreach send` can leave a `pending` `send_outreach` approval that no
+    interactive command drains.* `outreach review` deliberately filters to `send_follow_up`, and
+    `outreach send` always proposes fresh rather than resuming. The record is inert — a `pending`
+    approval cannot execute — so this is queue clutter rather than a send risk, but an integrator
+    reading `list_pending` will see it and should not assume every pending approval is actionable.
+  - *`careeros outreach close` overwrites a `referral_confirmed` `referral_state`.* Closing a
+    relationship whose referral was confirmed sets `referral_state="closed"`, so the record no
+    longer shows the referral happened; the `cadence_closed` event names the prior state, so the
+    append-only log is the only place it survives. Nothing in `careeros/` reads
+    `referral_confirmed` except the terminal-state set, so no behaviour depends on it today — but
+    a future "which relationships produced referrals?" query would have to read the log, not the
+    records.
+  - *`careeros/cli/job_cmd.py`'s detail panel still interprets Rich markup.* Phase 13a fixed this
+    class of bug in the two places where the displayed text is also *transmitted* (the follow-up
+    draft and the cover letter), because there the reviewer must see the exact bytes. `job_cmd`'s
+    panel is read-only and its markup is intentional, so it needs per-field
+    `rich.markup.escape` rather than the verbatim treatment, and a bracketed span in scraped job
+    data can still be dropped from that display or raise `MarkupError`.
