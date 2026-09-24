@@ -1630,3 +1630,91 @@ class TestReviewWiresItsCollaborators:
         assert result.exit_code == 0
         assert "Follow-up to Priya Raman" in result.output
         assert "Follow-up to " + person_id not in result.output
+
+
+class TestAStrandedApprovedApprovalCannotSendTwice:
+    """An `approved` approval that never executed used to be a second email.
+
+    execute_follow_up refuses a missing recipient *before* mark_executed, on
+    purpose, so the refusal stays retryable — which leaves the record
+    `approved`. list_pending does not report it, so `outreach review` cannot
+    see it, and open_approval used to supersede only `pending`, so the next
+    scheduled run left it `approved` alongside a fresh approval. If that
+    re-draft came back byte-identical, the stranded approval's draft_sha256
+    still matched the stored draft, so executing it sent the follow-up a
+    second time.
+    """
+
+    def test_a_re_propose_supersedes_the_stranded_approval(self, tmp_path):
+        from careeros.operations._shared import digest_text
+        from careeros.operations.approvals import payload_value
+        from careeros.operations.errors import ApprovalNotGranted
+        from careeros.operations.follow_up import execute_follow_up
+        from careeros.runtime.factory import open_local_runtime
+
+        ws_path, storage = _setup_workspace(tmp_path, cadence=_default_cadence())
+        _, person_id, message_id = _seed_relationship(
+            storage, 1, days_since_touch=DAYS_BETWEEN_TOUCHES + 1,
+        )
+        # No address on file, so the accept below refuses pre-send.
+        Person.load(storage, person_id).model_copy(
+            update={"email": None},
+        ).save(storage)
+
+        with patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+            return_value=FOLLOW_UP_DRAFT,
+        ):
+            assert runner.invoke(
+                outreach_app, ["follow-up", "--workspace", ws_path],
+            ).exit_code == 0
+        stranded_id = _pending_follow_ups(storage)[0].id
+
+        with patch("careeros.operations.follow_up.send_email") as mock_send_email:
+            result = runner.invoke(
+                outreach_app, ["review", "--workspace", ws_path], input="a\n",
+            )
+        assert result.exit_code == 1
+        mock_send_email.assert_not_called()
+        # Stranded: decided, not executed, and invisible to the drainer.
+        assert Approval.load(storage, stranded_id).state == "approved"
+        assert _pending_follow_ups(storage) == []
+
+        # The operator adds the address and the next cron run comes round.
+        Person.load(storage, person_id).model_copy(
+            update={"email": "jane@acme.com"},
+        ).save(storage)
+        with patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+            return_value=FOLLOW_UP_DRAFT,
+        ):
+            assert runner.invoke(
+                outreach_app, ["follow-up", "--workspace", ws_path],
+            ).exit_code == 0
+        fresh = _pending_follow_ups(storage)
+        assert len(fresh) == 1 and fresh[0].id != stranded_id
+
+        # The precondition that made this a live double-send rather than an
+        # ArtifactChanged: the redraft is byte-identical, so the stranded
+        # approval's digest still matches what is on disk.
+        stranded = Approval.load(storage, stranded_id)
+        assert payload_value(stranded, "draft_sha256") == digest_text(
+            OutreachMessage.load(storage, message_id).draft_text,
+        )
+        # And it is now superseded, so it cannot execute at all.
+        assert stranded.state == "superseded"
+        runtime = open_local_runtime(storage)
+        with patch("careeros.operations.follow_up.send_email") as mock_second:
+            with pytest.raises(ApprovalNotGranted):
+                execute_follow_up(
+                    runtime, stranded_id, action_label=REVIEW_CMD_ACTION_LABEL,
+                )
+        mock_second.assert_not_called()
+
+        # The fresh approval still sends, exactly once.
+        with patch("careeros.operations.follow_up.send_email") as mock_third:
+            result = runner.invoke(
+                outreach_app, ["review", "--workspace", ws_path], input="a\n",
+            )
+        assert result.exit_code == 0
+        assert mock_third.call_count == 1

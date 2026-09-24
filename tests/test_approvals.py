@@ -52,7 +52,7 @@ class TestApprovalModel:
 
 from careeros.operations.approvals import (
     APPROVED, DECLINED, EXECUTED, FAILED, PENDING, SUPERSEDED,
-    has_executed_approval, list_pending, mark_executed, mark_failed,
+    has_executed_approval, list_by_state, list_pending, mark_executed, mark_failed,
     open_approval, payload_value, require_state, resolve_approval,
 )
 from careeros.operations.errors import ApprovalNotGranted, MalformedApproval
@@ -105,12 +105,50 @@ class TestOpenApproval:
         _open(runtime, entity_id="job-b__person")
         assert Approval.load(runtime.storage, first.id).state == PENDING
 
-    def test_does_not_supersede_an_already_decided_approval(self, tmp_path):
+    def test_supersedes_a_prior_approved_but_unexecuted_approval(self, tmp_path):
+        """An approved approval that never executed is just as stale.
+
+        This test used to assert the opposite — that an already-`approved`
+        record is left alone — and that was the bug. Every execute_* refuses
+        a missing recipient or a mismatched digest *before* mark_executed, so
+        those refusals leave a durable `approved` record that list_pending no
+        longer reports. A later propose for the same (action, entity_id) left
+        it `approved`, and a byte-identical redraft kept its digest valid, so
+        executing that stranded id sent a second email.
+        """
         runtime = _runtime(tmp_path)
         first = _open(runtime)
         resolve_approval(runtime, first.id, ApprovalResult(approved=True), action_label="outreach")
-        _open(runtime)
         assert Approval.load(runtime.storage, first.id).state == APPROVED
+
+        second = _open(runtime)
+        assert Approval.load(runtime.storage, first.id).state == SUPERSEDED
+        assert Approval.load(runtime.storage, second.id).state == PENDING
+        # The event names the state it superseded *from*: a superseded
+        # `approved` means an approval a human had already granted was
+        # invalidated, which is not the same news as a superseded pending.
+        assert "Superseded earlier approved approval " + first.id in _log(runtime.storage)
+
+    def test_a_superseded_pending_still_says_pending_in_the_log(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        first = _open(runtime)
+        _open(runtime)
+        assert "Superseded earlier pending approval " + first.id in _log(runtime.storage)
+
+    @pytest.mark.parametrize("state", [DECLINED, EXECUTED, FAILED, SUPERSEDED])
+    def test_does_not_supersede_a_terminal_approval(self, tmp_path, state):
+        """Terminal records are the audit trail, and nothing can act on them.
+
+        Previously ungoverned: only the `approved` case had a test, and it
+        asserted the behaviour this class now contradicts.
+        """
+        runtime = _runtime(tmp_path)
+        first = _open(runtime)
+        Approval.load(runtime.storage, first.id).model_copy(
+            update={"state": state},
+        ).save(runtime.storage)
+        _open(runtime)
+        assert Approval.load(runtime.storage, first.id).state == state
 
 
 class TestResolveApproval:
@@ -235,6 +273,58 @@ class TestListPending:
     def test_empty_when_nothing_pending(self, tmp_path):
         runtime = _runtime(tmp_path)
         assert list_pending(runtime.storage) == []
+
+
+class TestListByState:
+    """The separate entry point open_approval and `outreach review` need.
+
+    Added rather than giving list_pending a `state` parameter: list_pending
+    is simultaneously the review command's queue source and the scheduled
+    proposer's dedup set, so widening it would silently change both.
+    """
+
+    @pytest.mark.parametrize("state", [PENDING, APPROVED, DECLINED])
+    def test_returns_only_records_in_the_state_asked_for(self, tmp_path, state):
+        runtime = _runtime(tmp_path)
+        wanted = _open(runtime, entity_id="job-a__person")
+        other = _open(runtime, entity_id="job-b__person")
+        Approval.load(runtime.storage, wanted.id).model_copy(
+            update={"state": state},
+        ).save(runtime.storage)
+        Approval.load(runtime.storage, other.id).model_copy(
+            update={"state": EXECUTED},
+        ).save(runtime.storage)
+        assert [a.id for a in list_by_state(runtime.storage, state)] == [wanted.id]
+
+    def test_ignores_an_unparseable_record(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        approved = _open(runtime)
+        resolve_approval(
+            runtime, approved.id, ApprovalResult(approved=True), action_label="outreach",
+        )
+        runtime.storage.atomic_write("approvals/garbage.json", b"{not json")
+        assert [a.id for a in list_by_state(runtime.storage, APPROVED)] == [approved.id]
+
+    def test_empty_when_nothing_is_in_that_state(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        _open(runtime)
+        assert list_by_state(runtime.storage, APPROVED) == []
+
+    def test_list_pending_was_not_widened(self, tmp_path):
+        """The constraint this helper exists to respect.
+
+        An `approved` record must stay out of list_pending: it is what
+        `outreach review` iterates (and it cannot legally resolve an
+        approved item) and what the proposer dedups against (and a stranded
+        approved item must not stop the next run re-drafting).
+        """
+        runtime = _runtime(tmp_path)
+        approved = _open(runtime)
+        resolve_approval(
+            runtime, approved.id, ApprovalResult(approved=True), action_label="outreach",
+        )
+        assert list_pending(runtime.storage) == []
+        assert [a.id for a in list_by_state(runtime.storage, APPROVED)] == [approved.id]
 
 
 class TestProtocolDeclaresRuntimeName:

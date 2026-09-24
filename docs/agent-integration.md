@@ -257,8 +257,11 @@ Every field of the `Approval` model (`careeros/core/models.py`):
 State machine: `pending` is the only state a decision can be recorded against.
 `pending -> approved -> executed` is the happy path, and on that path `executed` is durably
 terminal — nothing moves the record out of it. `pending -> declined` and `pending -> superseded`
-(a re-propose for the same action and entity invalidates the older pending approval — see §7) are
-two more ways out of an open approval, both terminal.
+are two more ways out of an open approval, both terminal. There is also an
+**`approved -> superseded`** edge: a re-propose for the same `(action, entity_id)` invalidates the
+older approval whether it is still `pending` or already `approved`-but-unexecuted (see §7). So
+holding an `approved` id is not a guarantee it will still execute — a later propose can take it
+away.
 
 The fourth path is not a direct `approved -> failed` edge: it is **`approved -> executed ->
 failed`**, all within one call to `execute_outreach_send`. `execute_outreach_send` calls
@@ -304,7 +307,7 @@ the outreach-send flow writes, so nothing else appears:
 |---|---|---|
 | `outreach_drafted` | `propose_outreach_send` | every successful draft, before any human review — including each regeneration |
 | `approval_requested` | `open_approval` | every new `pending` approval is opened, including the one that follows a regeneration |
-| `approval_superseded` | `open_approval` | a prior *pending* approval for the same `(action, entity_id)` is invalidated by a new propose call — see §7's "Re-proposing supersedes" |
+| `approval_superseded` | `open_approval` | a prior *open* (`pending` or `approved`-but-unexecuted) approval for the same `(action, entity_id)` is invalidated by a new propose call — see §7's "Re-proposing supersedes". The summary names the state it superseded from, so `approved` supersessions are greppable |
 | `approval_granted` | `resolve_approval` | a `pending` approval is decided `approved` |
 | `approval_declined` | `resolve_approval` | a `pending` approval is decided `declined` |
 | `outreach_sent` | `execute_outreach_send` | `send_email` succeeds |
@@ -333,13 +336,24 @@ not specific to outreach.
 - **Only `approved` executes.** `execute_outreach_send` and `decline_outreach_send` both call
   `require_state` for the specific state they need (`approved`, `declined` respectively) and raise
   `ApprovalNotGranted` for anything else, including `pending`.
-- **Re-proposing supersedes.** Calling `propose_outreach_send` again for the same `job_id` and
-  `person_id` finds the prior *pending* approval for that action/entity pair (via `open_approval`'s
-  scan of `list_pending`) and moves it to `superseded` before opening the new one. A stale approval
-  id from before a regeneration cannot later execute against content that has since been
-  overwritten. Superseding only reaches a `pending` approval — an already-`approved` one is left
-  alone (nothing currently re-checks that case; do not assume approving, then regenerating,
-  invalidates the approval you already hold).
+- **Re-proposing supersedes, including an approval you already hold.** Calling
+  `propose_outreach_send` again for the same `job_id` and `person_id` finds every prior *open*
+  approval for that action/entity pair — `pending` *and* `approved`-but-unexecuted, via
+  `open_approval`'s scan of `list_by_state` — and moves each to `superseded` before opening the new
+  one. A stale approval id from before a regeneration cannot later execute against content that has
+  since been overwritten. **So do assume that approving, then re-proposing, invalidates the
+  approval you were holding**: a subsequent `execute_*` against that id raises `ApprovalNotGranted`,
+  and the fix is to decide the new approval, not to retry the old id.
+
+  `approved`-but-unexecuted is a reachable state, not a theoretical one: `execute_*` performs its
+  digest and recipient checks *before* `mark_executed`, deliberately, so those refusals leave the
+  record retryable (see the `MissingRecipient` and `ArtifactChanged` notes in §8). Before this rule
+  covered `approved`, such a record stayed decided-but-invisible — `list_pending` does not report
+  it — and if a later propose happened to redraft byte-identical content, the stranded approval's
+  digest still matched and executing it performed the action a *second* time. The digest binding
+  alone does not close that case. Because `mark_executed` always precedes the external action,
+  `approved`-and-not-executed is exactly the set of pre-attempt refusals, so nothing that was
+  actually attempted is ever superseded.
 - **The digest is re-verified at execute time**, against the `OutreachMessage.draft_text` read back
   from storage — not against anything held in memory:
 

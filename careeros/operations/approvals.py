@@ -20,18 +20,25 @@ _PREFIX = "approvals/"
 _SUFFIX = ".json"
 
 
-def list_pending(storage: StorageProvider) -> list[Approval]:
-    """Every approval awaiting a decision, oldest first.
+def list_by_state(storage: StorageProvider, state: str) -> list[Approval]:
+    """Every approval currently in `state`, oldest first.
 
-    How an out-of-process runtime rediscovers what it left open after losing
-    its own context. An unparseable record is skipped rather than raised on:
-    one corrupt file must not hide every other pending decision. An
-    unexpected error is deliberately *not* swallowed here, though: catching
+    A separate entry point rather than a `state` parameter bolted onto
+    list_pending, deliberately: list_pending is simultaneously `outreach
+    review`'s queue source *and* the scheduled proposer's dedup set
+    (_entity_ids_with_pending_follow_up), so widening it would silently
+    change both — the drainer would start offering approvals it cannot
+    legally resolve, and the proposer would stop re-drafting relationships
+    it is meant to re-draft.
+
+    An unparseable record is skipped rather than raised on: one corrupt
+    file must not hide every other record in the state being asked about.
+    An unexpected error is deliberately *not* swallowed, though: catching
     bare Exception would also hide a genuine bug — a future field rename
     raising TypeError on every record would make this function report
-    nothing pending while looking healthy.
+    nothing while looking healthy.
     """
-    pending: list[Approval] = []
+    matching: list[Approval] = []
     for path in storage.list(_PREFIX):
         if not path.endswith(_SUFFIX):
             continue
@@ -40,9 +47,21 @@ def list_pending(storage: StorageProvider) -> list[Approval]:
             approval = Approval.load(storage, approval_id)
         except (ValueError, FileNotFoundError, ValidationError):
             continue
-        if approval.state == PENDING:
-            pending.append(approval)
-    return sorted(pending, key=lambda a: a.created_at)
+        if approval.state == state:
+            matching.append(approval)
+    return sorted(matching, key=lambda a: a.created_at)
+
+
+def list_pending(storage: StorageProvider) -> list[Approval]:
+    """Every approval awaiting a decision, oldest first.
+
+    How an out-of-process runtime rediscovers what it left open after losing
+    its own context. Kept as its own named function even though it is now a
+    one-liner over list_by_state: this is the queue every reviewer drains
+    and the set every proposer dedups against, and those callers mean
+    "awaiting a decision", not "in some state I passed in".
+    """
+    return list_by_state(storage, PENDING)
 
 
 def has_executed_approval(storage: StorageProvider, action: str, entity_id: str) -> bool:
@@ -112,19 +131,48 @@ def open_approval(
     entity_id: str | None = None,
     action_label: str,
 ) -> Approval:
-    """Record a pending approval, superseding any prior pending one.
+    """Record a pending approval, superseding any prior open one.
 
     Superseding is what makes regeneration safe: re-proposing invalidates the
-    older pending approval, so a stale approval ID cannot later execute
-    against content that has since been overwritten.
+    older approval, so a stale approval ID cannot later execute against
+    content that has since been overwritten.
+
+    Both `pending` and `approved` count as open, and this is the part that
+    was missing. Every execute_* refuses *before* calling mark_executed when
+    the recipient has no address or a digest no longer matches — by design,
+    so those refusals stay retryable — which leaves a durable `approved`
+    record. list_pending does not report it, so no reviewer ever sees it
+    again. Superseding only `pending` therefore left it `approved` forever
+    while a fresh draft was queued alongside it, and if the redraft came
+    back byte-identical its draft_sha256 still matched the stored draft:
+    executing that stranded id sent the message a *second* time. The digest
+    binding was the reason the `approved` case was believed inert, and an
+    identical redraft is exactly the case the digest cannot catch. Because
+    mark_executed always precedes the external action, `approved`-and-not-
+    executed is precisely the set of pre-attempt refusals, so nothing that
+    was actually attempted is reached by this.
+
+    Terminal records are left alone: `declined`, `executed`, `failed` and
+    `superseded` are the audit trail, and nothing can act on them anyway.
     """
-    for existing in list_pending(runtime.storage):
+    # Two scans rather than one, because list_by_state answers about one
+    # state. The directory holds one small file per proposal ever made in
+    # this workspace, and this runs once per propose.
+    open_approvals = (
+        list_by_state(runtime.storage, PENDING)
+        + list_by_state(runtime.storage, APPROVED)
+    )
+    for existing in open_approvals:
         if existing.action != action or existing.entity_id != entity_id:
             continue
         existing.model_copy(update={"state": SUPERSEDED}).save(runtime.storage)
         runtime.record_activity(runtime.new_event(
             "approval_superseded", action_label,
-            "Superseded earlier pending approval " + existing.id,
+            # The state it was superseded *from* is named: the two are not
+            # equally alarming to a reader of the log. A superseded
+            # `approved` means an approval a human had already granted was
+            # invalidated, which is worth being able to grep for.
+            "Superseded earlier " + existing.state + " approval " + existing.id,
             entity_type=existing.entity_type, entity_id=existing.entity_id,
         ))
 

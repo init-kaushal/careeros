@@ -212,9 +212,14 @@ state.
   guard is the digest binding: `approved` is consumed only via an explicit approval id at
   `execute_apply`'s and `execute_outreach_send`'s call sites, `make_approval_id` appends a random
   suffix so the *next* `propose_apply`/`propose_outreach_send` for the same job mints a fresh id
-  rather than reusing this one (`open_approval`'s supersede logic only touches `pending` records,
-  never `approved` ones) — and that next propose call also overwrites the cover letter (or draft)
-  at the same workspace-relative path. So the stale approval's `cover_letter_sha256` (or
-  `draft_sha256`) no longer matches what is actually on disk, and executing it would raise
+  rather than reusing this one — and that next propose call also overwrites the cover letter (or
+  draft) at the same workspace-relative path. So the stale approval's `cover_letter_sha256` (or
+  `draft_sha256`) usually no longer matches what is actually on disk, and executing it would raise
   `ArtifactChanged`, not silently send stale content. Pre-existing, not new to Phase 12b or 12a — a
   crash in this same gap left the same shape of record before either refactor.
+
+  **Amended in Phase 13a:** the digest argument above was load-bearing and it had a hole. A redraft
+  that comes back byte-identical to the stale one leaves the digest matching, so executing the
+  stranded `approved` id performed the action a second time — reproduced end to end as a duplicate
+  follow-up email. `open_approval` now supersedes `approved`-but-unexecuted records as well as
+  `pending` ones, so the guard no longer rests on the redraft differing.
