@@ -55,6 +55,12 @@ FOLLOW_UP_CMD_ACTION_LABEL = "outreach-follow-up"
 # with this too, because that draft was written at a human's request.
 REVIEW_CMD_ACTION_LABEL = "outreach-review"
 
+# And the off switch. Distinct from the two above for the same reason they
+# are distinct from each other: an approval this command declines was not
+# declined by a reviewer who read the draft and judged it, and the log has to
+# be able to tell those two apart.
+CLOSE_CMD_ACTION_LABEL = "outreach-close"
+
 # Three drafting failures in a row means the LLM provider is down or the key
 # is dead, not that three relationships are individually unlucky — and every
 # DraftFailed has already been paid for, because
@@ -299,6 +305,177 @@ def mark_referral_requested(
         entity_type="outreach_message", entity_id=message_id,
     ))
     rprint("[green]Referral state updated.[/green]")
+
+
+def _decline_queued_follow_ups(
+    runtime: LocalRuntime, message_id: str, reason: str,
+) -> int:
+    """Take this relationship's queued follow-up drafts out of the queue.
+
+    `outreach review` drains `list_pending`, so a pending follow-up left
+    behind by a close would still be offered to the reviewer — and accepting
+    it would email someone the user has just declared themselves finished
+    with. Declining it is the fix, and `resolve_approval` is the whole of it:
+    it is the only legal exit from `pending`, and `execute_follow_up`
+    requires `approved`, so a `declined` record can never send.
+
+    `decline_follow_up` is deliberately *not* called afterwards, even though
+    it is what `review` pairs with a decline. Its purpose is to advance
+    `last_touched_at` so the next scheduled run does not re-propose what was
+    just declined, and that is moot here: `check_follow_up_due` raises
+    RelationshipClosed before it ever reads the touch timestamp, so this
+    relationship is already out of the cadence permanently. What it would
+    cost is real, though — it writes `send_state="declined"` and a fresh
+    `last_touched_at` onto the very record this command is closing,
+    claiming a touch instant that never happened and overwriting the
+    outcome of the last message that genuinely was sent, and it would log
+    `follow_up_send_declined`, which says the user judged that draft. They
+    did not; they ended the relationship, and `cadence_closed` is the event
+    that says so.
+
+    Scoped to this message's `send_follow_up` approvals. A pending approval
+    for another relationship, or for another action against this one, belongs
+    to another flow and must come out of this command untouched.
+    """
+    queued = [
+        approval for approval in list_pending(runtime.storage)
+        if approval.action == FOLLOW_UP_ACTION and approval.entity_id == message_id
+    ]
+    for approval in queued:
+        resolve_approval(
+            runtime, approval.id,
+            # Recorded on the approval itself, so why that draft was thrown
+            # away is recoverable from the record and not only by correlating
+            # timestamps in the activity log.
+            ApprovalResult(approved=False, reason="cadence closed: " + reason),
+            action_label=CLOSE_CMD_ACTION_LABEL,
+        )
+    return len(queued)
+
+
+def _warn_about_irrevocable_follow_ups(runtime: LocalRuntime, message_id: str) -> None:
+    """Name any approved-but-unsent follow-up this close cannot revoke.
+
+    A send refused before it was attempted — no address on file, or the
+    stored draft edited out from under the approval — leaves the approval
+    `approved` on purpose, so the refusal stays retryable. There is no legal
+    transition out of `approved` except executing it: `resolve_approval`
+    requires `pending`, and `open_approval`'s supersede is reached only by
+    proposing a replacement. Closing the relationship means no replacement
+    will ever be proposed, so unlike the case `outreach review` reports —
+    where the next scheduled run supersedes the stranded record — this one
+    stays a live authorization to email a person the user has finished with,
+    indefinitely.
+
+    Said out loud rather than quietly forced into a terminal state. Widening
+    the state machine with an approved->revoked edge is a design change that
+    belongs to the approval layer, not to this command, and `mark_failed` —
+    the one helper that writes a terminal state without requiring `pending` —
+    means "the send was attempted and raised", so using it here would put a
+    failure that never happened into the audit trail.
+    """
+    stranded = [
+        approval for approval in list_by_state(runtime.storage, APPROVED)
+        if approval.action == FOLLOW_UP_ACTION and approval.entity_id == message_id
+    ]
+    if not stranded:
+        return
+    rprint(
+        "[yellow]Warning: " + str(len(stranded)) + " follow-up(s) for this "
+        "relationship were already approved but never sent, and closing "
+        "cannot revoke them — only a pending approval can be decided. "
+        "Nothing in CareerOS will send them, but an agent calling "
+        "execute_follow_up with the approval id still could.[/yellow]"
+    )
+
+
+@outreach_app.command()
+def close(
+    job: str = typer.Option(..., "--job", help="Job ID"),
+    person: str = typer.Option(..., "--person", help="Person ID"),
+    reason: str = typer.Option(
+        ..., "--reason", help="Why the cadence is ending; recorded on the relationship",
+    ),
+    workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
+) -> None:
+    """End the follow-up cadence for one relationship, recording why.
+
+    The explicit off switch the cadence needs: a decline defers by one
+    period rather than stopping, so without this a relationship the user has
+    finished with is re-proposed every `days_between_touches` forever.
+    """
+    # Validated before the workspace is even opened. typer's `...` proves the
+    # flag was supplied, not that it says anything, so `--reason ""` would
+    # otherwise record a close with no reason — which is precisely the state
+    # this phase exists to prevent, and worse than refusing, because the
+    # record would then look complete.
+    recorded_reason = reason.strip()
+    if not recorded_reason:
+        rprint("[red]--reason must say why the cadence is ending.[/red]")
+        raise typer.Exit(1)
+
+    runtime = _open_runtime(workspace)
+
+    message_id = make_message_id(job, person)
+    try:
+        message = OutreachMessage.load(runtime.storage, message_id)
+    except (FileNotFoundError, ValueError):
+        # The same pair mark_referral_requested catches: FileNotFoundError for
+        # an absent record, ValueError for an id storage rejects as unsafe —
+        # and pydantic.ValidationError subclasses ValueError, so a corrupt
+        # record lands here too rather than as a traceback.
+        rprint("[red]No outreach message found for this job/person pair.[/red]")
+        raise typer.Exit(1)
+
+    if message.referral_state == "closed" or message.closed_reason:
+        # Refused rather than treated as idempotent, and the two are not
+        # equivalent here. This command's product is not a state — it is the
+        # recorded reason, which is what the user will not remember in three
+        # months. A second close would either overwrite the first reason
+        # (destroying the record) or no-op silently while the user believes
+        # their new reason was filed. Naming the recorded reason instead
+        # answers the question they were probably asking.
+        rprint("[red]This relationship is already closed. Recorded reason:[/red]")
+        # verbatim because the stored reason is user-authored text: a
+        # bracketed span would be deleted from the display, and a
+        # closing-tag-shaped one would raise MarkupError.
+        console.print(verbatim(message.closed_reason or "(none recorded)"))
+        raise typer.Exit(1)
+
+    # Queue first, record second. If this run dies between the two, a
+    # declined draft with an open relationship is the benign failure — the
+    # next scheduled run finds it still due and re-drafts. The reverse order
+    # would leave a closed relationship with a live pending draft that
+    # `review` would offer and sending would mail.
+    declined = _decline_queued_follow_ups(runtime, message_id, recorded_reason)
+
+    # Read before the copy overwrites it: it goes into the log line below.
+    prior_state = message.referral_state
+
+    # Only these two fields change; model_copy carries the rest of the record
+    # — sent_at, last_touched_at, touch_count — forward untouched. Nothing
+    # here rewrites history: what was sent stays sent.
+    message.model_copy(update={
+        "referral_state": "closed", "closed_reason": recorded_reason,
+    }).save(runtime.storage)
+    runtime.record_activity(runtime.new_event(
+        "cadence_closed", CLOSE_CMD_ACTION_LABEL,
+        # The prior referral_state is named because setting "closed"
+        # overwrites it, and the append-only log is then the only place a
+        # confirmed referral that was later closed out is still visible.
+        "Cadence closed for job " + job + " (was " + prior_state + "): "
+        + recorded_reason,
+        entity_type="outreach_message", entity_id=message_id,
+        reason=recorded_reason,
+    ))
+
+    rprint("[green]Cadence closed. No further follow-ups will be proposed.[/green]")
+    if declined:
+        rprint(
+            "Declined " + str(declined) + " queued follow-up draft(s) that were "
+            "awaiting review."
+        )
+    _warn_about_irrevocable_follow_ups(runtime, message_id)
 
 
 @outreach_app.command(name="follow-up")

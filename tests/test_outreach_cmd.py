@@ -1,11 +1,24 @@
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from careeros.cli.outreach_cmd import outreach_app, people_app
-from careeros.core.models import Company, Job, OutreachMessage, Person, PolicyConfig, Profile
+from careeros.core.models import (
+    Approval, CadencePolicy, Company, Job, OutreachMessage, Person, PolicyConfig,
+    Profile,
+)
+from careeros.operations.approvals import (
+    APPROVED, DECLINED, PENDING, list_by_state, list_pending, open_approval,
+)
+from careeros.operations.errors import RelationshipClosed
+from careeros.operations.follow_up import ACTION as FOLLOW_UP_ACTION
+from careeros.operations.follow_up import propose_follow_up
+from careeros.operations.outreach import ACTION as OUTREACH_ACTION
+from careeros.runtime.factory import open_local_runtime, resolve_storage
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace
 
@@ -34,6 +47,20 @@ def _setup_workspace(tmp_path, with_email=True):
         researched_at=now,
     ).save(storage)
     return str(tmp_path)
+
+
+def _outreach_log(storage):
+    """Today's activity log, or "" when nothing has been logged at all.
+
+    Tolerates the missing file so a test can assert an event is *absent*
+    without the assertion depending on some other event having created the
+    log first.
+    """
+    date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    path = "activity/" + date + ".jsonl"
+    if not storage.exists(path):
+        return ""
+    return storage.read(path).decode()
 
 
 class TestOutreachSend:
@@ -333,3 +360,319 @@ class TestSendShowsTheBytesItSends:
         assert result.exception is None or isinstance(result.exception, SystemExit)
         assert "[/b]" in result.output
         assert mock_send.call_args[0][2] == draft
+
+
+class TestOutreachClose:
+    """`careeros outreach close` — the explicit off switch for a cadence.
+
+    Seeds a relationship that is genuinely due for a follow-up (a real
+    CadencePolicy plus a last touch older than days_between_touches), so the
+    "closed relationships are refused" assertions below cannot pass merely
+    because the relationship was never eligible in the first place.
+    """
+
+    DAYS_BETWEEN_TOUCHES = 5
+    REASON = "took another offer"
+
+    OTHER_JOB_ID = "acme-sre-xyz9"
+    OTHER_PERSON_ID = "acme-corp-john-roe"
+    OTHER_MESSAGE_ID = OTHER_JOB_ID + "__" + OTHER_PERSON_ID
+
+    def _setup(self, tmp_path, *, days_since_touch=10, with_email=True, **message_kwargs):
+        ws_path = _setup_workspace(tmp_path, with_email=with_email)
+        storage = LocalFilesystemStorage(ws_path)
+        CadencePolicy(
+            days_between_touches=self.DAYS_BETWEEN_TOUCHES, max_touches=3,
+            max_follow_ups_per_run=5,
+        ).save(storage)
+        now = datetime.now(timezone.utc)
+        touch_at = (now - timedelta(days=days_since_touch)).isoformat()
+        fields = {
+            "id": MESSAGE_ID, "job_id": JOB_ID, "person_id": PERSON_ID,
+            "draft_text": "Hi Jane...", "send_state": "sent",
+            "created_at": now.isoformat(), "sent_at": touch_at,
+            "last_touched_at": touch_at, "touch_count": 1,
+        }
+        fields.update(message_kwargs)
+        OutreachMessage(**fields).save(storage)
+        return ws_path, storage
+
+    def _close(self, ws_path, reason=REASON):
+        return runner.invoke(outreach_app, [
+            "close", "--job", JOB_ID, "--person", PERSON_ID,
+            "--reason", reason, "--workspace", ws_path,
+        ])
+
+    def _queue_a_follow_up(self, ws_path):
+        """Queue a pending follow-up the way the scheduled proposer does.
+
+        Built by running the real `outreach follow-up` rather than
+        hand-writing an Approval, so the payload keys, the draft digest and
+        the action are whatever propose_follow_up actually produces — a
+        hand-seeded record could be ignored by `review` for a reason that
+        has nothing to do with what these tests are asserting.
+        """
+        with patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+            return_value="Hi Jane, just bumping this.",
+        ), patch("careeros.operations.follow_up.send_email") as mock_send:
+            result = runner.invoke(outreach_app, ["follow-up", "--workspace", ws_path])
+        assert result.exit_code == 0, result.output
+        mock_send.assert_not_called()
+        storage = LocalFilesystemStorage(ws_path)
+        pending = list_pending(storage)
+        assert len(pending) == 1, "fixture did not queue a follow-up"
+        assert pending[0].action == FOLLOW_UP_ACTION
+        return pending[0]
+
+    def test_close_sets_state_and_reason_and_logs_cadence_closed(self, tmp_path):
+        ws_path, storage = self._setup(tmp_path)
+
+        result = self._close(ws_path)
+
+        assert result.exit_code == 0, result.output
+        message = OutreachMessage.load(storage, MESSAGE_ID)
+        assert message.referral_state == "closed"
+        assert message.closed_reason == self.REASON
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        events = [
+            json.loads(line)
+            for line in storage.read("activity/" + today + ".jsonl").decode().splitlines()
+            if line
+        ]
+        closed = [e for e in events if e["event_type"] == "cadence_closed"]
+        assert len(closed) == 1
+        # The reason is the whole point of the command, so it has to reach
+        # the append-only log and not just the mutable record.
+        assert self.REASON in closed[0]["summary"]
+        assert closed[0]["entity_id"] == MESSAGE_ID
+        # Structured as well as prose, so a reader does not have to parse the
+        # summary to recover the reason.
+        assert closed[0]["reason"] == self.REASON
+        # Setting referral_state="closed" overwrites what it was, so the
+        # append-only log is the only surviving record of the prior state.
+        assert "(was research)" in closed[0]["summary"]
+
+    def test_a_closed_relationship_is_refused_by_propose_follow_up(self, tmp_path):
+        ws_path, storage = self._setup(tmp_path)
+        assert self._close(ws_path).exit_code == 0
+
+        runtime = open_local_runtime(resolve_storage(ws_path))
+        with patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+        ) as mock_draft, pytest.raises(RelationshipClosed) as excinfo:
+            propose_follow_up(runtime, JOB_ID, PERSON_ID, action_label="test")
+
+        assert excinfo.value.reason == self.REASON
+        # Refused before the LLM is reached, so a closed relationship costs
+        # nothing to skip.
+        mock_draft.assert_not_called()
+
+    def test_the_scheduled_run_no_longer_proposes_a_closed_relationship(self, tmp_path):
+        ws_path, storage = self._setup(tmp_path)
+        assert self._close(ws_path).exit_code == 0
+
+        with patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+            return_value="Hi Jane, just bumping this.",
+        ) as mock_draft, patch(
+            "careeros.operations.follow_up.send_email",
+        ) as mock_send:
+            result = runner.invoke(outreach_app, ["follow-up", "--workspace", ws_path])
+
+        assert result.exit_code == 0, result.output
+        mock_draft.assert_not_called()
+        mock_send.assert_not_called()
+        assert list_pending(storage) == []
+        assert "Due: 0" in result.output
+
+    def test_missing_outreach_message_exits_1_with_a_message(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path)
+
+        result = self._close(ws_path)
+
+        assert result.exit_code == 1
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "No outreach message" in result.output
+
+    def test_a_whitespace_only_reason_is_refused_and_writes_nothing(self, tmp_path):
+        ws_path, storage = self._setup(tmp_path)
+
+        result = self._close(ws_path, reason="   ")
+
+        assert result.exit_code == 1
+        message = OutreachMessage.load(storage, MESSAGE_ID)
+        assert message.referral_state == "research"
+        assert message.closed_reason is None
+        # Nothing happened, so nothing may be logged as having happened.
+        assert "cadence_closed" not in _outreach_log(storage)
+
+    def test_the_reason_is_stored_stripped(self, tmp_path):
+        ws_path, storage = self._setup(tmp_path)
+
+        assert self._close(ws_path, reason="  took another offer\n").exit_code == 0
+
+        assert OutreachMessage.load(storage, MESSAGE_ID).closed_reason == self.REASON
+
+    def test_closing_an_already_closed_relationship_keeps_the_first_reason(self, tmp_path):
+        ws_path, storage = self._setup(
+            tmp_path, referral_state="closed", closed_reason="hired elsewhere",
+        )
+
+        result = self._close(ws_path, reason="changed my mind")
+
+        assert result.exit_code == 1
+        # The recorded reason is the record this command exists to create,
+        # so a second close must not silently overwrite it.
+        assert OutreachMessage.load(storage, MESSAGE_ID).closed_reason == "hired elsewhere"
+        assert "hired elsewhere" in result.output
+        assert "changed my mind" not in _outreach_log(storage)
+
+    def test_closing_declines_a_queued_follow_up_so_review_cannot_send_it(self, tmp_path):
+        ws_path, storage = self._setup(tmp_path)
+        approval = self._queue_a_follow_up(ws_path)
+
+        assert self._close(ws_path).exit_code == 0
+
+        # Taken out of the queue through the state machine's only legal exit
+        # from pending, so `review` cannot offer it and execute_follow_up
+        # (which requires approved) can never act on it.
+        assert Approval.load(storage, approval.id).state == DECLINED
+        assert list_pending(storage) == []
+        assert list_by_state(storage, APPROVED) == []
+
+        with patch("careeros.operations.follow_up.send_email") as mock_send:
+            review_result = runner.invoke(outreach_app, ["review", "--workspace", ws_path])
+
+        assert review_result.exit_code == 0, review_result.output
+        mock_send.assert_not_called()
+        assert "No follow-ups are waiting for review." in review_result.output
+
+    def test_review_offers_the_queued_follow_up_when_nothing_was_closed(self, tmp_path):
+        """The control for the test above: the fixture really is reviewable.
+
+        Without this, a `close` that did nothing at all to the queued
+        approval would still look correct if `review` happened to ignore the
+        seeded record for some unrelated reason.
+        """
+        ws_path, storage = self._setup(tmp_path)
+        self._queue_a_follow_up(ws_path)
+
+        # A real prompt, driven by stdin: patching Prompt.ask with a Mock
+        # would skip `choices=` and `default=` entirely.
+        with patch("careeros.operations.follow_up.send_email") as mock_send:
+            review_result = runner.invoke(
+                outreach_app, ["review", "--workspace", ws_path], input="s\n",
+            )
+
+        assert review_result.exit_code == 0, review_result.output
+        mock_send.assert_not_called()
+        assert "just bumping this" in review_result.output
+        assert "1 skipped" in review_result.output
+
+    def test_close_records_the_reason_on_the_declined_approval(self, tmp_path):
+        ws_path, storage = self._setup(tmp_path)
+        approval = self._queue_a_follow_up(ws_path)
+
+        assert self._close(ws_path).exit_code == 0
+
+        # Why that specific queued draft was thrown away is recoverable from
+        # the approval record itself, not only from the activity log.
+        declined = Approval.load(storage, approval.id)
+        assert declined.reason is not None
+        assert self.REASON in declined.reason
+
+    def _seed_other_relationship(self, storage, *, days_since_touch=10):
+        """A second, unrelated relationship that is also due for a follow-up.
+
+        Closing one relationship must not touch another's queued draft, and
+        with only one relationship in the workspace that guarantee is
+        indistinguishable from declining everything pending.
+        """
+        now = datetime.now(timezone.utc)
+        touch_at = (now - timedelta(days=days_since_touch)).isoformat()
+        Job(
+            id=self.OTHER_JOB_ID, source="browse", url="https://example.com/other",
+            company="Acme Corp", title="Staff SRE", stage="saved",
+            created_at=now.isoformat(), updated_at=now.isoformat(),
+        ).save(storage)
+        Person(
+            id=self.OTHER_PERSON_ID, company_id=COMPANY_ID, name="John Roe",
+            role_category="em", title="Director", email="john@acme.com",
+            researched_at=now.isoformat(),
+        ).save(storage)
+        OutreachMessage(
+            id=self.OTHER_MESSAGE_ID, job_id=self.OTHER_JOB_ID,
+            person_id=self.OTHER_PERSON_ID, draft_text="Hi John...",
+            send_state="sent", created_at=now.isoformat(), sent_at=touch_at,
+            last_touched_at=touch_at, touch_count=1,
+        ).save(storage)
+
+    def test_closing_one_relationship_leaves_anothers_queued_follow_up_alone(self, tmp_path):
+        ws_path, storage = self._setup(tmp_path)
+        self._seed_other_relationship(storage)
+        with patch(
+            "careeros.operations.follow_up.generate_follow_up_message",
+            return_value="Hi there, just bumping this.",
+        ), patch("careeros.operations.follow_up.send_email"):
+            assert runner.invoke(
+                outreach_app, ["follow-up", "--workspace", ws_path],
+            ).exit_code == 0
+        queued = {a.entity_id: a.id for a in list_pending(storage)}
+        assert set(queued) == {MESSAGE_ID, self.OTHER_MESSAGE_ID}
+
+        assert self._close(ws_path).exit_code == 0
+
+        assert Approval.load(storage, queued[MESSAGE_ID]).state == DECLINED
+        other = Approval.load(storage, queued[self.OTHER_MESSAGE_ID])
+        assert other.state == PENDING
+        assert [a.entity_id for a in list_pending(storage)] == [self.OTHER_MESSAGE_ID]
+
+    def test_closing_leaves_a_pending_approval_from_another_flow_alone(self, tmp_path):
+        """A pending send_outreach against the same message is not this
+        command's to decide: it belongs to the initial-message flow, carries
+        a different payload shape, and `close` filters on the action for
+        exactly that reason.
+        """
+        ws_path, storage = self._setup(tmp_path)
+        runtime = open_local_runtime(resolve_storage(ws_path))
+        other_flow = open_approval(
+            runtime, OUTREACH_ACTION, "Send the first message?",
+            {"message_id": MESSAGE_ID, "job_id": JOB_ID, "person_id": PERSON_ID},
+            entity_type="outreach_message", entity_id=MESSAGE_ID,
+            action_label="outreach",
+        )
+
+        assert self._close(ws_path).exit_code == 0
+
+        assert Approval.load(storage, other_flow.id).state == PENDING
+
+    def test_closing_warns_about_an_approved_follow_up_it_cannot_revoke(self, tmp_path):
+        """An approved-but-unsent follow-up survives the close, loudly.
+
+        Reached the way it is reached in production: the reviewer accepts,
+        and execute_follow_up refuses before attempting anything because the
+        person has no address, which deliberately leaves the approval
+        `approved` and retryable. There is no legal transition out of
+        `approved` other than executing it, and closing means no re-propose
+        will ever supersede it — so the close cannot revoke it and must say
+        so rather than implying the relationship is inert.
+        """
+        ws_path, storage = self._setup(tmp_path, with_email=False)
+        approval = self._queue_a_follow_up(ws_path)
+        with patch("careeros.operations.follow_up.send_email") as mock_send:
+            review_result = runner.invoke(
+                outreach_app, ["review", "--workspace", ws_path], input="a\n",
+            )
+        assert review_result.exit_code == 1, review_result.output
+        mock_send.assert_not_called()
+        assert Approval.load(storage, approval.id).state == APPROVED
+
+        result = self._close(ws_path)
+
+        assert result.exit_code == 0, result.output
+        assert OutreachMessage.load(storage, MESSAGE_ID).referral_state == "closed"
+        assert "cannot revoke" in result.output
+        # Still approved: nothing here forces a terminal state it has no
+        # legal edge to.
+        assert Approval.load(storage, approval.id).state == APPROVED
