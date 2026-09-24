@@ -223,3 +223,97 @@ state.
   stranded `approved` id performed the action a second time — reproduced end to end as a duplicate
   follow-up email. `open_approval` now supersedes `approved`-but-unexecuted records as well as
   `pending` ones, so the guard no longer rests on the redraft differing.
+
+
+## New deferrals and decisions recorded by Phase 13a
+
+These are decisions, not drift — recorded here because the phase spec commits to stating what a
+decision does *not* license, and because three of them are properties a future reviewer would
+otherwise read as bugs.
+
+- **The LinkedIn Terms-of-Service decision: full automation, risk accepted by the workspace
+  owner.** Phase 13b sends connection requests through the isolated browser profile without a
+  human in the loop for the browser step itself (the *message* is still per-item approved). This
+  was decided explicitly by the owner of the account being automated, which is the only party
+  whose account is at risk. The apparent double standard with earlier phases — that Phases 3 and 7
+  already read LinkedIn — is resolved by moving the line rather than by grandfathering: the
+  relevant boundary is **approved action versus unapproved volume**, not reads versus writes. A
+  scripted read and a scripted write are the same kind of act; what makes an act defensible is
+  that a human authorised *that* act. On that reading Phases 3 and 7 need no retroactive review,
+  and this phase needs per-item approval, which it has.
+
+  What the decision explicitly does **not** license (spec §9), recorded because a decision to
+  automate is only defensible alongside its limits:
+  - **No evasion of platform controls.** No browser-fingerprint spoofing, no user-agent rotation,
+    no proxy rotation, no timing randomisation intended to appear human, and no attempt to detect
+    or circumvent rate limiting. The isolated profile exists for session hygiene, not disguise.
+  - **No unapproved volume.** One approval authorises exactly one message or one connection
+    request. The per-run caps are the user's own restraint, not a limit-avoidance mechanism.
+  - **No scraping expansion.** The phase adds a write; it reads nothing new.
+  - **No sending to anyone the user did not enter.** Combined with declining email discovery
+    below, every recipient is a person the user researched and recorded themselves.
+
+- **Automated email-address discovery: declined, not deferred.** There is no reliable
+  non-guessing source for an arbitrary individual's work address. Every available technique is
+  pattern-guessing against a domain, and a guess that is wrong means mailing a stranger — an
+  unrecoverable act performed on someone who never entered this system. `MissingRecipient` is
+  therefore a permanent, deliberate refusal rather than a missing feature: `execute_outreach_send`
+  and `execute_follow_up` both stop when `person.email` is absent, and the user supplies the
+  address or nothing is sent. This is recorded as *declined* so a future phase does not read it as
+  an open gap and implement it.
+
+- **The system cannot detect a reply.** Nothing in CareerOS reads an inbox, so it cannot know that
+  a person already answered. `max_touches` therefore guards the system's **own blindness**, not a
+  stylistic preference about persistence: it is the bound on how many times CareerOS will write to
+  someone whose reply it structurally cannot see. Read as a preference knob it looks arbitrary and
+  tunable; read correctly it is the only thing preventing an unbounded one-sided thread. Raising it
+  raises exactly that risk.
+
+- **A user who declines every follow-up is re-prompted indefinitely.** `decline_follow_up` advances
+  `last_touched_at` but deliberately does **not** increment `touch_count`, because a decline is not
+  a touch — nothing was sent. The consequence is that declining defers by one `days_between_touches`
+  period rather than counting toward `max_touches`, so a relationship the user keeps declining is
+  re-proposed forever. This is why `careeros outreach close` exists, and it is the honest trade: the
+  alternative, counting a decline as a touch, would let a user exhaust a cadence without a single
+  message being sent.
+
+- **Behaviour change to an existing flow: `execute_outreach_send` now also writes `last_touched_at`
+  and `touch_count`.** The initial-outreach path previously set only `sent_at` and `send_state`.
+  It now seeds the two cadence fields so a relationship becomes eligible for follow-up on the same
+  schedule whether its first message was sent before or after this phase. Records written by an
+  earlier version are handled by a read-time fallback rather than a migration
+  (`last_touched_at or sent_at`, and `touch_count or (1 if sent_at else 0)` — see
+  `check_follow_up_due`), so no stored file is rewritten and a legacy relationship is not excluded
+  from the cadence forever.
+
+- **A cron follow-up run re-logs its permanent failures every pass.**
+
+`careeros outreach follow-up` skips a not-due relationship silently and by
+design — a daily cron must not fill an append-only activity log with records
+of nothing happening. Two cases escape that intent, because neither advances
+`last_touched_at`, so the relationship stays due forever and is reconsidered
+every run:
+
+- a relationship whose job is **policy-blocked** logs one `policy_blocked`
+  event per run (from inside `propose_follow_up`), and
+- an **orphaned** `outreach/` record whose job, person or company no longer
+  resolves logs one `follow_up_propose_error` per run (from the command).
+
+Measured: one event per affected relationship per run, indefinitely. The run
+summary also carries the same non-zero `Blocked:` or `Errors:` counter every
+pass, with no way to distinguish a new failure from the same one for the
+four-hundredth time.
+
+Deliberately not fixed in Phase 13a, because every cheap fix is worse than the
+problem. Pre-checking policy in the command would reintroduce exactly the
+duplicated due-ness logic that Phase 13a consolidated into
+`check_follow_up_due`. Writing `closed_reason` after N failures would mutate
+the user's own relationship data on a technicality — a temporarily missing
+company record would permanently close a relationship. Suppressing the event
+by reading back the log would make a proposer depend on its own audit trail.
+
+The cost half is already bounded: `max_follow_ups_per_run` caps paid drafting
+attempts at 20 per run, and three consecutive drafting failures abort the run.
+What remains is log growth and a stale counter, both low-harm. Revisit in
+Phase 13b, most plausibly by giving `OutreachMessage` a field that records the
+last refusal so a repeat can be recognised rather than re-derived.
