@@ -148,6 +148,39 @@ class ConnectionNotSent(OperationError):
     """
 
 
+class ConnectionAlreadySent(OperationError):
+    """This person has already received a connection request that was sent.
+
+    Not in the spec's error list, and added because the harm it prevents is
+    the one §6.3 names without guarding: a second connection request is
+    visible in the recipient's notifications, and "correctness cannot rest
+    on the platform's idempotence". A refusal rather than a failure — like
+    NotDueForFollowUp, nothing is written before it is raised, so a duplicate
+    proposal leaves the workspace exactly as it found it.
+
+    Deliberately not ConnectionNotSent. That type means the page declined to
+    complete the request; this one means careeros declined to offer it, and
+    collapsing the two would make a caller string-match to tell "try again
+    later" apart from "never again".
+
+    Carries the prior request's id and sent_at so a caller can word its own
+    message and point at the record, rather than re-scanning connections/.
+    """
+
+    def __init__(
+        self, person_id: str, person_name: str, request_id: str, sent_at: str,
+    ) -> None:
+        super().__init__(
+            "A connection request to " + person_name + " was already sent on "
+            + sent_at + " (connections/" + request_id + ".json). A second request "
+            "is visible in their notifications, so careeros will not propose one."
+        )
+        self.person_id = person_id
+        self.person_name = person_name
+        self.request_id = request_id
+        self.sent_at = sent_at
+
+
 class BrowserUnavailable(OperationError):
     def __init__(self, detail: str, *, profile_busy: bool = False) -> None:
         super().__init__(detail)
