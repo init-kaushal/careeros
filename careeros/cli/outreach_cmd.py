@@ -9,17 +9,21 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from careeros.cli._display import verbatim
+from careeros.cli._display import verbatim, verbatim_panel_args
 from careeros.core.models import Approval, CadencePolicy, OutreachMessage, Person
 from careeros.operations.approval_queue import queue_only
 from careeros.operations.approvals import (
     APPROVED, list_by_state, list_pending, payload_value, resolve_approval,
     supersede_approval,
 )
+from careeros.operations.connect import ACTION as CONNECT_ACTION
+from careeros.operations.connect import (
+    decline_connection_request, execute_connection_request, propose_connection_request,
+)
 from careeros.operations.errors import (
-    CadenceExhausted, DraftFailed, EntityNotFound, MalformedTouchTimestamp,
-    MissingRecipient, NotDueForFollowUp, OperationError, PolicyBlocked,
-    RelationshipClosed,
+    CadenceExhausted, ConnectionAlreadySent, ConnectionNotSent, DraftFailed,
+    EntityNotFound, MalformedTouchTimestamp, MissingRecipient, NotDueForFollowUp,
+    OperationError, PolicyBlocked, RelationshipClosed,
 )
 from careeros.operations.follow_up import ACTION as FOLLOW_UP_ACTION
 from careeros.operations.follow_up import (
@@ -55,6 +59,13 @@ FOLLOW_UP_CMD_ACTION_LABEL = "outreach-follow-up"
 # did one entrypoint do both? A re-propose from the review loop is stamped
 # with this too, because that draft was written at a human's request.
 REVIEW_CMD_ACTION_LABEL = "outreach-review"
+
+# And one for the LinkedIn flow. Distinct from every label above because
+# this is the only entry point in this file whose product is visible in
+# another person's notifications and cannot be recalled: when the log is read
+# back to answer "how was this person contacted", an email and an invitation
+# must not be indistinguishable.
+CONNECT_CMD_ACTION_LABEL = "outreach-connect"
 
 # And the off switch. Distinct from the two above for the same reason they
 # are distinct from each other: an approval this command declines was not
@@ -281,6 +292,183 @@ def send(
         raise typer.Exit(1)
 
     rprint("[green]Sent to " + outcome.recipient_name + "[/green]")
+
+
+def _report_refusal(exc: Exception) -> None:
+    """Print an operations-layer refusal without letting Rich rewrite it.
+
+    `send` and `apply` both do `rprint("[red]" + str(exc) + "[/red]")` at the
+    equivalent point. That is not copied here, because two of this flow's
+    messages demonstrably embed external data: EntityNotFound's
+    unusable-URL variant interpolates
+    `repr()` of whatever the user pasted into `people update
+    --linkedin-url`, and BrowserUnavailable carries a Playwright or
+    profile-lock message. A bracketed span in either is deleted from the
+    display — which would show the user a URL they never stored, in the one
+    message whose whole job is to tell them what to fix — and a
+    closing-tag-shaped one raises MarkupError, which is not an
+    OperationError and would escape the handler that called this.
+
+    `style=` rather than markup tags is what keeps the colour: a Text
+    instance carries no markup by definition, and the style is applied to
+    the renderable instead of parsed out of it.
+    """
+    console.print(verbatim(str(exc)), style="red")
+
+
+@outreach_app.command()
+def connect(
+    job: str = typer.Option(..., "--job", help="Job ID"),
+    person: str = typer.Option(..., "--person", help="Person ID"),
+    workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
+    model: str = typer.Option(None, "--model", help="Override LLM model"),
+) -> None:
+    """Draft a LinkedIn connection note, review it, and send the invitation.
+
+    The interactive single-person flow, shaped like `outreach send`: propose,
+    review the exact bytes, approve, execute. What it produces is different
+    in kind from anything else in this file — an invitation appears in the
+    recipient's notifications and cannot be recalled, where an unwanted
+    email can at least be ignored — so the browser runs headful and the user
+    watches it happen. `execute_connection_request` passes headless=False
+    itself, so that is not something this command can forget to ask for.
+    """
+    runtime = _open_runtime(workspace)
+
+    try:
+        proposal = propose_connection_request(
+            runtime, job, person, model=model,
+            action_label=CONNECT_CMD_ACTION_LABEL,
+        )
+
+        regenerations = 0
+        while True:
+            # Three pieces of external text on screen, all rendered verbatim.
+            # The summary carries job.company and job.title straight off the
+            # posting, the URL is the profile that will actually be
+            # navigated, and the note is what gets typed into LinkedIn's
+            # invite modal — so with Rich's markup on, the reviewer approves
+            # a note with words missing from the one the recipient reads,
+            # and a closing-tag-shaped span anywhere in the three aborts the
+            # command with a traceback before the prompt is even shown.
+            console.print(verbatim(proposal.summary))
+            console.print(verbatim("Profile: " + proposal.linkedin_url))
+            body, title = verbatim_panel_args(
+                proposal.note_text,
+                "LinkedIn note to " + proposal.recipient_name,
+            )
+            console.print(Panel(body, title=title))
+
+            if regenerations >= MAX_REGENERATIONS:
+                choice = Prompt.ask("[A]ccept / [Q]uit", choices=["a", "q"], default="a")
+            else:
+                choice = Prompt.ask("[A]ccept / [R]egenerate / [Q]uit", choices=["a", "r", "q"], default="a")
+
+            if choice == "q":
+                # Resolved, not abandoned. A Phase 12 finding: `pending` is
+                # the one state something else can still act on, so walking
+                # away from the review has to close the approval rather than
+                # leave it for `careeros approvals` or an agent to find.
+                # `send`'s abort path is the precedent, decline call included.
+                resolve_approval(
+                    runtime, proposal.approval_id,
+                    ApprovalResult(approved=False, reason="aborted at review"),
+                    action_label=CONNECT_CMD_ACTION_LABEL,
+                )
+                decline_connection_request(
+                    runtime, proposal.approval_id,
+                    action_label=CONNECT_CMD_ACTION_LABEL,
+                )
+                rprint("Aborted.")
+                raise typer.Exit(0)
+            if choice == "r":
+                regenerations += 1
+                proposal = propose_connection_request(
+                    runtime, job, person, model=model,
+                    action_label=CONNECT_CMD_ACTION_LABEL,
+                )
+                continue
+            break  # choice == "a"
+
+        # The keystroke above accepted the *note*; this gate authorizes the
+        # *send*. Defaulting to no is what makes a stray Enter at the review
+        # prompt harmless, which matters more here than it does for an
+        # email.
+        result = runtime.request_approval(ActionProposal(
+            action=CONNECT_ACTION,
+            summary=proposal.summary,
+            entity_type="connection_request", entity_id=proposal.request_id,
+        ))
+        resolve_approval(
+            runtime, proposal.approval_id, result,
+            action_label=CONNECT_CMD_ACTION_LABEL,
+        )
+
+        if not result.approved:
+            decline_connection_request(
+                runtime, proposal.approval_id,
+                action_label=CONNECT_CMD_ACTION_LABEL,
+            )
+            rprint("Aborted.")
+            raise typer.Exit(0)
+
+        rprint(
+            "Opening a browser window on your LinkedIn account — watch it "
+            "send the invitation."
+        )
+        outcome = execute_connection_request(
+            runtime, proposal.approval_id, action_label=CONNECT_CMD_ACTION_LABEL,
+        )
+    except ConnectionAlreadySent as exc:
+        # Ahead of the generic handler because it is an OperationError and
+        # would otherwise be swallowed by it, and it is the only refusal in
+        # this flow that will never become sendable: a policy block, a
+        # signed-out session or a changed profile URL can be fixed and
+        # retried, while an invitation already sitting in somebody's
+        # notifications cannot be unsent. Raised from `propose` and from
+        # `execute` alike — the refusal exists at the point of action too —
+        # and one handler serves both, because the verdict and the fact that
+        # nothing was sent are the same either way.
+        _report_refusal(exc)
+        rprint(
+            "[yellow]This is permanent: careeros sends at most one connection "
+            "request to a person, across every job. Nothing was sent.[/yellow]"
+        )
+        raise typer.Exit(1)
+    except ConnectionNotSent as exc:
+        # Yellow rather than red, exactly as `apply` reports FillIncomplete:
+        # the connector reports an ordinary page state — already connected,
+        # an invitation already pending, no Connect button — and
+        # ConnectionNotSent names FillIncomplete as its own precedent.
+        console.print(verbatim(str(exc)), style="yellow")
+        raise typer.Exit(1)
+    except OperationError as exc:
+        # str(exc) rather than wording of this command's own, and that is
+        # load-bearing for EntityNotFound in particular: its message names
+        # `careeros people update --linkedin-url`, which is the only way a
+        # hand-added person can ever acquire the field this flow needs.
+        # Substituting a generic "person not found" would delete the remedy.
+        _report_refusal(exc)
+        raise typer.Exit(1)
+
+    console.print(
+        verbatim(
+            "Connection request sent to " + outcome.recipient_name
+            + " (" + outcome.linkedin_url + ")"
+        ),
+        style="green",
+    )
+    if outcome.teardown_failed:
+        # Warned about rather than folded into the success line above: the
+        # invitation did go out, so calling this a failure would be false,
+        # but closing the browser afterwards did not, and that leaves a
+        # process the user may have to deal with. `ApplyResult.teardown_failed`
+        # has the same contract and `apply` words it the same way.
+        rprint(
+            "[yellow]Warning: browser teardown failed after the invitation "
+            "went out. The connection request was sent. See the activity log "
+            "(connection_request_teardown_failed) for details.[/yellow]"
+        )
 
 
 @outreach_app.command(name="mark-referral-requested")
