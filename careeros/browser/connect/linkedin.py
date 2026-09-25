@@ -116,6 +116,16 @@ class LinkedInConnector:
         if not self.can_handle(linkedin_url):
             return False
 
+        # A noteless invitation is a different act from the one that was
+        # approved. The whole approval binds a note digest, so an empty note
+        # means the caller lost the note somewhere between drafting and here
+        # — and LinkedIn would happily send the bare invite, which cannot be
+        # recalled. Refused at the point of action rather than trusted to the
+        # drafter's own validation, for the same reason execute_follow_up
+        # re-checks a closed relationship that propose already checked.
+        if not note.strip():
+            return False
+
         try:
             page.goto(linkedin_url, timeout=_NAV_TIMEOUT_MS)
         except Exception:

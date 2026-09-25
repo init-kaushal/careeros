@@ -402,3 +402,24 @@ class TestShape:
 
         assert Filler not in LinkedInConnector.__mro__
         assert not hasattr(LinkedInConnector, "fill")
+
+
+class TestAnEmptyNoteIsRefused:
+    """A noteless invite is a different act from the approved one.
+
+    The approval binds a note digest, so an empty note means the note was
+    lost between drafting and sending. LinkedIn would send the bare invite
+    and it cannot be recalled, so this refuses at the point of action rather
+    than trusting the drafter's own validation — the same reasoning that has
+    execute_follow_up re-check a closed relationship propose already checked.
+    """
+
+    @pytest.mark.parametrize("note", ["", "   ", "\n\t "], ids=["empty", "spaces", "whitespace"])
+    def test_a_blank_note_sends_nothing(self, note):
+        page = MagicMock()
+        sent = LinkedInConnector().send_connection_request(
+            page, "https://www.linkedin.com/in/jane-doe", note,
+        )
+        assert sent is False
+        # Refused before navigation, so nothing about the page was touched.
+        page.goto.assert_not_called()
