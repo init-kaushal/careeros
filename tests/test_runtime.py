@@ -36,7 +36,18 @@ class TestLocalRuntime:
         proposal = ActionProposal(action="apply_to_job", summary="Apply to Acme?")
         with patch("careeros.runtime.local.Confirm.ask", return_value=True) as mock_ask:
             result = runtime.request_approval(proposal)
-        mock_ask.assert_called_once_with("Apply to Acme?", default=False)
+        # Asserted on the prompt's *text* rather than on the object identity.
+        # The summary is wrapped in rich.text.Text before it reaches the
+        # prompt, because a raw string is parsed for console markup and a
+        # bracketed span in a scraped name was either deleted from the
+        # question or raised MarkupError (see
+        # tests/test_local_runtime_approval.py). The property this test names
+        # — that the prompt asks about the summary — is unchanged, and
+        # checking the text keeps it true across that representation.
+        assert mock_ask.call_count == 1
+        prompt, kwargs = mock_ask.call_args[0][0], mock_ask.call_args[1]
+        assert str(prompt) == "Apply to Acme?"
+        assert kwargs == {"default": False}
         assert result == ApprovalResult(
             approved=True, reason="approved at a terminal confirmation prompt"
         )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 from rich.prompt import Confirm
+from rich.text import Text
 from careeros.core.activity import ActivityEvent, ActivityLogger
 from careeros.runtime.base import ActionProposal, ApprovalResult
 from careeros.storage.interface import StorageProvider
@@ -22,7 +23,19 @@ class LocalRuntime:
         self.storage.atomic_write(path, content.encode())
 
     def request_approval(self, proposal: ActionProposal) -> ApprovalResult:
-        approved = Confirm.ask(proposal.summary, default=False)
+        # Text(), not the raw string: this is the approval gate, so the one
+        # thing it must not do is show the user something other than what it
+        # is asking about. Rich console markup is on by default, and a summary
+        # is built from scraped data — a person's name, a company, a job
+        # title. Two things were happening here. A bracketed span was
+        # silently *deleted* from the prompt, so "Jane [dim]Doe" asked about
+        # "Jane Doe" and the user approved a summary that did not match the
+        # record; and a closing-tag-shaped span raised MarkupError, taking
+        # down outreach send, apply and outreach connect before the question
+        # was ever asked. A Text instance carries no markup by definition.
+        # Same reasoning as careeros/cli/_display.py's verbatim(), which is
+        # not imported here because runtime must not depend on cli.
+        approved = Confirm.ask(Text(proposal.summary), default=False)
         reason = (
             "approved at a terminal confirmation prompt" if approved
             else "declined at a terminal confirmation prompt"
