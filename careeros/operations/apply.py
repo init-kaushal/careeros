@@ -352,12 +352,19 @@ def execute_apply(
     # Consume the approval before attempting the external action.
     mark_executed(runtime, approval_id)
 
-    # None, not False, until filler.fill actually returns: the except
-    # Exception branch below distinguishes "the submission itself
+    # A non-True sentinel until filler.fill actually returns, so that the
+    # except Exception branch below can distinguish "the submission itself
     # happened, only teardown afterward failed" (success is True) from
-    # "nothing conclusive happened" (success is still None) — a plain
-    # False initial value would be indistinguishable from an unattempted
-    # fill and could never signal the former.
+    # "nothing conclusive happened" (fill raised before returning, so this
+    # value survives).
+    #
+    # None rather than False reads as "not yet attempted", but only the
+    # readability is load-bearing: `if success is True` treats None and
+    # False identically, so initializing to False behaves the same. This
+    # comment previously claimed a False initial value "could never signal
+    # the former", which is not true — Phase 13b's implementer noticed the
+    # equivalent overclaim in its own copy of this pattern, and substituting
+    # False here leaves the whole suite green.
     success = None
     try:
         with launch_browser(headless=headless) as (_, page):
