@@ -1,22 +1,30 @@
 import hashlib
 import socket
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from careeros.browser.connect import LinkedInConnector
 from careeros.browser.driver import BrowserProfileBusy
 from careeros.core.models import (
-    Approval, Company, ConnectionRequest, Job, Person, PolicyConfig, Profile,
+    Approval, Company, ConnectionRequest, Job, OutreachMessage, Person, PolicyConfig,
+    Profile,
 )
-from careeros.operations.approvals import PENDING, SUPERSEDED
-from careeros.operations.connect import propose_connection_request
+from careeros.operations.approvals import (
+    APPROVED, DECLINED, EXECUTED, FAILED, PENDING, SUPERSEDED, resolve_approval,
+)
+from careeros.operations.connect import (
+    decline_connection_request, execute_connection_request, propose_connection_request,
+)
 from careeros.operations.errors import (
-    BoardSessionRequired, BrowserUnavailable, ConnectionAlreadySent, DraftFailed,
-    EntityNotFound, PolicyBlocked,
+    ApprovalNotGranted, ArtifactChanged, BoardSessionRequired, BrowserUnavailable,
+    ConnectionAlreadySent, ConnectionNotSent, DraftFailed, EntityNotFound,
+    PolicyBlocked, WrongApprovalAction,
 )
 from careeros.operations.outreach import make_message_id
+from careeros.runtime.base import ApprovalResult
 from careeros.runtime.factory import open_local_runtime
 from careeros.skills.connection_note import NOTE_CHAR_LIMIT
 from careeros.storage.filesystem import LocalFilesystemStorage
@@ -87,6 +95,58 @@ def _connections(storage):
 
 def _digest(text):
     return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _approve(runtime, approval_id, reason="user said yes"):
+    return resolve_approval(
+        runtime, approval_id, ApprovalResult(approved=True, reason=reason),
+        action_label="connect",
+    )
+
+
+def _decline(runtime, approval_id, reason="user said no"):
+    return resolve_approval(
+        runtime, approval_id, ApprovalResult(approved=False, reason=reason),
+        action_label="connect",
+    )
+
+
+def _connector(send_return=True, side_effect=None):
+    """A stand-in for the module-level CONNECTOR.
+
+    `can_handle` delegates to the real connector rather than answering a
+    truthy Mock, because `canonical_linkedin_url` asks CONNECTOR.can_handle
+    as its final gate — a blanket MagicMock would make normalization accept
+    anything and quietly weaken every URL assertion in this file.
+    """
+    mock = MagicMock()
+    mock.platform = "LinkedIn"
+    mock.can_handle.side_effect = LinkedInConnector().can_handle
+    if side_effect is not None:
+        mock.send_connection_request.side_effect = side_effect
+    else:
+        mock.send_connection_request.return_value = send_return
+    return mock
+
+
+@contextmanager
+def _ok_launch_browser(headless=False):
+    """Stands in for launch_browser without touching Playwright at all.
+
+    Patched at `careeros.operations.connect.launch_browser` — the name this
+    module binds — not at the origin module, which the `from ... import` at
+    the top of connect.py would leave already resolved. tests/conftest.py's
+    autouse guard is a second barrier, not the only one: the real
+    launch_browser opens Chrome against the CareerOS profile, which can hold
+    a live LinkedIn session, and this flow's whole purpose is to send a
+    message to a human being from it.
+    """
+    yield MagicMock(name="context"), MagicMock(name="page")
+
+
+def _no_launch_browser(headless=False):
+    """For tests that assert the browser is never reached at all."""
+    raise AssertionError("launch_browser was called")
 
 
 class TestPatchTargetsAreReal:
@@ -673,3 +733,936 @@ class TestDraftFailureConversion:
             "An older note."
         )
         assert _approvals(runtime.storage) == []
+
+
+class TestExecuteConnectionRequestHappyPath:
+    def test_sends_the_approved_note_to_the_approved_profile_and_records_it(
+        self, tmp_path,
+    ):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        connector = _connector()
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       _ok_launch_browser):
+                result = execute_connection_request(
+                    runtime, proposal.approval_id, action_label="connect",
+                )
+
+        # The URL argument comes off the payload, and the note off the
+        # digest-verified record — the two things the approval bound.
+        args = connector.send_connection_request.call_args.args
+        assert args[1] == CANONICAL
+        assert args[2] == NOTE
+
+        record = ConnectionRequest.load(runtime.storage, REQUEST_ID)
+        assert record.send_state == "sent"
+        assert record.sent_at == result.sent_at
+        assert record.sent_at is not None
+        # Neither the note nor the URL is rewritten by a send: what was
+        # approved is what the record keeps saying was contacted.
+        assert record.note_text == NOTE
+        assert record.linkedin_url == CANONICAL
+
+        assert Approval.load(runtime.storage, proposal.approval_id).state == EXECUTED
+        assert "connection_request_sent" in _log(runtime.storage)
+
+        assert result.request_id == REQUEST_ID
+        assert result.recipient_name == "Jane Doe"
+        assert result.linkedin_url == CANONICAL
+        assert result.teardown_failed is False
+
+    def test_the_browser_is_launched_headful(self, tmp_path):
+        """§6.4 requires the user to watch the request being sent.
+
+        `headless=False` is passed explicitly rather than left to
+        launch_browser's default, so this flow's requirement does not depend
+        on a default in another module staying what it is today — and so
+        this assertion can be exact rather than "not headless=True".
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        launcher = MagicMock(side_effect=_ok_launch_browser)
+
+        with patch("careeros.operations.connect.CONNECTOR", _connector()):
+            with patch("careeros.operations.connect.launch_browser", launcher):
+                execute_connection_request(
+                    runtime, proposal.approval_id, action_label="connect",
+                )
+
+        assert launcher.call_args.args == ()
+        assert launcher.call_args.kwargs == {"headless": False}
+
+    def test_the_page_the_connector_is_handed_is_the_launched_one(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        connector = _connector()
+        page = MagicMock(name="page")
+
+        @contextmanager
+        def launch(headless=False):
+            yield MagicMock(name="context"), page
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser", launch):
+                execute_connection_request(
+                    runtime, proposal.approval_id, action_label="connect",
+                )
+
+        assert connector.send_connection_request.call_args.args[0] is page
+
+    def test_action_label_is_keyword_only(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        with patch("careeros.operations.connect.CONNECTOR", _connector()):
+            with patch("careeros.operations.connect.launch_browser",
+                       _ok_launch_browser):
+                with pytest.raises(TypeError):
+                    execute_connection_request(runtime, proposal.approval_id, "connect")
+
+
+class TestMarkExecutedPrecedesTheBrowser:
+    """The ordering §6.3 names, and the sharpest reason for it in this project.
+
+    A duplicate connection request is visible in the recipient's
+    notifications. LinkedIn would probably reject a second invitation as
+    already-pending, but §6.3 says in terms that correctness cannot rest on
+    the platform's idempotence — so the approval must be consumed before the
+    browser is even launched. Consuming it afterwards would leave it
+    `approved`, with a matching digest, for the whole duration of a headful
+    browser session the user is sitting in front of.
+
+    Both tests read the approval's *stored* state from inside the external
+    step, so they observe the real write ordering rather than restating the
+    source. Verified by mutation, not by reading: deleting the mark_executed
+    call, and separately moving it below the send, each make these fail.
+    """
+
+    def test_the_approval_is_already_executed_when_the_browser_launches(
+        self, tmp_path,
+    ):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        observed = []
+
+        @contextmanager
+        def observing_launch(headless=False):
+            observed.append(
+                Approval.load(runtime.storage, proposal.approval_id).state
+            )
+            yield MagicMock(), MagicMock()
+
+        with patch("careeros.operations.connect.CONNECTOR", _connector()):
+            with patch("careeros.operations.connect.launch_browser",
+                       observing_launch):
+                execute_connection_request(
+                    runtime, proposal.approval_id, action_label="connect",
+                )
+
+        assert observed == [EXECUTED]
+
+    def test_the_approval_is_already_executed_when_the_request_is_sent(
+        self, tmp_path,
+    ):
+        # The launch observation above would still pass if mark_executed sat
+        # between launch_browser and the send. This one pins the send itself.
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        observed = []
+
+        def observing_send(page, url, note):
+            observed.append(
+                Approval.load(runtime.storage, proposal.approval_id).state
+            )
+            return True
+
+        connector = _connector(side_effect=observing_send)
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       _ok_launch_browser):
+                execute_connection_request(
+                    runtime, proposal.approval_id, action_label="connect",
+                )
+
+        assert observed == [EXECUTED]
+
+
+class TestExecuteRefusalsThatPrecedeConsumption:
+    """Every refusal here fires before mark_executed, so the approval stays
+    retryable — the established pattern, and what makes a mistaken edit or a
+    momentarily-missing record recoverable without re-approving.
+    """
+
+    def test_an_approval_from_another_flow_is_refused(self, tmp_path):
+        # 13a shipped both its decline functions without this guard and had
+        # to fix them retroactively: an approval id is an opaque
+        # cross-process string, and the send_outreach payload carries
+        # person_id and job_id too, so nothing but this check tells the two
+        # apart.
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        approval.model_copy(update={"action": "send_outreach"}).save(runtime.storage)
+        connector = _connector()
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       _no_launch_browser):
+                with pytest.raises(WrongApprovalAction) as exc:
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+        assert exc.value.expected == "send_connection_request"
+        assert exc.value.actual == "send_outreach"
+        connector.send_connection_request.assert_not_called()
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+
+    @pytest.mark.parametrize("state", [PENDING, DECLINED])
+    def test_an_approval_not_in_the_approved_state_is_refused(self, tmp_path, state):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        if state == DECLINED:
+            _decline(runtime, proposal.approval_id)
+        connector = _connector()
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       _no_launch_browser):
+                with pytest.raises(ApprovalNotGranted):
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+        connector.send_connection_request.assert_not_called()
+
+    def test_an_edited_note_is_refused(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        record = ConnectionRequest.load(runtime.storage, REQUEST_ID)
+        record.model_copy(update={"note_text": "A note nobody reviewed."}).save(
+            runtime.storage
+        )
+        connector = _connector()
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       _no_launch_browser):
+                with pytest.raises(ArtifactChanged) as exc:
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+        assert exc.value.path == "connections/" + REQUEST_ID + ".json"
+        connector.send_connection_request.assert_not_called()
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+
+    def test_a_missing_connection_record_is_entity_not_found(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        runtime.storage.delete("connections/" + REQUEST_ID + ".json")
+        connector = _connector()
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       _no_launch_browser):
+                with pytest.raises(EntityNotFound):
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+        connector.send_connection_request.assert_not_called()
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+
+    def test_a_missing_person_is_entity_not_found(self, tmp_path):
+        """The Person is required here, unlike in decline.
+
+        The URL re-verification below compares the payload against the
+        *Person's* current URL, so without the Person there is no way to
+        establish that the profile about to be opened is still the one the
+        user believes belongs to this person. That is not a check to skip
+        when the input is absent.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        runtime.storage.delete("people/" + PERSON_ID + ".json")
+        connector = _connector()
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       _no_launch_browser):
+                with pytest.raises(EntityNotFound):
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+        connector.send_connection_request.assert_not_called()
+
+
+class TestTheUrlIsReVerifiedAgainstThePerson:
+    """§6.3's load-bearing check, and the one that stops a request reaching a
+    different human being.
+
+    The URL lives in three places: the Person, the ConnectionRequest record,
+    and the approval payload. The record's copy and the payload were both
+    written by the same propose call and neither is ever rewritten
+    afterwards, so comparing *those two* is vacuous — it cannot fail, and a
+    test asserting it would pass against any implementation. The only
+    comparison with content is payload against the Person's current URL,
+    which is what every test in this class is written to force.
+    """
+
+    def test_a_url_now_pointing_at_a_different_person_is_refused(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        person = Person.load(runtime.storage, PERSON_ID)
+        person.model_copy(
+            update={"linkedin_url": "https://www.linkedin.com/in/john-roe"}
+        ).save(runtime.storage)
+        connector = _connector()
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       _no_launch_browser):
+                with pytest.raises(ArtifactChanged) as exc:
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+        # The path named is the one that actually changed.
+        assert exc.value.path == "people/" + PERSON_ID + ".json"
+        connector.send_connection_request.assert_not_called()
+        # Nothing was attempted, so this stays retryable: restore the URL and
+        # the same approval still executes.
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+        assert ConnectionRequest.load(runtime.storage, REQUEST_ID).sent_at is None
+
+    def test_comparing_the_record_instead_of_the_person_would_not_catch_it(
+        self, tmp_path,
+    ):
+        """Proves the test above is not vacuous, by pinning the state it runs in.
+
+        After a `people update --linkedin-url` the record and the payload
+        still agree with each other and disagree with the Person. An
+        implementation that re-verified the record would therefore sail
+        straight past the change the test above catches. Asserted here so
+        that "which of the three copies is compared" is recorded as a fact
+        about the workspace rather than left implicit in one raises-check.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        person = Person.load(runtime.storage, PERSON_ID)
+        person.model_copy(
+            update={"linkedin_url": "https://www.linkedin.com/in/john-roe"}
+        ).save(runtime.storage)
+
+        record = ConnectionRequest.load(runtime.storage, REQUEST_ID)
+        payload_url = Approval.load(
+            runtime.storage, proposal.approval_id
+        ).payload["linkedin_url"]
+        assert record.linkedin_url == payload_url == CANONICAL
+        assert Person.load(runtime.storage, PERSON_ID).linkedin_url != payload_url
+
+    @pytest.mark.parametrize("re_pasted", [
+        "www.linkedin.com/in/jane-doe",
+        "http://www.linkedin.com/in/jane-doe/",
+        "  https://WWW.LinkedIn.COM/in/jane-doe?trk=nav  ",
+        "https://www.linkedin.com/in/jane-doe#experience",
+        "/in/jane-doe",
+    ])
+    def test_a_cosmetic_re_paste_of_the_same_profile_still_sends(
+        self, tmp_path, re_pasted,
+    ):
+        """Normalized before comparing, or the check would be a nuisance.
+
+        Re-pasting the same profile in a different shape — which
+        `people update --linkedin-url` accepts verbatim — identifies exactly
+        the same human being. Comparing raw strings would refuse it and send
+        the user back to re-approve a note that had not changed, which is
+        how a load-bearing check gets routed around.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        person = Person.load(runtime.storage, PERSON_ID)
+        person.model_copy(update={"linkedin_url": re_pasted}).save(runtime.storage)
+        connector = _connector()
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       _ok_launch_browser):
+                execute_connection_request(
+                    runtime, proposal.approval_id, action_label="connect",
+                )
+
+        # Still the approved URL that gets navigated, not the re-pasted form.
+        assert connector.send_connection_request.call_args.args[1] == CANONICAL
+
+    @pytest.mark.parametrize("now_stored", [None, "", "   ", "jane-doe"])
+    def test_a_url_that_can_no_longer_be_read_is_refused(self, tmp_path, now_stored):
+        """Removed or mangled reads as changed, not as "skip the check".
+
+        Treating an unreadable current URL as a pass would make the check
+        defeatable by clearing the field. ArtifactChanged is the right shape
+        because it is a refusal: the approval stays approved, so restoring
+        the URL makes the same approval work again.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        person = Person.load(runtime.storage, PERSON_ID)
+        person.model_copy(update={"linkedin_url": now_stored}).save(runtime.storage)
+        connector = _connector()
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       _no_launch_browser):
+                with pytest.raises(ArtifactChanged):
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+        connector.send_connection_request.assert_not_called()
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+
+    def test_a_different_host_serving_the_same_slug_is_refused(self, tmp_path):
+        # uk.linkedin.com/in/jane-doe and www.linkedin.com/in/jane-doe do
+        # resolve to the same profile in practice, but normalization
+        # deliberately preserves the host on file rather than guessing, so
+        # the two canonicalize differently. Refusing is the consistent
+        # answer: the value the user approved is not the value on file.
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        person = Person.load(runtime.storage, PERSON_ID)
+        person.model_copy(
+            update={"linkedin_url": "https://uk.linkedin.com/in/jane-doe"}
+        ).save(runtime.storage)
+
+        with patch("careeros.operations.connect.CONNECTOR", _connector()):
+            with patch("careeros.operations.connect.launch_browser",
+                       _no_launch_browser):
+                with pytest.raises(ArtifactChanged):
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+
+class TestDuplicateRefusalAtThePointOfAction:
+    """The 13a defect shape, closed here rather than only on the propose path.
+
+    Task 4 put `ConnectionAlreadySent` on propose. That leaves a stranded
+    `approved` approval — minted before the other request went out, or held
+    by an integrator — able to send a second invitation regardless. 13a had
+    exactly this hole with its closed-relationship check and a stranded
+    approval mailed a closed relationship.
+    """
+
+    def test_a_request_already_sent_to_this_person_blocks_the_send(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        # A second job, same human being: connections/ is enumerated because
+        # a connection request goes to a person, not to a role, so a second
+        # job must not buy a second request.
+        other_id = make_message_id("other-job-xyz9", PERSON_ID)
+        _seed_request(
+            runtime.storage, id=other_id, job_id="other-job-xyz9",
+            send_state="sent", sent_at="2026-09-01T10:00:00+00:00",
+        )
+        connector = _connector()
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       _no_launch_browser):
+                with pytest.raises(ConnectionAlreadySent) as exc:
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+        assert exc.value.person_id == PERSON_ID
+        assert exc.value.request_id == other_id
+        connector.send_connection_request.assert_not_called()
+        # A refusal before consumption, like the others: if the user withdraws
+        # the other invitation the approval is still there.
+        assert Approval.load(runtime.storage, proposal.approval_id).state == APPROVED
+        assert ConnectionRequest.load(runtime.storage, REQUEST_ID).sent_at is None
+
+    def test_a_request_sent_to_someone_else_does_not_block_the_send(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        other_id = make_message_id(JOB_ID, "acme-corp-john-roe")
+        _seed_request(
+            runtime.storage, id=other_id, person_id="acme-corp-john-roe",
+            send_state="sent", sent_at="2026-09-01T10:00:00+00:00",
+        )
+        connector = _connector()
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       _ok_launch_browser):
+                execute_connection_request(
+                    runtime, proposal.approval_id, action_label="connect",
+                )
+
+        connector.send_connection_request.assert_called_once()
+
+    def test_the_duplicate_refusal_outranks_a_changed_note(self, tmp_path):
+        """Order matters because the two refusals mean different things.
+
+        ArtifactChanged says "re-propose"; ConnectionAlreadySent says "never
+        again". Reporting the recoverable one first would send the user round
+        a regeneration loop that ends in the same refusal.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        record = ConnectionRequest.load(runtime.storage, REQUEST_ID)
+        record.model_copy(update={"note_text": "An edited note."}).save(runtime.storage)
+        other_id = make_message_id("other-job-xyz9", PERSON_ID)
+        _seed_request(
+            runtime.storage, id=other_id, job_id="other-job-xyz9",
+            send_state="sent", sent_at="2026-09-01T10:00:00+00:00",
+        )
+
+        with patch("careeros.operations.connect.CONNECTOR", _connector()):
+            with patch("careeros.operations.connect.launch_browser",
+                       _no_launch_browser):
+                with pytest.raises(ConnectionAlreadySent):
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+    def test_a_corrupt_record_does_not_hide_a_real_sent_one(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        runtime.storage.atomic_write("connections/garbage.json", b"{not json")
+        other_id = make_message_id("other-job-xyz9", PERSON_ID)
+        _seed_request(
+            runtime.storage, id=other_id, job_id="other-job-xyz9",
+            send_state="sent", sent_at="2026-09-01T10:00:00+00:00",
+        )
+
+        with patch("careeros.operations.connect.CONNECTOR", _connector()):
+            with patch("careeros.operations.connect.launch_browser",
+                       _no_launch_browser):
+                with pytest.raises(ConnectionAlreadySent):
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+
+class TestAClosedOutreachRelationshipDoesNotBlockAConnectionRequest:
+    """A deliberate divergence from 13a's `_require_live_relationship`.
+
+    `careeros outreach close` is scoped, in its own help text and its own
+    event name, to the *email cadence*: it logs `cadence_closed` and reports
+    "No further follow-ups will be proposed." Reading it as a ban on every
+    channel would silently widen a switch the user pulled under a narrower
+    promise — and LinkedIn is precisely the fallback a user reaches for when
+    an email cadence closed because nobody replied.
+
+    `_TERMINAL_REFERRAL_STATES` also includes `referral_confirmed`, where
+    refusing to connect would be plainly wrong: the person just agreed to
+    refer you. And `ConnectionRequest` carries no referral_state or
+    closed_reason of its own, so the only terminal state is on a *different*
+    record that need not exist at all.
+
+    What 13a's check actually protected — repeated contact with a person the
+    user is finished with — is covered here by `ConnectionAlreadySent`,
+    which is strictly stronger than the cadence rule: one request per human
+    being, ever, across every job.
+    """
+
+    @pytest.mark.parametrize("referral_state,closed_reason", [
+        ("closed", "they asked me to stop"),
+        ("referral_confirmed", None),
+        ("research", "no reply after three emails"),
+    ])
+    def test_the_send_proceeds(self, tmp_path, referral_state, closed_reason):
+        runtime = _runtime(tmp_path)
+        now = datetime.now(timezone.utc).isoformat()
+        OutreachMessage(
+            id=REQUEST_ID, job_id=JOB_ID, person_id=PERSON_ID,
+            draft_text="An earlier email.", send_state="sent",
+            referral_state=referral_state, closed_reason=closed_reason,
+            created_at=now, sent_at=now,
+        ).save(runtime.storage)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        connector = _connector()
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       _ok_launch_browser):
+                execute_connection_request(
+                    runtime, proposal.approval_id, action_label="connect",
+                )
+
+        connector.send_connection_request.assert_called_once()
+        assert ConnectionRequest.load(runtime.storage, REQUEST_ID).send_state == "sent"
+
+
+class TestConnectionNotSent:
+    def test_a_false_from_the_connector_fails_the_approval_and_spares_the_record(
+        self, tmp_path,
+    ):
+        """§6.3: ConnectionNotSent leaves the approval failed and the record
+        untouched — unlike execute_follow_up, which writes send_state="failed".
+
+        The record is spared on purpose. False means an ordinary page state
+        (already connected, an invitation already pending, no Connect
+        button), none of which is a fact about the *draft*; writing "failed"
+        onto it would overwrite the drafted note's state with the outcome of
+        a browser session.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        connector = _connector(send_return=False)
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       _ok_launch_browser):
+                with pytest.raises(ConnectionNotSent):
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+        record = ConnectionRequest.load(runtime.storage, REQUEST_ID)
+        assert record.send_state == "drafted"
+        assert record.sent_at is None
+        assert record.note_text == NOTE
+
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        assert approval.state == FAILED
+        assert approval.detail == "ConnectionNotSent"
+        assert "connection_request_failed" in _log(runtime.storage)
+
+
+class TestBrowserFailures:
+    def test_a_locked_profile_surfaces_with_the_flag_set(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        connector = _connector()
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       MagicMock(side_effect=BrowserProfileBusy("already in use"))):
+                with pytest.raises(BrowserUnavailable) as exc:
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+        assert exc.value.profile_busy is True
+        connector.send_connection_request.assert_not_called()
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        # A truthful failed, not a stale executed: mark_executed already ran,
+        # so the attempt must be recorded as having failed.
+        assert approval.state == FAILED
+        assert approval.detail == "BrowserProfileBusy"
+        assert ConnectionRequest.load(runtime.storage, REQUEST_ID).sent_at is None
+        assert "connection_request_failed" in _log(runtime.storage)
+
+    def test_a_missing_playwright_names_the_install_command(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        with patch("careeros.operations.connect.CONNECTOR", _connector()):
+            with patch("careeros.operations.connect.launch_browser",
+                       MagicMock(side_effect=ImportError("no playwright"))):
+                with pytest.raises(BrowserUnavailable) as exc:
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+        assert "playwright install" in str(exc.value)
+        assert exc.value.profile_busy is False
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        assert approval.state == FAILED
+        assert approval.detail == "ImportError"
+
+    def test_a_generic_browser_exception_fails_the_approval_without_leaking_its_message(
+        self, tmp_path,
+    ):
+        """The activity log is append-only, so nothing that lands in it can be
+        scrubbed — and a Playwright exception's str() can quote the browser
+        profile's filesystem path. Only the exception type name is recorded.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        with patch("careeros.operations.connect.CONNECTOR", _connector()):
+            with patch("careeros.operations.connect.launch_browser",
+                       MagicMock(side_effect=RuntimeError(
+                           "crashed at /Users/someone/.careeros/profile"))):
+                with pytest.raises(BrowserUnavailable):
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        assert approval.state == FAILED
+        assert approval.detail == "RuntimeError"
+        log = _log(runtime.storage)
+        assert "connection_request_failed" in log
+        assert "/Users/someone" not in log
+
+    def test_an_exception_raised_by_the_connector_itself_fails_the_approval(
+        self, tmp_path,
+    ):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        connector = _connector(side_effect=RuntimeError("selector blew up"))
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       _ok_launch_browser):
+                with pytest.raises(BrowserUnavailable):
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+        assert Approval.load(
+            runtime.storage, proposal.approval_id
+        ).state == FAILED
+        assert ConnectionRequest.load(runtime.storage, REQUEST_ID).sent_at is None
+
+
+class TestTeardownAfterASuccessfulSend:
+    """The request went out; only closing the browser afterwards failed.
+
+    This is not an academic case here. `sent_at` is the durable fact the
+    duplicate refusal reads, so recording this as a plain failure would
+    leave `sent_at` unset — and the next propose would happily draft a
+    *second* invitation to a person who can already see the first one in
+    their notifications. execute_apply handles the identical shape for the
+    same reason.
+    """
+
+    def test_the_request_is_recorded_as_sent_and_the_anomaly_is_logged(
+        self, tmp_path,
+    ):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+        connector = _connector()
+
+        @contextmanager
+        def teardown_failing_launch(headless=False):
+            yield MagicMock(), MagicMock()
+            raise RuntimeError("context.close() failed")
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       teardown_failing_launch):
+                result = execute_connection_request(
+                    runtime, proposal.approval_id, action_label="connect",
+                )
+
+        assert result.teardown_failed is True
+        record = ConnectionRequest.load(runtime.storage, REQUEST_ID)
+        assert record.send_state == "sent"
+        assert record.sent_at is not None
+        assert Approval.load(runtime.storage, proposal.approval_id).state == EXECUTED
+        log = _log(runtime.storage)
+        assert "connection_request_sent" in log
+        assert "connection_request_teardown_failed" in log
+
+    def test_a_second_request_to_that_person_is_then_refused(self, tmp_path):
+        # The whole point of recording the send: the duplicate guard has to
+        # be able to see it.
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        @contextmanager
+        def teardown_failing_launch(headless=False):
+            yield MagicMock(), MagicMock()
+            raise RuntimeError("context.close() failed")
+
+        with patch("careeros.operations.connect.CONNECTOR", _connector()):
+            with patch("careeros.operations.connect.launch_browser",
+                       teardown_failing_launch):
+                execute_connection_request(
+                    runtime, proposal.approval_id, action_label="connect",
+                )
+
+        with pytest.raises(ConnectionAlreadySent):
+            _propose(runtime)
+
+    def test_a_teardown_failure_after_a_false_is_still_a_failure(self, tmp_path):
+        # A connector that answered False stays on the failure path even
+        # when teardown then raises on top of it: only a real True may
+        # record a send, because only a real True put something in
+        # somebody's notifications.
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _approve(runtime, proposal.approval_id)
+
+        @contextmanager
+        def teardown_failing_launch(headless=False):
+            yield MagicMock(), MagicMock()
+            raise RuntimeError("context.close() failed")
+
+        with patch("careeros.operations.connect.CONNECTOR",
+                   _connector(send_return=False)):
+            with patch("careeros.operations.connect.launch_browser",
+                       teardown_failing_launch):
+                with pytest.raises(BrowserUnavailable):
+                    execute_connection_request(
+                        runtime, proposal.approval_id, action_label="connect",
+                    )
+
+        record = ConnectionRequest.load(runtime.storage, REQUEST_ID)
+        assert record.sent_at is None
+        assert Approval.load(runtime.storage, proposal.approval_id).state == FAILED
+
+
+class TestDeclineConnectionRequest:
+    def test_records_the_decision_and_opens_no_browser(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _decline(runtime, proposal.approval_id)
+        connector = _connector()
+
+        with patch("careeros.operations.connect.CONNECTOR", connector):
+            with patch("careeros.operations.connect.launch_browser",
+                       _no_launch_browser):
+                decline_connection_request(
+                    runtime, proposal.approval_id, action_label="connect",
+                )
+
+        record = ConnectionRequest.load(runtime.storage, REQUEST_ID)
+        assert record.send_state == "declined"
+        # Never sent, so it stays re-proposable: the duplicate guard reads
+        # sent_at, and a decline is not a send.
+        assert record.sent_at is None
+        assert record.note_text == NOTE
+        connector.send_connection_request.assert_not_called()
+
+        log = _log(runtime.storage)
+        assert "connection_request_declined" in log
+        assert "Jane Doe" in log
+
+    def test_a_declined_request_can_be_proposed_again(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _decline(runtime, proposal.approval_id)
+        decline_connection_request(
+            runtime, proposal.approval_id, action_label="connect",
+        )
+
+        second = _propose(runtime, note="A second attempt at the note.")
+
+        assert ConnectionRequest.load(runtime.storage, REQUEST_ID).send_state == (
+            "drafted"
+        )
+        assert second.note_text == "A second attempt at the note."
+
+    def test_an_approval_from_another_flow_is_refused(self, tmp_path):
+        """13a shipped both declines without this and had to fix them later.
+
+        The send_outreach and send_follow_up payloads both carry person_id
+        and job_id, so payload_value would read an approval from either flow
+        without complaint — and this function would then write
+        send_state="declined" onto whichever connections/ record happened to
+        share that (job, person) id, and log the decline against it.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _decline(runtime, proposal.approval_id)
+        approval = Approval.load(runtime.storage, proposal.approval_id)
+        approval.model_copy(update={"action": "send_follow_up"}).save(runtime.storage)
+
+        with pytest.raises(WrongApprovalAction) as exc:
+            decline_connection_request(
+                runtime, proposal.approval_id, action_label="connect",
+            )
+
+        assert exc.value.expected == "send_connection_request"
+        assert exc.value.actual == "send_follow_up"
+        # Untouched — the record still reads as drafted, not declined.
+        assert ConnectionRequest.load(runtime.storage, REQUEST_ID).send_state == (
+            "drafted"
+        )
+        assert "connection_request_declined" not in _log(runtime.storage)
+
+    @pytest.mark.parametrize("state", [PENDING, APPROVED])
+    def test_an_approval_not_in_the_declined_state_is_refused(self, tmp_path, state):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        if state == APPROVED:
+            _approve(runtime, proposal.approval_id)
+
+        with pytest.raises(ApprovalNotGranted):
+            decline_connection_request(
+                runtime, proposal.approval_id, action_label="connect",
+            )
+
+        assert ConnectionRequest.load(runtime.storage, REQUEST_ID).send_state == (
+            "drafted"
+        )
+
+    def test_a_missing_connection_record_is_entity_not_found(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _decline(runtime, proposal.approval_id)
+        runtime.storage.delete("connections/" + REQUEST_ID + ".json")
+
+        with pytest.raises(EntityNotFound):
+            decline_connection_request(
+                runtime, proposal.approval_id, action_label="connect",
+            )
+
+    def test_a_missing_person_does_not_block_recording_the_decline(self, tmp_path):
+        """Pure bookkeeping, so it must not fail on an absent Person.
+
+        Unlike execute, decline contacts nobody — there is no URL to
+        re-verify — so a missing people/<id>.json falls back to the raw id
+        for the summary rather than turning "record that the user said no"
+        into an error.
+        """
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _decline(runtime, proposal.approval_id)
+        runtime.storage.delete("people/" + PERSON_ID + ".json")
+
+        decline_connection_request(
+            runtime, proposal.approval_id, action_label="connect",
+        )
+
+        assert ConnectionRequest.load(runtime.storage, REQUEST_ID).send_state == (
+            "declined"
+        )
+        log = _log(runtime.storage)
+        assert "connection_request_declined" in log
+        assert PERSON_ID in log
+
+    def test_action_label_is_keyword_only(self, tmp_path):
+        runtime = _runtime(tmp_path)
+        proposal = _propose(runtime)
+        _decline(runtime, proposal.approval_id)
+
+        with pytest.raises(TypeError):
+            decline_connection_request(runtime, proposal.approval_id, "connect")

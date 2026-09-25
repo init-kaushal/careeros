@@ -6,17 +6,22 @@ from dataclasses import dataclass
 from pydantic import ValidationError
 
 from careeros.browser.connect import LinkedInConnector
-from careeros.browser.driver import BrowserProfileBusy
+from careeros.browser.driver import BrowserProfileBusy, launch_browser
 from careeros.browser.session import check_board_sessions
 from careeros.core.models import (
     Company, ConnectionRequest, Goals, Job, Person, PolicyConfig, Profile,
 )
 from careeros.core.policy_engine import PolicyEngine
 from careeros.operations._shared import digest_text as note_digest
-from careeros.operations.approvals import open_approval
+from careeros.operations._shared import now as _now
+from careeros.operations.approvals import (
+    APPROVED, DECLINED, mark_executed, mark_failed, open_approval, payload_value,
+    require_state,
+)
 from careeros.operations.errors import (
-    BoardSessionRequired, BrowserUnavailable, ConnectionAlreadySent, DraftFailed,
-    EntityNotFound, PolicyBlocked,
+    ArtifactChanged, BoardSessionRequired, BrowserUnavailable, ConnectionAlreadySent,
+    ConnectionNotSent, DraftFailed, EntityNotFound, PolicyBlocked,
+    WrongApprovalAction,
 )
 from careeros.operations.outreach import make_message_id
 from careeros.runtime.base import AgentRuntime
@@ -37,6 +42,23 @@ _JSON_SUFFIX = ".json"
 # "/in/jane" rather than an absolute URL.
 _CANONICAL_ORIGIN = "https://www.linkedin.com"
 _PROFILE_PREFIX = "/in/"
+
+
+@dataclass(frozen=True)
+class ConnectionResult:
+    request_id: str
+    recipient_name: str
+    # The URL that was actually navigated — the one bound into the approval,
+    # not whatever the Person says now. A caller reporting success names the
+    # profile the invitation went to.
+    linkedin_url: str
+    sent_at: str
+    # True only on the teardown-anomaly path: the invitation itself went out
+    # and the record says so, but closing the browser afterwards failed and
+    # a durable connection_request_teardown_failed event was logged. Callers
+    # should warn rather than print unqualified success, exactly as
+    # ApplyResult.teardown_failed asks them to.
+    teardown_failed: bool = False
 
 
 @dataclass(frozen=True)
@@ -342,3 +364,337 @@ def propose_connection_request(
         note_text=note_text, recipient_name=person.name,
         linkedin_url=linkedin_url,
     )
+
+
+def _load_request_and_person(
+    runtime: AgentRuntime, request_id: str, person_id: str,
+) -> tuple[ConnectionRequest, Person]:
+    try:
+        record = ConnectionRequest.load(runtime.storage, request_id)
+        person = Person.load(runtime.storage, person_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise EntityNotFound("Connection request or person not found.") from exc
+    return record, person
+
+
+def _require_unchanged_profile_url(
+    person: Person, approved_url: str, person_id: str,
+) -> None:
+    """Raise unless the Person still points at the profile that was approved.
+
+    §6.3 calls this the load-bearing check, and it is: if the Person's URL
+    changed between approval and execution, the user now believes this
+    person is somebody else, and sending would put the reviewed note in a
+    stranger's notifications where it cannot be recalled.
+
+    The comparison is deliberately payload-against-*Person*, not
+    payload-against-record. The URL lives in three places by now — the
+    Person, the ConnectionRequest, and the payload — but the record's copy
+    and the payload were both written by the same propose call and neither is
+    ever rewritten afterwards (ConnectionRequest.linkedin_url says so in its
+    own docstring: it exists precisely so a later `people update` cannot
+    retroactively change what the record claims was contacted). So comparing
+    those two can never fail; it would look like a check and be a no-op. The
+    Person is the only one of the three that a user can move.
+
+    Normalized before comparing, for the same reason propose normalizes
+    before persisting: `people update --linkedin-url` stores whatever was
+    pasted, so a cosmetic re-paste of the same profile ("/in/jane-doe",
+    "www.linkedin.com/in/jane-doe/?trk=...") is the same human being and
+    must not be mistaken for a change. A refusal that fires on cosmetics is
+    a refusal users learn to route around.
+
+    An absent or unreadable current URL is treated as changed rather than as
+    "nothing to compare": the other way, clearing the field would defeat the
+    check. ArtifactChanged is the right shape either way — it is a refusal
+    raised before mark_executed, so restoring the URL makes this very
+    approval executable again without re-approving.
+    """
+    current = canonical_linkedin_url(person.linkedin_url or "")
+    if current != approved_url:
+        raise ArtifactChanged("people/" + person_id + ".json")
+
+
+def _record_connection_failed(
+    runtime: AgentRuntime, approval_id: str, request_id: str, recipient: str,
+    action_label: str, detail: str,
+) -> None:
+    """Mark the approval failed and log the attempt.
+
+    `detail` is always an exception type name or a refusal type name, never
+    an exception's message: a Playwright or profile-lock exception's str()
+    can quote the browser profile's filesystem path, and both records this
+    writes are durable — the activity log is append-only — so nothing
+    landing here could be scrubbed later. apply.py's
+    _record_apply_failed makes the same choice for the same reason.
+
+    The ConnectionRequest itself is deliberately left alone. §6.3 says
+    ConnectionNotSent "leaves the approval failed and the record untouched",
+    which is the opposite of execute_follow_up's send_state="failed" — and
+    right, because the connector's False means an ordinary page state
+    (already connected, an invitation already pending, no Connect button),
+    which is not a fact about the drafted note.
+    """
+    mark_failed(runtime, approval_id, detail)
+    runtime.record_activity(runtime.new_event(
+        "connection_request_failed", action_label,
+        "Connection request to " + recipient + " was not sent: " + detail,
+        status="failed", entity_type="connection_request", entity_id=request_id,
+    ))
+
+
+def _mark_sent(
+    runtime: AgentRuntime, record: ConnectionRequest, recipient: str,
+    linkedin_url: str, action_label: str, *, teardown_failed: bool = False,
+) -> ConnectionResult:
+    """Record the invitation as sent and log it, then return the result.
+
+    Shared by the ordinary success path and by a teardown failure that
+    happens after the connector already returned True: in both cases the
+    invitation is in somebody's notifications, so the record and the log must
+    say so identically either way. That matters more here than it does for
+    apply, because sent_at is the fact the duplicate refusal reads — leaving
+    it unset after a real send is what would let a second, visible
+    invitation be proposed.
+    """
+    sent_at = _now()
+    record.model_copy(update={"send_state": "sent", "sent_at": sent_at}).save(
+        runtime.storage
+    )
+    runtime.record_activity(runtime.new_event(
+        "connection_request_sent", action_label,
+        "Sent LinkedIn connection request to " + recipient + " (" + linkedin_url + ")",
+        entity_type="connection_request", entity_id=record.id,
+    ))
+    return ConnectionResult(
+        request_id=record.id, recipient_name=recipient, linkedin_url=linkedin_url,
+        sent_at=sent_at, teardown_failed=teardown_failed,
+    )
+
+
+def execute_connection_request(
+    runtime: AgentRuntime, approval_id: str, *, action_label: str,
+) -> ConnectionResult:
+    """Send the connection request an approved approval authorized, and nothing else.
+
+    Drafts nothing and calls no LLM: the note that is typed is read back from
+    the stored ConnectionRequest and checked against the digest recorded when
+    the approval was created, so the bytes reviewed are the bytes
+    transmitted. The profile URL is never re-read off the Person either — it
+    was bound onto the payload at propose time and is read back verbatim
+    here, which is what makes a changed Person URL a refusal rather than a
+    request to a stranger.
+
+    approval.action is checked against ACTION before anything is read off the
+    payload and before any state change. The send_outreach and
+    send_follow_up payloads both carry person_id and job_id, so an approval
+    from either flow would otherwise satisfy every payload_value read here
+    and be safe only by accident.
+
+    The approval is consumed (mark_executed) before the browser is launched.
+    Same ordering as execute_apply and execute_follow_up, and §6.3 gives it
+    a sharper reason than either: a duplicate connection request is visible
+    in the recipient's notifications. LinkedIn would probably reject a
+    second invitation as already-pending, but correctness cannot rest on the
+    platform's idempotence. Consuming afterwards would leave the approval
+    `approved`, digest still matching, for the whole duration of a headful
+    browser session — long enough for a Ctrl-C or a second process to send
+    twice. Consuming first means a crash mid-send leaves a stale executed
+    record with an unsent request, which is recoverable; an invitation
+    sitting in somebody's notifications is not.
+
+    Every refusal below — duplicate, changed note, changed profile URL, a
+    missing record or person — fires *before* that consumption, so each one
+    leaves the approval approved and retryable. Nothing has been attempted
+    when they raise.
+
+    `request_id` is re-derived from the payload's job_id and person_id rather
+    than read from approval.entity_id: the payload is the documented
+    cross-process contract and §6.3 fixes it at exactly four keys, and
+    make_message_id is the same deterministic derivation propose used, so
+    the two cannot disagree.
+
+    One deliberate divergence from execute_follow_up: there is no
+    closed-relationship check. `careeros outreach close` is scoped, in its
+    own help text and its own `cadence_closed` event, to the email cadence —
+    it reports "No further follow-ups will be proposed" — and reading it as
+    a ban on every channel would widen a switch the user pulled under a
+    narrower promise. LinkedIn is the fallback channel a user reaches for
+    precisely when an email cadence closed unanswered, and 13a's terminal
+    set includes referral_confirmed, where refusing to connect with somebody
+    who just agreed to refer you would be plainly wrong. ConnectionRequest
+    carries no closed state of its own, so the only terminal state lives on
+    an OutreachMessage that need not exist at all. What 13a's check
+    protected — repeated contact with a person the user is finished with — is
+    covered here by the duplicate refusal, which is strictly stronger than
+    the cadence rule: one request per human being, ever, across every job.
+    """
+    approval = require_state(runtime.storage, approval_id, APPROVED)
+    if approval.action != ACTION:
+        raise WrongApprovalAction(approval_id, ACTION, approval.action)
+    person_id = payload_value(approval, "person_id")
+    job_id = payload_value(approval, "job_id")
+    linkedin_url = payload_value(approval, "linkedin_url")
+    expected_digest = payload_value(approval, "note_sha256")
+
+    request_id = make_message_id(job_id, person_id)
+    record, person = _load_request_and_person(runtime, request_id, person_id)
+
+    # First of the post-load refusals because it outranks them, the same way
+    # execute_follow_up puts its closed-relationship check first: a person
+    # who already has an invitation is not a note to re-digest or a URL to
+    # re-compare. It also outranks them in what it tells the user —
+    # ArtifactChanged means "re-propose", this means "never again", and
+    # reporting the recoverable one first would send them round a
+    # regeneration loop that ends here anyway.
+    #
+    # This record is not excluded from the scan on purpose. If it already
+    # carries a sent_at, a real send happened against it and a second one is
+    # exactly what must be refused.
+    already_sent = _sent_request_to(runtime, person_id)
+    if already_sent is not None:
+        raise ConnectionAlreadySent(
+            person_id, person.name, already_sent.id, already_sent.sent_at or "",
+        )
+
+    if note_digest(record.note_text) != expected_digest:
+        raise ArtifactChanged(_CONNECTIONS_PREFIX + request_id + _JSON_SUFFIX)
+
+    _require_unchanged_profile_url(person, linkedin_url, person_id)
+
+    # Consume the approval before the browser exists — see the ordering note
+    # in the docstring above.
+    mark_executed(runtime, approval_id)
+
+    # The *initial* value is load-bearing, and verified so by mutation:
+    # starting this at anything truthy makes a launch that never reached
+    # the connector read, in the generic except below, as an invitation
+    # already sent. `None` rather than False mirrors execute_apply's
+    # sentinel and names "never answered" distinctly from "answered no" —
+    # that part is presentational, since `is True` and a plain truthiness
+    # test reject both identically for the bool the connector returns.
+    sent = None
+    try:
+        # headless=False explicitly rather than relying on launch_browser's
+        # default. §6.4 requires the user to watch the invitation being
+        # sent, and that requirement should not depend on a default in
+        # another module staying what it is.
+        with launch_browser(headless=False) as (_, page):
+            sent = CONNECTOR.send_connection_request(
+                page, linkedin_url, record.note_text,
+            )
+    except ImportError as exc:
+        _record_connection_failed(
+            runtime, approval_id, request_id, person.name, action_label,
+            type(exc).__name__,
+        )
+        raise BrowserUnavailable(
+            "Playwright not installed. Run: pip install playwright "
+            "&& playwright install chrome"
+        ) from exc
+    except BrowserProfileBusy as exc:
+        # A locked profile is a whole-run condition rather than a per-person
+        # one, and the flag is how the caller tells the two apart.
+        _record_connection_failed(
+            runtime, approval_id, request_id, person.name, action_label,
+            type(exc).__name__,
+        )
+        raise BrowserUnavailable(str(exc), profile_busy=True) from exc
+    except Exception as exc:
+        if sent is True:
+            # The invitation went out before this fired, so it came from
+            # context teardown, not from the send. Recording it as a failure
+            # would leave sent_at unset — and sent_at is the fact the
+            # duplicate refusal reads, so the next propose would draft a
+            # *second* invitation to somebody who can already see the first
+            # one. The send is recorded as what it was, and the anomaly gets
+            # its own durable event rather than being hidden inside the
+            # success one.
+            result = _mark_sent(
+                runtime, record, person.name, linkedin_url, action_label,
+                teardown_failed=True,
+            )
+            runtime.record_activity(runtime.new_event(
+                "connection_request_teardown_failed", action_label,
+                "Browser teardown failed after the connection request to "
+                + person.name + " was sent: " + type(exc).__name__,
+                status="failed", entity_type="connection_request",
+                entity_id=request_id,
+            ))
+            return result
+        _record_connection_failed(
+            runtime, approval_id, request_id, person.name, action_label,
+            type(exc).__name__,
+        )
+        raise BrowserUnavailable(str(exc)) from exc
+
+    if not sent:
+        # The connector reports every ordinary non-completion as False —
+        # already connected, an invitation already pending, no Connect
+        # button, a textarea that clipped the note — which is FillIncomplete's
+        # contract and why ConnectionNotSent is shaped like it.
+        _record_connection_failed(
+            runtime, approval_id, request_id, person.name, action_label,
+            "ConnectionNotSent",
+        )
+        raise ConnectionNotSent(
+            "LinkedIn did not accept a connection request to " + person.name
+            + " at " + linkedin_url + ". They may already be connected, an "
+            "invitation may already be pending, or notes may be unavailable "
+            "on this account. The request was not sent."
+        )
+
+    return _mark_sent(runtime, record, person.name, linkedin_url, action_label)
+
+
+def decline_connection_request(
+    runtime: AgentRuntime, approval_id: str, *, action_label: str,
+) -> None:
+    """Record that a declined approval's connection request will not be sent.
+
+    Loads only the ConnectionRequest, not the Person: this is pure
+    bookkeeping and contacts nobody, so a missing people/<id>.json must not
+    turn "record that the user said no" into an error. The person's name is
+    used in the activity summary when the record is present and the raw
+    person id otherwise, so a decline can always be recorded. execute is
+    stricter and requires the Person, because only execute has a profile URL
+    to re-verify.
+
+    approval.action is checked exactly as execute checks it. 13a shipped both
+    of its decline functions without this guard and had to fix them in a
+    later round: the send_outreach and send_follow_up payloads both carry
+    person_id and job_id, so every payload_value read below would succeed
+    against an approval from either flow, and this function would then write
+    send_state="declined" onto whichever connections/ record happened to
+    share that (job, person) id and log the decline against it.
+
+    sent_at is deliberately untouched — model_copy carries it forward — so a
+    decline leaves the request re-proposable. The duplicate refusal reads
+    sent_at, and a decline is not a send. There is no cadence field to
+    advance either, which is the one thing decline_follow_up does that has no
+    analogue here: connection requests are not on a schedule, so nothing
+    would re-propose this one unasked.
+    """
+    approval = require_state(runtime.storage, approval_id, DECLINED)
+    if approval.action != ACTION:
+        raise WrongApprovalAction(approval_id, ACTION, approval.action)
+    person_id = payload_value(approval, "person_id")
+    job_id = payload_value(approval, "job_id")
+
+    request_id = make_message_id(job_id, person_id)
+    try:
+        record = ConnectionRequest.load(runtime.storage, request_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise EntityNotFound("Connection request not found.") from exc
+
+    try:
+        recipient = Person.load(runtime.storage, person_id).name
+    except (FileNotFoundError, ValueError):
+        recipient = person_id
+
+    record.model_copy(update={"send_state": "declined"}).save(runtime.storage)
+    runtime.record_activity(runtime.new_event(
+        "connection_request_declined", action_label,
+        "Connection request to " + recipient + " declined",
+        entity_type="connection_request", entity_id=request_id,
+    ))
