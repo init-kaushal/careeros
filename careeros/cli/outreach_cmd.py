@@ -976,9 +976,39 @@ def review(
 @people_app.command()
 def update(
     person_id: str = typer.Argument(..., help="Person ID"),
-    email: str = typer.Option(..., "--email", help="Email address to set"),
+    email: str = typer.Option(None, "--email", help="Email address to set"),
+    linkedin_url: str = typer.Option(None, "--linkedin-url", help="LinkedIn profile URL to set"),
     workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
 ) -> None:
+    """Set the contact details careeros cannot discover for you.
+
+    Pass either flag or both; whichever you leave out keeps its current
+    value. --linkedin-url matters most for a person you added by hand: the
+    field is otherwise only ever written by 'careeros research people', off
+    the people-search scraper, so without this flag a hand-added person can
+    never acquire one and every LinkedIn-facing flow stays closed to them.
+    """
+    # Both flags are optional so either can be set without disturbing the
+    # other, which means typer no longer rejects a no-flag call for us. That
+    # guard has to live here instead: an invocation that asks for nothing
+    # must not report success, because "Updated Jane Doe" over an unchanged
+    # record is a worse answer than the error typer used to print.
+    updates: dict[str, str] = {}
+    for flag, field, value in (("--email", "email", email), ("--linkedin-url", "linkedin_url", linkedin_url)):
+        if value is None:
+            continue
+        # A blank value would leave the record looking updated while every
+        # `if not person.linkedin_url` check still reads it as missing — the
+        # same dead end this command exists to resolve, only harder to see.
+        if not value.strip():
+            rprint("[red]" + flag + " cannot be blank.[/red]")
+            raise typer.Exit(1)
+        updates[field] = value.strip()
+
+    if not updates:
+        rprint("[red]Nothing to update. Pass --email and/or --linkedin-url.[/red]")
+        raise typer.Exit(1)
+
     runtime = _open_runtime(workspace)
 
     try:
@@ -987,6 +1017,12 @@ def update(
         rprint("[red]Person " + person_id + " not found.[/red]")
         raise typer.Exit(1)
 
-    person_obj = person_obj.model_copy(update={"email": email})
+    # Built from only the flags that were passed, never from unconditional
+    # keyword arguments: model_copy(update={"email": None}) would null a
+    # stored address the user never mentioned, and the write would look like
+    # a successful update while silently discarding data.
+    person_obj = person_obj.model_copy(update=updates)
     person_obj.save(runtime.storage)
-    rprint("[green]Updated email for " + person_obj.name + "[/green]")
+    rprint(
+        "[green]Updated " + ", ".join(sorted(updates)) + " for " + person_obj.name + "[/green]"
+    )

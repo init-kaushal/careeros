@@ -253,6 +253,21 @@ class CadencePolicy(BaseModel):
     days_between_touches: int = Field(ge=1, le=90)
     max_touches: int = Field(ge=1, le=10)  # counts the initial message, not just follow-ups
     max_follow_ups_per_run: int = Field(ge=1, le=20)
+    # The only field here with a default, and deliberately so. load() raises
+    # when the file is absent precisely so a cadence cannot start on a
+    # schedule the user never chose, and the three fields above are required
+    # for the same reason — but this one arrived after Phase 13a had already
+    # written cadence_policy.json files with three keys, and making it
+    # required would turn every one of those into a load failure. The
+    # loud-absence property still holds for the file as a whole.
+    #
+    # 5 because a connection request is seen by a person, not just a mailbox:
+    # five in one sitting is a plausible amount of deliberate outreach, while
+    # anything near the upper bound starts to look like volume. LinkedIn
+    # enforces its own weekly limits and this is not an attempt to stay under
+    # them by stealth — it is restraint the tool imposes on itself so one
+    # enthusiastic run cannot spend the whole week's allowance.
+    max_connection_requests_per_run: int = Field(default=5, ge=1, le=20)
 
     def save(self, storage: StorageProvider) -> None:
         storage.atomic_write("config/cadence_policy.json", self.model_dump_json(indent=2).encode())
@@ -354,6 +369,43 @@ class OutreachMessage(BaseModel):
         path = "outreach/" + message_id + ".json"
         if not storage.exists(path):
             raise FileNotFoundError("OutreachMessage " + repr(message_id) + " not found")
+        return cls.model_validate_json(storage.read(path).decode())
+
+
+class ConnectionRequest(BaseModel):
+    """One LinkedIn connection request, drafted and possibly sent.
+
+    Deliberately shaped like OutreachMessage rather than as its own kind of
+    thing: the id is derived from (job_id, person_id) by the same
+    make_message_id slug helper, so enumeration is a list-and-slice of the
+    connections/ prefix, a corrupt record surfaces as the ValueError callers
+    already guard loads with, and the note binds to an approval by digest the
+    same way a draft does. A second connection request is visible to the
+    recipient, so sent_at is the durable fact a duplicate-request refusal
+    reads — send_state is rewritten by a re-draft, sent_at only ever by a
+    real send.
+    """
+
+    id: str
+    job_id: str
+    person_id: str
+    # Copied onto the record rather than read back off the Person at send
+    # time, so the URL that was reviewed and approved is the URL that was
+    # used — a later `people update --linkedin-url` cannot retroactively
+    # change what this record says was contacted.
+    linkedin_url: str
+    note_text: str
+    send_state: str = "drafted"
+    sent_at: str | None = None
+
+    def save(self, storage: StorageProvider) -> None:
+        storage.atomic_write("connections/" + self.id + ".json", self.model_dump_json(indent=2).encode())
+
+    @classmethod
+    def load(cls, storage: StorageProvider, request_id: str) -> "ConnectionRequest":
+        path = "connections/" + request_id + ".json"
+        if not storage.exists(path):
+            raise FileNotFoundError("ConnectionRequest " + repr(request_id) + " not found")
         return cls.model_validate_json(storage.read(path).decode())
 
 

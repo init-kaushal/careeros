@@ -137,6 +137,17 @@ class FillIncomplete(OperationError):
     pass
 
 
+class ConnectionNotSent(OperationError):
+    """The connection request was not sent, for an ordinary reason.
+
+    Bare like FillIncomplete: the connector reports ordinary non-completion —
+    already connected, a request already pending, no Connect button on the
+    page — by returning False rather than by raising, so there is no
+    structured detail to carry and nothing here for a caller to branch on
+    beyond the type itself.
+    """
+
+
 class BrowserUnavailable(OperationError):
     def __init__(self, detail: str, *, profile_busy: bool = False) -> None:
         super().__init__(detail)

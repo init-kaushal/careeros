@@ -277,6 +277,26 @@ class TestMarkReferralRequested:
 
 
 class TestPeopleUpdate:
+    # linkedin_url is otherwise written in exactly one place in the codebase —
+    # `careeros research people`, off the people-search scraper — so a person
+    # the user typed in by hand has no other way to acquire one, and every
+    # LinkedIn-facing flow that needs Person.linkedin_url is unreachable for
+    # them. That is why this command has to be able to set it.
+
+    def _person_with_both_fields(self, ws_path):
+        """Seed the person with both fields already set, then hand back storage.
+
+        Both tests below check that updating one field leaves the *other*
+        one's existing value intact, which is only observable if both start
+        out populated.
+        """
+        storage = LocalFilesystemStorage(ws_path)
+        Person.load(storage, PERSON_ID).model_copy(update={
+            "email": "old@acme.com",
+            "linkedin_url": "https://www.linkedin.com/in/jane-old/",
+        }).save(storage)
+        return storage
+
     def test_updates_email(self, tmp_path):
         ws_path = _setup_workspace(tmp_path, with_email=False)
         result = runner.invoke(people_app, ["update", PERSON_ID, "--email", "jane@acme.com", "--workspace", ws_path])
@@ -284,6 +304,98 @@ class TestPeopleUpdate:
         storage = LocalFilesystemStorage(ws_path)
         person = Person.load(storage, PERSON_ID)
         assert person.email == "jane@acme.com"
+
+    def test_updates_email_only_and_leaves_linkedin_url_untouched(self, tmp_path):
+        # A model_copy(update=...) built from unconditional keyword arguments
+        # would null the field the user did not pass. That is silent data
+        # loss, and a happy-path assertion on the field that *was* passed
+        # cannot see it.
+        ws_path = _setup_workspace(tmp_path)
+        storage = self._person_with_both_fields(ws_path)
+
+        result = runner.invoke(people_app, ["update", PERSON_ID, "--email", "new@acme.com", "--workspace", ws_path])
+
+        assert result.exit_code == 0
+        person = Person.load(storage, PERSON_ID)
+        assert person.email == "new@acme.com"
+        assert person.linkedin_url == "https://www.linkedin.com/in/jane-old/"
+
+    def test_updates_linkedin_url_only_and_leaves_email_untouched(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path)
+        storage = self._person_with_both_fields(ws_path)
+
+        result = runner.invoke(people_app, [
+            "update", PERSON_ID, "--linkedin-url", "https://www.linkedin.com/in/jane-doe/",
+            "--workspace", ws_path,
+        ])
+
+        assert result.exit_code == 0
+        person = Person.load(storage, PERSON_ID)
+        assert person.linkedin_url == "https://www.linkedin.com/in/jane-doe/"
+        assert person.email == "old@acme.com"
+
+    def test_updates_both_fields_in_one_invocation(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path)
+        storage = self._person_with_both_fields(ws_path)
+
+        result = runner.invoke(people_app, [
+            "update", PERSON_ID, "--email", "new@acme.com",
+            "--linkedin-url", "https://www.linkedin.com/in/jane-doe/",
+            "--workspace", ws_path,
+        ])
+
+        assert result.exit_code == 0
+        person = Person.load(storage, PERSON_ID)
+        assert person.email == "new@acme.com"
+        assert person.linkedin_url == "https://www.linkedin.com/in/jane-doe/"
+
+    def test_no_flags_refuses_and_changes_nothing(self, tmp_path):
+        # --email used to be required, so typer rejected a no-flag call for
+        # us. Making both flags optional moves that guard here, and it has to
+        # stay a refusal: reporting success while writing nothing would be
+        # worse than the error typer used to print.
+        ws_path = _setup_workspace(tmp_path)
+        storage = self._person_with_both_fields(ws_path)
+        before = storage.read("people/" + PERSON_ID + ".json")
+
+        result = runner.invoke(people_app, ["update", PERSON_ID, "--workspace", ws_path])
+
+        assert result.exit_code == 1
+        assert "--email" in result.output and "--linkedin-url" in result.output
+        assert storage.read("people/" + PERSON_ID + ".json") == before
+
+    def test_blank_linkedin_url_refuses_and_changes_nothing(self, tmp_path):
+        # Storing "" would leave the record looking updated while every
+        # `if not person.linkedin_url` check still treats it as missing — the
+        # same dead end this flag exists to remove, but harder to diagnose.
+        ws_path = _setup_workspace(tmp_path)
+        storage = self._person_with_both_fields(ws_path)
+        before = storage.read("people/" + PERSON_ID + ".json")
+
+        result = runner.invoke(people_app, ["update", PERSON_ID, "--linkedin-url", "   ", "--workspace", ws_path])
+
+        assert result.exit_code == 1
+        assert storage.read("people/" + PERSON_ID + ".json") == before
+
+    def test_surrounding_whitespace_is_stripped_before_saving(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path)
+        storage = self._person_with_both_fields(ws_path)
+
+        result = runner.invoke(people_app, [
+            "update", PERSON_ID, "--linkedin-url", "  https://www.linkedin.com/in/jane-doe/  ",
+            "--workspace", ws_path,
+        ])
+
+        assert result.exit_code == 0
+        assert Person.load(storage, PERSON_ID).linkedin_url == "https://www.linkedin.com/in/jane-doe/"
+
+    def test_unknown_person_still_reports_not_found(self, tmp_path):
+        ws_path = _setup_workspace(tmp_path)
+        result = runner.invoke(people_app, [
+            "update", "no-such-person", "--email", "x@acme.com", "--workspace", ws_path,
+        ])
+        assert result.exit_code == 1
+        assert "not found" in result.output
 
 
 class TestOutreachSendApprovalRecord:
