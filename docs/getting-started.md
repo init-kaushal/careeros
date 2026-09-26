@@ -6,6 +6,7 @@ your workspace lives wherever you put it. Framework updates (`git pull`) never t
 ## Prerequisites
 
 - Python 3.11 or later (`python3 --version`)
+- Chromium — installed automatically when you first run `pip install playwright && playwright install chrome`
 - An API key for your preferred LLM provider — used during onboarding for profile extraction, and
   again by job scoring, cover letter/outreach drafting, and company/people/compensation research.
   Use `CAREEROS_MODEL=ollama/...` if you want every one of those calls to stay on your machine.
@@ -23,6 +24,7 @@ cd careeros
 python -m venv .venv
 source .venv/bin/activate       # Windows: .venv\Scripts\activate
 pip install -e .
+pip install playwright && playwright install chrome
 ```
 
 Verify the install:
@@ -60,8 +62,8 @@ The wizard walks you through five steps:
 2. **Your name** — used in the profile
 3. **Your resume** — paste plain text, a LinkedIn export, or any text describing your background.
    Leave blank to skip profile extraction and fill in the profile manually later.
-4. **Profile extraction** — CareerOS calls Claude Haiku to parse your text into structured data:
-   skills, job titles, years of experience, and goals.
+4. **Profile extraction** — CareerOS calls your configured LLM to parse your text into structured
+   data: skills, job titles, years of experience, and goals.
 5. **Done** — your workspace is ready.
 
 The whole process takes under a minute. If you skip the resume step, you can run `careeros onboard`
@@ -84,31 +86,224 @@ Goals:      3 goals
 Activity:   2 events today
 ```
 
-## 5. Inspect your profile
+## 5. Sign in to your job boards
+
+CareerOS drives a dedicated browser profile — separate from your everyday Chrome — so a scheduled
+run never holds sessions for anything but the boards you authorized:
 
 ```bash
-cat ~/my-career/profile/profile.json
+careeros browser login --board linkedin
+careeros browser login --board indeed
+careeros browser login --board wellfound
 ```
 
-The profile is plain JSON. You can edit it directly — CareerOS reads it fresh on every command.
-
-## 6. Export your workspace
+Each command opens a real browser window at that board's login page. Sign in as normal; CareerOS
+detects the completed session and closes the window. Check what's authorized at any time:
 
 ```bash
-careeros export
+careeros browser status
 ```
 
-This creates a zip file at `~/my-career/exports/careeros-export-<timestamp>.zip`. The zip contains
-your entire workspace and can be imported into any CareerOS installation or handed to an agent
-runtime that speaks the workspace manifest format.
+Re-run `login` whenever a session expires. You need an active session for every board you want to
+browse, apply to, or research against.
 
-## 7. Import a workspace
+## 6. Browse and score jobs
 
 ```bash
-careeros import ~/Downloads/careeros-export-2026-01-15.zip
+careeros browse --board linkedin
 ```
 
-CareerOS unpacks the zip to a new directory and makes it your active workspace.
+CareerOS searches LinkedIn (or another board) through the dedicated profile, scores each result
+against your profile and goals, and shows them ranked. Save the ones you want to apply to:
+
+```
+[92] Senior SRE @ Acme Corp — San Francisco, CA
+Save this job? [y/n/q]
+```
+
+Saved jobs land in `jobs/` in your workspace. List them:
+
+```bash
+careeros job list
+careeros job show <id>
+```
+
+You can also add jobs from a direct URL or a company's ATS without browsing:
+
+```bash
+careeros job add --url https://boards.greenhouse.io/acme/jobs/12345
+careeros job search --source greenhouse --company acme
+careeros job search --source lever --company acme
+```
+
+## 7. Research a job
+
+Before applying or reaching out, research the company and its people:
+
+```bash
+careeros research company --job <id>
+careeros research people --job <id>
+careeros research compensation --job <id>
+```
+
+`research people` browser-scrapes a person list and classifies each one (IC, EM, hiring manager,
+recruiter). `research compensation` pulls salary data and gives an honest confidence rating.
+
+Add a LinkedIn profile URL and email address to a person once you have them:
+
+```bash
+careeros people update <id> --linkedin-url https://www.linkedin.com/in/...
+careeros people update <id> --email name@company.com
+```
+
+## 8. Apply to a job
+
+```bash
+careeros apply --job <id>
+```
+
+CareerOS generates a cover letter tailored to the role and your profile, shows it to you for
+review, and fills the real application form only after you approve:
+
+```
+--- Cover letter draft ---
+Dear Hiring Manager,
+...
+
+[a]ccept  [r]egenerate  [q]uit
+> a
+
+Submit application to Acme Corp? [y/n]: y
+```
+
+A browser window opens and fills the form. You watch it happen. CareerOS detects submission and
+logs the event. An `Approval` record is kept under `approvals/` so the whole lifecycle — proposed,
+approved, executed — has a durable trail.
+
+To use a resume variant tailored to this specific job, see §11 below.
+
+## 9. Set policies (optional)
+
+Before running any automated commands, consider setting policies. CareerOS checks these before
+proposing any application — a blocked job never reaches the approval step:
+
+```bash
+# Edit config/policies.json directly, or create it:
+cat > ~/my-career/config/policies.json << 'EOF'
+{
+  "blocked_companies": ["Acme Corp"],
+  "min_salary": 150000,
+  "blocked_locations": ["New York"]
+}
+EOF
+```
+
+- `blocked_companies` — exact company name match (case-insensitive)
+- `min_salary` — minimum `salary_min` on the job record; jobs without salary data are not blocked
+- `blocked_locations` — substring match; `"New York"` blocks "New York, NY" and "New York City"
+
+A policy block is permanent: it cannot be overridden with a flag or env var. Edit the file to
+change it.
+
+## 10. Run unattended discovery and apply
+
+```bash
+careeros discover-and-apply
+```
+
+Discovers jobs across your configured boards, scores them, and auto-applies to anything above
+your threshold — capped per run and logged in full. Configure the automation policy in
+`config.json`:
+
+```json
+{
+  "automation_policy": {
+    "auto_apply_min_score": 80,
+    "max_auto_applies_per_run": 5,
+    "boards": ["linkedin", "indeed"]
+  }
+}
+```
+
+Add API board sources (no browser required for discovery):
+
+```bash
+# config/sources.json
+[
+  {"source": "greenhouse", "company": "acme"},
+  {"source": "lever", "company": "stripe"}
+]
+```
+
+Run from cron or launchd for fully automated discovery. Every save, merge, policy block, and
+application is logged to the activity trail.
+
+## 11. Resume variants
+
+Build a resume tailored to one specific job:
+
+```bash
+careeros resume variant --job <id>
+```
+
+Every body bullet in the variant is a verbatim span of your master resume, verified against it.
+The model selects and orders; it never writes new text. The result is saved as a PDF at
+`resumes/versions/<job_id>/resume.pdf`. `careeros apply` picks it up automatically.
+
+To update your master resume and re-extract skills with evidence verification:
+
+```bash
+careeros resume ingest /path/to/updated-resume.pdf
+```
+
+Skills without a verified quote from the resume text are dropped and named, not silently stored.
+
+## 12. Outreach
+
+Draft and send outreach to a researched person:
+
+```bash
+careeros outreach send --job <id> --person <id>
+```
+
+The flow mirrors `apply`: draft, review loop, approval, send. The email is sent only after you
+approve. An `OutreachMessage` record is kept under `outreach/` with the send state, timestamps,
+and cadence counters.
+
+Once outreach is sent, manage the follow-up cadence:
+
+```bash
+# Propose follow-ups for relationships due for another touch (run from cron):
+careeros outreach follow-up
+
+# Review and send the drafted follow-ups:
+careeros outreach review
+
+# End a cadence permanently:
+careeros outreach close --job <id> --person <id> --reason "Accepted offer elsewhere"
+```
+
+`outreach follow-up` never sends on its own — it only drafts and leaves pending approvals.
+`outreach review` is the only path that sends.
+
+## 13. LinkedIn connection requests
+
+```bash
+careeros outreach connect --job <id> --person <id>
+```
+
+Drafts a 300-character LinkedIn connection note, shows you the exact bytes alongside the profile
+URL it will navigate, then sends the invitation only after approval. The browser runs **headful**
+on purpose: you watch it happen on your own account.
+
+CareerOS sends at most **one connection request to a person, ever, across every job**. A second
+attempt for the same person is refused outright.
+
+Requires the person to have a LinkedIn URL set:
+
+```bash
+careeros people update <id> --linkedin-url https://www.linkedin.com/in/...
+```
 
 ---
 
@@ -116,64 +311,100 @@ CareerOS unpacks the zip to a new directory and makes it your active workspace.
 
 ```
 ~/my-career/
-  manifest.json         entry point — schema version, careeros version, timestamps
-  config.json           workspace-level settings
+  manifest.json             entry point — schema version, careeros version, timestamps
+  config.json               workspace-level settings (automation policy, etc.)
+  config/
+    policies.json           blocking rules: companies, salary floor, locations
+    cadence_policy.json     follow-up cadence: intervals, max touches per relationship
+    sources.json            API board sources for discover-and-apply (Greenhouse, Lever)
   profile/
-    profile.json        your structured profile (skills, experience, goals)
+    profile.json            your structured profile (name, title, summary, years exp)
+    skills.json             evidence-backed skills, each with a verified quote + line
+    goals.json              short- and long-term goals, non-negotiables
+    preferences.json        target titles, locations, compensation, work arrangement
+  resumes/
+    master.md               your stored resume, read by `careeros resume ingest`
+    versions/<job_id>/      per-job resume variants — PDF + variant.json sidecar
+  jobs/<id>.json            one file per saved job
+  approvals/<id>.json       one approval record per proposed action
+  outreach/<id>.json        one outreach message per person+job pair
+  connections/<id>.json     one connection-request record per person+job pair
   activity/
-    2026-01-15.jsonl    append-only event log, one JSON object per line
-  exports/              zips created by `careeros export`
+    YYYY-MM-DD.jsonl        append-only event log, one JSON object per line
+  exports/                  zips created by `careeros export`
 ```
 
 The workspace is self-contained. Version-control it, back it up, or copy it between machines
 without touching the CareerOS install.
-
-### Sign in to your job boards
-
-CareerOS drives a dedicated browser profile, separate from your everyday Chrome, so a
-scheduled run never holds sessions for anything but the boards you authorized. Sign in once
-per board:
-
-```bash
-careeros browser login --board linkedin
-```
-
-A browser window opens at the board's login page. Sign in as normal — CareerOS detects the
-session and closes the window. Check what's authorized any time with `careeros browser status`.
-Re-run `login` whenever a session expires.
 
 ## Common questions
 
 **Can I use a different workspace directory?**
 Yes. Run `careeros onboard --workspace /path/to/dir` or just provide a custom path when the
 wizard asks. CareerOS stores the active workspace path in `~/.config/careeros/config.json`.
+Every command also honors `--workspace <path>` and the `CAREEROS_WORKSPACE` environment variable,
+in that precedence order.
 
 **Does CareerOS send my data anywhere?**
 Your resume and job data are sent to your configured LLM provider for extraction, scoring, and
 drafting (cover letters, outreach messages, research summaries) — never to a CareerOS-run server,
 since there isn't one. `browse`, `apply`, `discover-and-apply`, and `research` drive Playwright
-against a dedicated CareerOS browser profile rather than calling a scraping API. `outreach send` is
-the only command that reaches a third party directly, by SMTP, and only after you approve it.
+against a dedicated CareerOS browser profile rather than calling a scraping API. `outreach send`
+and `outreach connect` are the only commands that reach a third party directly, and only after
+you approve them.
 
 **Can I run multiple workspaces?**
 Yes — export one workspace, import it elsewhere, or just create a new one with `careeros onboard`.
 Only one workspace is active at a time (tracked in `~/.config/careeros/config.json`).
 
+**What is the approval workflow?**
+Every irreversible action (apply, outreach send, follow-up send, LinkedIn connect) is gated by
+an `Approval` record in `approvals/`. Interactive commands prompt you at the terminal. The
+scheduled `discover-and-apply` command auto-approves based on your configured threshold, because
+the approval already happened when you set the policy. An external agent session can drive the
+same operations through `careeros/operations/` directly — see `docs/agent-integration.md` for
+the full contract.
+
 **What agents can read my workspace?**
-Any agent that reads `manifest.json` and understands the workspace layout. The manifest schema
-is versioned, and CareerOS validates it on open. Future versions will maintain backwards
-compatibility.
+Any agent that reads `manifest.json` and understands the workspace layout. The manifest schema is
+versioned, and CareerOS validates it on open. See `docs/agent-integration.md` for the operations
+layer contract that lets an external agent propose and execute actions cross-process.
 
-## Beyond onboarding
+---
 
-Once your workspace exists, CareerOS covers the rest of the job search:
+## Testing the current build
 
-- `careeros browse --board linkedin` — search and score jobs through the dedicated CareerOS profile
-- `careeros apply --job <id>` — generate a cover letter and fill the real application form
-- `careeros discover-and-apply` — run unattended from cron, auto-applying above a score threshold
-- `careeros research company --job <id>` / `research people --job <id>` / `research compensation --job <id>`
-  — browser-driven, LLM-extracted research on a job's company, its people, and market comp
-- `careeros outreach send --job <id> --person <id>` — draft and send outreach, gated by approval
-- `careeros job add / list / show / update / note / search` — manage saved jobs directly
+**Automated tests (always run first):**
 
-Run `careeros --help` or `careeros <command> --help` for the full option list on any of these.
+```bash
+source .venv/bin/activate
+pytest --ignore=tests/integration
+```
+
+All 1280 unit tests should pass in under 15 seconds.
+
+**Key manual scenarios (automated tests cannot exercise these):**
+
+| Scenario | Command | What to check |
+|---|---|---|
+| Browser isolation | `careeros browser login --board linkedin` | Browser opens to LinkedIn login, not your regular Chrome profile. Session persists across commands. |
+| Policy block | Set `blocked_companies: ["Acme Corp"]` in `config/policies.json`, then `careeros apply --job <acme-id>` | Command exits immediately with a policy-blocked message. No cover letter drafted, no approval created. |
+| Duplicate invite prevention | `careeros outreach connect` twice for the same person | Second attempt raises `ConnectionAlreadySent` before any approval is opened. |
+| Apply approval flow | `careeros apply --job <id>` | Cover letter shown, `[a]ccept` advances to browser fill, approval in `approvals/` transitions pending → approved → executed. |
+| Follow-up queue | `careeros outreach follow-up` after sending outreach | Drafts pending approvals under `approvals/`; `careeros outreach review` is the only path that sends. |
+| Stage-based skip in discover-and-apply | Create a `jobs/<id>.json` with `"stage": "applied"` and no `applied_at` field, run `careeros discover-and-apply` | Job is skipped (not re-applied); `already_applied` is true. |
+| Sighting accumulation | Save a job with `url: null`, re-discover it from the same board | Second observation appends a new `Sighting` rather than being silently dropped. |
+
+**Integration tests (requires real credentials):**
+
+```bash
+# Requires ANTHROPIC_API_KEY, an active LinkedIn session, and a real workspace
+pytest tests/integration/
+```
+
+The three items from ROADMAP.md that require manual verification beyond the above:
+1. **Phase 12 exit**: a real outreach send from an agent session (needs `CAREEROS_SMTP_*` + real recipient)
+2. **Phase 13a exit**: a relationship carried through a real follow-up on cadence (needs LLM creds + time)
+3. **Phase 13b exit**: `careeros outreach connect` against a live LinkedIn session — and verifying the
+   CSS selectors in `careeros/browser/connect/linkedin.py` against actual LinkedIn HTML, since
+   they were written from static markup and have never been exercised against the live site

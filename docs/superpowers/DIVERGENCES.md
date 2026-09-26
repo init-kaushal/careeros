@@ -487,3 +487,52 @@ section says, and every one of them is recorded rather than quietly reconciled.
   from Task 6's report without re-checking it against the code, and this entry originally shipped
   saying the defect was live. A report is a snapshot of the moment it was written; a later task
   reading one has to re-verify, exactly as it would re-verify a claim in a brief.
+
+
+## Bugs found and fixed by the 2026-09-26 code review (commits df8d8b8, b753065)
+
+Four bugs found during the post-Phase-13b branch review, all confirmed and fixed in the same
+session. Recorded rather than silently closed so they preserve their own "why" reasoning for
+future reviewers who would otherwise mistake deliberate guards for unnecessary strictness.
+
+- **`mark_failed` could silently overwrite a `DECLINED` approval — fixed in `df8d8b8`.**
+  `careeros/operations/approvals.py::mark_failed` previously called `Approval.load()` directly
+  and unconditionally wrote `state=FAILED`. If called on an approval that was `DECLINED` rather
+  than `EXECUTED` (i.e., the caller skipped `mark_executed`), it would destroy the
+  `decided_at`, `decided_by`, and `reason` audit fields written by `resolve_approval`. The fix
+  adds `require_state(runtime.storage, approval_id, EXECUTED)` as the first call — the identical
+  guard the sibling functions use — so an approval that was never executed raises `ApprovalNotGranted`
+  rather than being silently corrupted. All existing callers already satisfy this precondition:
+  every call site for `mark_failed` is in an exception handler that runs after `mark_executed`,
+  which is called unconditionally just before the browser/email/send step it guards.
+
+- **`execute_connection_request` wrote `sent_at` after browser teardown — fixed in `df8d8b8`.**
+  `careeros/operations/connect.py` previously called `_mark_sent` (which writes
+  `ConnectionRequest.sent_at`) as the `return` expression after the `with launch_browser(...):`
+  block closed. A browser-teardown exception between `CONNECTOR.send_connection_request` returning
+  `True` and `_mark_sent` running left `sent_at=None` — the same state as "never sent". The
+  duplicate-send guard in `propose_connection_request` keys on `sent_at`, so a teardown crash
+  after a successful invite would allow a second connection request to the same person. The fix
+  moves `_mark_sent` inside the `with` block (run on `sent is True` before teardown), then
+  reconstructs a `ConnectionResult` with `teardown_failed=True` in the exception handler when
+  `_result` is already set — preserving the audit path without re-calling `_mark_sent`.
+
+- **`job_store._merge` silently dropped sightings for jobs with `url=None` — fixed in `b753065`.**
+  `careeros/core/job_store.py::_merge` deduped sightings on `(source, canonical_url)`. For jobs
+  whose `url` is `None` (or empty), `canonical_url(None)` returns `""`. Two independent sightings
+  of a URL-less posting on the same source both produced `canonical_url == ""`, so the second was
+  treated as already-sighted and silently dropped. The fix recognizes `""` as "unknown" and never
+  suppresses an observation on the strength of an unknown URL: `already_sighted` is `False`
+  whenever `incoming_canonical == ""`, regardless of what the existing sightings contain.
+
+- **`discover-and-apply` used `applied_at is not None` to detect already-applied jobs, missing
+  legacy records with `stage="applied"` but no `applied_at` — fixed in `b753065`.**
+  `careeros/cli/discover_and_apply_cmd.py` had two independent checks that recognized an
+  already-applied job: one at line 171 (early filter, before scoring) and one at line 212
+  (per-job re-read after scoring). Both used only `job.applied_at is not None`. Any `Job` record
+  written by an older CareerOS version that set `stage="applied"` but never wrote `applied_at`
+  (e.g., via a direct `job.save(...)` call in earlier apply flows) would pass both checks and be
+  re-applied on the next `discover-and-apply` run. The fix adds `or job.stage == "applied"` to
+  both sites, so the skip condition is met by either field. New records written by
+  `execute_apply` always set both; the dual condition costs nothing for them and closes the
+  legacy gap without a migration.
