@@ -168,7 +168,7 @@ def discover_and_apply_cmd(
         job = job.model_copy(update={"description": p["jd_text"]})
         outcome = store.save_new(job)
         p["job_id"] = outcome.job.id
-        p["already_applied"] = outcome.job.applied_at is not None
+        p["already_applied"] = outcome.job.applied_at is not None or outcome.job.stage == "applied"
         if outcome.created:
             runtime.record_activity(runtime.new_event(
                 "job_added", "discover-and-apply",
@@ -209,10 +209,11 @@ def discover_and_apply_cmd(
 
         job_id = p["job_id"]
         job = Job.load(runtime.storage, job_id)
-        if job.applied_at is not None:
+        if job.applied_at is not None or job.stage == "applied":
             # Re-read persisted state rather than trusting discovery-time
             # already_applied: this also covers an out-of-band apply that
-            # happened mid-run (e.g. via a concurrent `careeros apply`).
+            # happened mid-run (e.g. via a concurrent `careeros apply`), and
+            # legacy records where stage="applied" but applied_at was never set.
             skipped_count += 1
             continue
 

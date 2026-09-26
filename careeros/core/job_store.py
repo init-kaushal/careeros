@@ -74,9 +74,13 @@ class JobStore:
         # not a hit counter. A daily rediscovery of the same posting on the
         # same source must not append a near-duplicate entry differing only
         # in seen_at, so dedupe on (source, canonical url) before appending.
-        incoming_key = (incoming.source, canonical_url(incoming.url))
-        already_sighted = any(
-            (s.source, canonical_url(s.url)) == incoming_key for s in sightings
+        # When canonical_url returns "" (url is None or empty) there is no
+        # reliable identifier to match on; treat "" as "unknown" and never
+        # suppress a new observation on the strength of an unknown URL.
+        incoming_canonical = canonical_url(incoming.url)
+        already_sighted = incoming_canonical != "" and any(
+            s.source == incoming.source and canonical_url(s.url) == incoming_canonical
+            for s in sightings
         )
         if not already_sighted:
             sightings.append(Sighting(
