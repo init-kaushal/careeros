@@ -463,12 +463,27 @@ section says, and every one of them is recorded rather than quietly reconciled.
   it rots it fails **safe**: a connected profile has no Connect button either, so the connector
   returns `False` and the caller sees `ConnectionNotSent` rather than a misdirected invitation.
 
-- **Found in 13b, pre-existing, not fixed: `LocalRuntime.request_approval` hands the approval
-  summary to `Confirm.ask` as a raw `str`.** A person name or company containing a
-  closing-tag-shaped span (`Jane [/b] Doe`) therefore aborts the confirmation prompt with
-  `MarkupError` before the user can answer. Task 6 reproduced it in `careeros outreach connect`
-  *and* in the pre-existing `careeros outreach send`; `careeros apply` reaches the same line. Not
-  fixed in 13b because the fix is in `careeros/runtime/local.py`, outside every file this phase
-  owns, and it changes behaviour for two shipped commands that would each need their own coverage.
-  Recorded so it is found as a known defect rather than rediscovered: it is a crash, not a
-  mis-send, and 13b's own displays (summary, profile URL, note) are all rendered verbatim.
+- **Found in 13b, pre-existing, and FIXED in 13b (`46be03c`): `LocalRuntime.request_approval`
+  handed the approval summary to `Confirm.ask` as a raw `str`.** Kept here because this file
+  preserves what was open when, not just what is open now — and because the quieter of the two
+  failure modes is worth remembering.
+
+  Rich parses console markup in a raw string, and an approval summary is built from scraped data:
+  a person's name, a company, a job title. So a closing-tag-shaped span (`Jane [/b] Doe`) aborted
+  the confirmation prompt with `MarkupError` before the user could answer — and, worse, an
+  ordinary span was silently *deleted*, so a person recorded as `Jane [dim]Doe` produced a prompt
+  asking about "Jane Doe" and the user approved a summary that did not match the record. On the
+  approval gate specifically, showing the user something other than what is being approved
+  defeats the point of the gate. It affected `careeros outreach send` and `careeros apply` as well
+  as 13b's new command.
+
+  This was the last instance of the defect class Phase 13a fixed on the follow-up review panel and
+  the cover-letter panel. Fixed with `rich.text.Text`, not by importing `careeros/cli/_display.py`'s
+  `verbatim()`, because `careeros/runtime/` must not depend on `careeros/cli/`.
+
+  **Recorded also as a process note.** Task 6 found the defect and correctly declined to fix it —
+  the file was outside its scope and the blast radius covered two shipped commands. It was fixed
+  immediately afterwards, before Task 7 ran. Task 7 then carried the "not fixed" claim forward
+  from Task 6's report without re-checking it against the code, and this entry originally shipped
+  saying the defect was live. A report is a snapshot of the moment it was written; a later task
+  reading one has to re-verify, exactly as it would re-verify a claim in a brief.

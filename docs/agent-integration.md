@@ -373,8 +373,16 @@ not specific to outreach.
 ## 8. Error vocabulary
 
 Every operation raises from a single hierarchy rooted at `OperationError`
-(`careeros/operations/errors.py`). Operations never print and never call `sys.exit`; this is the
-whole vocabulary a caller branches on.
+(`careeros/operations/errors.py`), and operations never print and never call `sys.exit`. So
+catching `OperationError` is always sufficient to avoid an unhandled exception from this layer.
+
+**This table is the shared vocabulary, not the complete one.** Six refusal types are deliberately
+documented with their own flow instead, because what each one means for a retry is only meaningful
+in that flow's terms: the four cadence refusals (`NotDueForFollowUp`, `CadenceExhausted`,
+`RelationshipClosed`, `MalformedTouchTimestamp`) are in §12.4, and the two connection-request
+refusals (`ConnectionAlreadySent`, `ConnectionNotSent`) are in §13.4. This section previously
+claimed to be "the whole vocabulary a caller branches on", which stopped being true when §12
+landed — if you are writing exhaustive error handling, read all three places.
 
 | Exception | Raised when | Retry guidance |
 |---|---|---|
