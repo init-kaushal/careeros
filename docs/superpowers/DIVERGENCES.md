@@ -345,3 +345,130 @@ last refusal so a repeat can be recognised rather than re-derived.
     panel is read-only and its markup is intentional, so it needs per-field
     `rich.markup.escape` rather than the verbatim treatment, and a bracketed span in scraped job
     data can still be dropped from that display or raise `MarkupError`.
+
+
+## New deferrals and decisions recorded by Phase 13b
+
+13b implements §6 of `docs/superpowers/specs/2026-09-23-phase13-outreach-expansion-design.md`.
+Four of the entries below are places where the shipped code is deliberately **not** what that
+section says, and every one of them is recorded rather than quietly reconciled.
+
+- **`max_connection_requests_per_run` is forward-looking and does not bind today.** Spec §6.5
+  commits the field and justifies it as stopping "an enthusiastic session [burning] through the
+  user's allowance in one run". But §6.4 specifies a *single-person interactive* command
+  (`careeros outreach connect --job <id> --person <id>`), and one invocation sends at most one
+  request — so any cap above 1 can never bind, and the restraint as specified is decorative.
+
+  What shipped is the field exactly as the spec commits it: `CadencePolicy` gains
+  `max_connection_requests_per_run: int = Field(default=5, ge=1, le=20)`
+  (`careeros/core/models.py:270`), additive and defaulted so no `cadence_policy.json` written
+  during 13a fails to load. It is **read nowhere in `careeros/`** — verified by grep, whose only
+  other hits are `tests/test_cadence_policy.py` (four tests covering the default, the round trip
+  and both validation bounds), this file, and the plan and spec prose. It will bind when a batch or
+  scheduled connect command exists, and there is no such command today.
+
+  Recorded as forward-looking rather than redefined. The tempting alternative — reading the
+  activity log for a rolling 24-hour quota — would be a unilateral redesign of a user-facing
+  restraint into something the spec never described, and inflating a decorative cap into a claim
+  of protection is worse than recording the truth. The protection the cap was reaching for is
+  instead provided by the duplicate refusal below, which guards a human's perception rather than a
+  quota.
+
+- **13b had to add `careeros people update --linkedin-url`, which the spec assumed existed.**
+  Spec §6.3 has `propose_connection_request` raise an `EntityNotFound` naming `careeros people
+  update` as the remedy, but that command took only `--email`. Worse, `linkedin_url` was populated
+  in exactly **one** place — `careeros research people`, via the people-search scraper — so a
+  person the user added by hand had no path at all to the field, and every LinkedIn-facing flow was
+  permanently closed to them. An error message naming a flag that does not parse is a dead end, so
+  the flag was added in Task 1 and the error text now uses its real spelling.
+
+  Related, and a second divergence from the spec's single-refusal picture: the URL is **normalized
+  in the operations layer**, not at either writer. `people update --linkedin-url` stores whatever
+  the user pasted (a scheme-less `www.linkedin.com/in/jane` is the common case) and `research
+  people` stores the scraper's raw href (which on a search page can be root-relative, `/in/jane`),
+  so a *researched* person can be as non-canonical as a hand-entered one and normalizing at one
+  writer would leave the other. `canonical_linkedin_url` therefore runs at the moment the URL
+  becomes load-bearing, and a present-but-unusable URL is the same `EntityNotFound` with the same
+  remedy rather than a second error type.
+
+- **`ConnectionAlreadySent` is a new error type beyond spec §7**, which lists only
+  `ConnectionNotSent` for 13b. The spec omits duplicate-request protection entirely, which is the
+  actual harm this phase can do: a second connection request is *visible in the recipient's
+  notifications* and cannot be recalled, and §6.3 itself says "correctness cannot rest on the
+  platform's idempotence". The refusal means **one request per human being, ever, across every
+  job** — it enumerates `connections/` and keys on `sent_at` rather than on the `(job_id,
+  person_id)` record id, because the recipient sees one notification whichever job prompted it, and
+  `send_state` is rewritten by a regeneration while `sent_at` is only ever written by a real send.
+  It is raised from **both** `propose_connection_request` and `execute_connection_request`.
+
+  Reusing `ConnectionNotSent` was rejected: that type means *the page* declined to complete the
+  request, while this one means *careeros* declined to offer it. They mean opposite things to a
+  retry — "possibly try again" versus "never again for this person" — and collapsing them would
+  force callers to string-match to tell them apart.
+
+  **Known consequence, accepted:** `ConnectionAlreadySent` raised from `execute` leaves the
+  approval `approved` forever. The refusal fires before `mark_executed` (correctly — nothing was
+  attempted), but it is permanent, so no retry can ever consume that record. Closely related to the
+  stranded-approval clutter 13a recorded for a crashed `outreach send`, though one state further on
+  — that one strands a `pending` record, this one strands an `approved` one. It is inert either
+  way, because the only thing that can act on it is an executor that will hit the same refusal.
+  Documented in `docs/agent-integration.md` §13.4 so an integrator enumerating approvals expects
+  the shape rather than retrying it.
+
+- **`connection_request_teardown_failed` is a fifth activity event beyond spec §8's four**
+  (`connection_note_drafted`, `connection_request_sent`, `connection_request_failed`,
+  `connection_request_declined`). Added in Task 5 after finding that a browser-teardown failure
+  *after* the connector had already returned `True` would otherwise be recorded as a plain failure
+  — which leaves `sent_at` unset, and `sent_at` is the fact the duplicate refusal reads. The next
+  `propose` would then draft a **second invitation to somebody who can already see the first one**.
+  So the send is recorded as a send, `ConnectionResult.teardown_failed` carries the anomaly to the
+  caller, and the anomaly gets its own durable event rather than being hidden inside the success
+  one. `ApplyResult.teardown_failed` is the precedent and `careeros outreach connect` warns on it
+  rather than printing unqualified success.
+
+- **`CadencePolicy` is never loaded by the connect flow.** `careeros/operations/connect.py` does
+  not import it, and `careeros outreach connect` does not read it. This is deliberate and follows
+  from the first entry: the only 13b-relevant field in that file is a cap that cannot bind a
+  one-person propose, so requiring `config/cadence_policy.json` to exist before a connection
+  request could be drafted would make an unrelated 13a config file a hard precondition for an
+  unrelated 13b command. The loud-absence property 13a's three required fields give that file still
+  holds for the *cadence*; it was never meant to gate LinkedIn.
+
+- **The LinkedIn selectors are unverified against live HTML, and this is not dischargeable by a
+  test.** `careeros/browser/connect/linkedin.py`'s class names (`.pv-top-card-v2-ctas`,
+  `.dist-value`, `.distance-badge`, `textarea#custom-message`) were written from LinkedIn's markup
+  as known at the time, **not** from an observation made during the phase. The behavioural tests
+  dispatch on the module's own selector constants, so they prove the control flow and prove nothing
+  about the selector strings. Verifying them needs a real authorized session, which makes this
+  inherently manual — it is recorded here rather than papered over with a test that would only
+  restate the constants.
+
+  Two selector-level safety properties *are* pinned statically, and both are load-bearing rather
+  than stylistic:
+
+  - **Every profile-state probe is scoped to the top card** (`_TOP_CARD`, and `_scoped()` which
+    distributes it across the selector list). A LinkedIn profile page also renders "People also
+    viewed" / "More profiles for you" cards, each carrying its own Connect button and degree badge,
+    so an unscoped `button:has-text("Connect")` can resolve to a **different human being** — the
+    one failure mode in this file that no later check could catch, since the invitation would go
+    out correctly formed to the wrong person. The invite modal's own selectors (`_ADD_NOTE_SELECTOR`,
+    `_NOTE_SELECTOR`, `_SEND_SELECTOR`) are deliberately *unscoped*, because the modal renders in a
+    portal outside `<main>`.
+  - **The send control uses `:text-is("Send")`, never `:has-text("Send")`.** The latter also matches
+    **"Send without a note"**, which sits right beside the confirm button in the invite modal —
+    clicking it transmits the invitation with the reviewed note silently discarded, which is the
+    one outcome a review gate exists to prevent.
+
+  The most markup-dependent selector is the already-connected probe (the `1st` degree badge). When
+  it rots it fails **safe**: a connected profile has no Connect button either, so the connector
+  returns `False` and the caller sees `ConnectionNotSent` rather than a misdirected invitation.
+
+- **Found in 13b, pre-existing, not fixed: `LocalRuntime.request_approval` hands the approval
+  summary to `Confirm.ask` as a raw `str`.** A person name or company containing a
+  closing-tag-shaped span (`Jane [/b] Doe`) therefore aborts the confirmation prompt with
+  `MarkupError` before the user can answer. Task 6 reproduced it in `careeros outreach connect`
+  *and* in the pre-existing `careeros outreach send`; `careeros apply` reaches the same line. Not
+  fixed in 13b because the fix is in `careeros/runtime/local.py`, outside every file this phase
+  owns, and it changes behaviour for two shipped commands that would each need their own coverage.
+  Recorded so it is found as a known defect rather than rediscovered: it is a crash, not a
+  mis-send, and 13b's own displays (summary, profile URL, note) are all rendered verbatim.

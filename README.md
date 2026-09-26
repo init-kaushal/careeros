@@ -94,8 +94,10 @@ an append-only audit trail.
 - **`careeros research compensation --job <id>`** — evidence-backed compensation data pulled from
   a public salary source, with an honest confidence rating rather than a guessed number.
 - **`careeros outreach send --job <id> --person <id>`** — drafts a role-aware outreach message,
-  same review loop as `apply`, then sends it by email only after explicit approval — the one place
-  in CareerOS that makes a real, irreversible external action.
+  same review loop as `apply`, then sends it by email only after explicit approval. One of several
+  commands that take a real, irreversible external action — the others being `careeros apply`,
+  `careeros discover-and-apply`, `careeros outreach review` and `careeros outreach connect`, each
+  gated on an approval the same way.
 - **`careeros people update <id> --email <address>`** — CareerOS never guesses an email address;
   add one manually once you've found it. This is a deliberate permanent refusal, not a missing
   feature: every way to obtain a stranger's work address automatically is pattern-guessing, and a
@@ -112,6 +114,21 @@ an append-only audit trail.
   `--reason` is required, because a cadence that stopped for an unrecorded reason is exactly what
   you will not remember in three months. Declining a follow-up only defers it by one interval;
   closing is the actual off switch.
+
+**LinkedIn connection requests**
+- **`careeros outreach connect --job <id> --person <id>`** — drafts a LinkedIn connection note
+  (300 characters, LinkedIn's own limit), shows you the exact bytes alongside the profile URL it
+  will navigate, and sends the invitation only after you approve it. The browser runs **headful**
+  on purpose: you watch it happen on your own account.
+
+  This is the one command in CareerOS whose result **another person sees and nobody can recall**.
+  An unwanted email can be ignored or deleted; a connection request appears in the recipient's
+  notifications the moment it goes out. So it is approval-gated per request, and CareerOS sends at
+  most **one connection request to a person, ever, across every job** — a second one is refused
+  outright rather than left to LinkedIn to deduplicate.
+- **`careeros people update <id> --linkedin-url <url>`** — sets the profile URL this flow needs.
+  Worth knowing about for a person you added by hand: the field is otherwise only ever written by
+  `careeros research people`, so without this flag a hand-added person had no path to it at all.
 
 **Automation seam**
 Every command above routes through an `AgentRuntime` interface rather than talking to storage or
@@ -130,10 +147,11 @@ send or a job application, hold a conversation about it, and execute the action 
 all without a live connection back to the first process. See
 [docs/agent-integration.md](docs/agent-integration.md) for the full contract — the `AgentRuntime`
 Protocol, the approval schema, the error vocabulary, and a runnable two-process example for each
-flow. **Outreach send, job apply and follow-ups are all drivable from an external agent session
-today.** Apply's cross-process contract (§11 of that document) and the follow-up contract (§12)
-have not been proven with a committed test that runs the propose and execute halves as two literal
-subprocesses, as outreach's has; both sections' snippets were run that way by hand to verify them.
+flow. **Outreach send, job apply, follow-ups and LinkedIn connection requests are all drivable from an
+external agent session today.** Apply's cross-process contract (§11 of that document), the
+follow-up contract (§12) and the connection-request contract (§13) have not been proven with a
+committed test that runs the propose and execute halves as two literal subprocesses, as outreach's
+has; all three sections' snippets were run that way by hand to verify them.
 
 Follow-ups are the first flow built around a *queue*, and §12 documents it as a first-class entry
 point rather than a CLI detail: the scheduled command leaves pending approvals behind and
@@ -260,19 +278,24 @@ All workspace I/O goes through the `StorageProvider` protocol, so storage backen
 swapped without touching business logic. Every meaningful action — both outcomes of any
 approval decision, not just the success path — writes to the append-only activity log.
 
-Phase 13a has shipped the follow-up cadence: a relationship now carries from its first message
-through repeated touches on a schedule you configure, stopping on its own at `max_touches` and on
-request at `careeros outreach close`, without you having to remember any of that state. The
-scheduled half proposes and never sends, so every message still passes a human first. Automated
-email discovery was declined rather than deferred — see `docs/superpowers/DIVERGENCES.md` for the
-reasoning, along with the LinkedIn Terms-of-Service decision that 13b rests on.
+Phase 13 has shipped, both halves. 13a brought the follow-up cadence: a relationship now carries
+from its first message through repeated touches on a schedule you configure, stopping on its own at
+`max_touches` and on request at `careeros outreach close`, without you having to remember any of
+that state. The scheduled half proposes and never sends, so every message still passes a human
+first. 13b brought `careeros outreach connect`, the LinkedIn invitation flow described above —
+approval-gated per request, headful, and capped at one request per person for good. Automated email
+discovery was declined rather than deferred — see `docs/superpowers/DIVERGENCES.md` for the
+reasoning, along with the LinkedIn Terms-of-Service decision 13b rests on and the four things that
+decision explicitly does not license.
 
-Two manual verifications are outstanding, and a green test suite does not discharge either. Phase
-12's — a real outreach send driven from an agent session against a real workspace rather than a
-test — remains open, and Phase 13a does not discharge it. Phase 13a's own exit condition needs an
-LLM credential for the drafting step, which is not configured here; the automated half is green but
-the end-to-end run against a real model has not happened. See [ROADMAP.md](ROADMAP.md) for both,
-and for what remains in Phase 13b: LinkedIn connection requests.
+Three manual verifications are outstanding, and a green test suite does not discharge any of them.
+Phase 12's — a real outreach send driven from an agent session against a real workspace rather than
+a test — remains open, and neither half of Phase 13 discharges it. Phase 13a's own exit condition
+needs an LLM credential for the drafting step, which is not configured here. Phase 13b's needs an
+authorized LinkedIn session in the isolated CareerOS browser profile, which this environment does
+not have, and separately a live-HTML check of the LinkedIn selectors, which no test can stand in
+for. The automated half of all three is green; the end-to-end runs have not happened. See
+[ROADMAP.md](ROADMAP.md) for all three.
 
 ## License
 

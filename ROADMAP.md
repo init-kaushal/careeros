@@ -8,22 +8,37 @@ closed by anyone but the workspace owner.
 
 **Feature work not built**
 
-- **Phase 13b — LinkedIn connection requests.** The only remaining *planned* phase. Needs
-  `careeros/browser/connect/`, `careeros/operations/connect.py`,
-  `careeros/skills/connection_note.py`, a `careeros outreach connect` command, and a
-  `max_connection_requests_per_run` cap. The Terms-of-Service question it was gated on is
-  settled (see Phase 13 below); the code is not written.
+Nothing planned remains. Every phase this roadmap scopes — 1 through 13, both halves of 11, 12 and
+13 — has shipped. Phase 13b was the last, and closed with `careeros outreach connect`.
 
-**Manual verification outstanding — a green test suite does not discharge either of these**
+One field shipped as specified but does not yet bind anything:
+`CadencePolicy.max_connection_requests_per_run` (default 5) is read nowhere, because §6.4 of the
+Phase 13 spec specifies a single-person interactive command and a cap above 1 cannot bind one
+invocation. It will bind when a batch or scheduled connect command exists. Recorded as
+forward-looking in `docs/superpowers/DIVERGENCES.md` rather than quietly redefined as a rolling
+daily quota.
+
+**Manual verification outstanding — a green test suite does not discharge any of these three**
 
 - **Phase 12's exit condition:** a real outreach send driven from an agent session against a
   real workspace rather than a test. Needs `CAREEROS_SMTP_*` configured and a `Person` record
-  holding an address the owner is willing to mail. Phase 13a did **not** discharge this.
+  holding an address the owner is willing to mail. Neither Phase 13a nor Phase 13b discharged
+  this.
 - **Phase 13a's exit condition:** carrying a relationship through a real follow-up on the
   configured cadence. Needs an LLM credential, because `propose_follow_up` drafts *before* any
-  approval exists, so there is no way to exercise the path without one.
+  approval exists, so there is no way to exercise the path without one. Phase 13b did **not**
+  discharge this.
+- **Phase 13b's exit condition:** `careeros outreach connect --job <id> --person <id>` drafting a
+  note within LinkedIn's 300-character limit, gating it on approval, and sending it through the
+  isolated browser profile, with `approvals/<id>.json` recording the bound `linkedin_url` and note
+  digest. Needs an authorized LinkedIn session in the CareerOS browser profile, which this
+  environment does not have, plus an LLM credential for the drafting step. **A second, separate
+  manual item comes with it:** the LinkedIn selectors in
+  `careeros/browser/connect/linkedin.py` have never been checked against live HTML — they were
+  written from the markup as known, and the tests dispatch on the module's own constants, so they
+  prove the control flow and nothing about the selector strings. No test can stand in for this one.
 
-Everything automated is green (1047 tests). Neither item above is blocked on code.
+Everything automated is green (1280 tests). None of the three items above is blocked on code.
 
 **Commitments the master design spec made that were never built**
 
@@ -44,7 +59,8 @@ windows inside `execute_apply`**. The rest are smaller and individually argued.
 
 ## Where we are
 
-Twelve phases shipped, plus the first half of the thirteenth (13a, the follow-up cadence). See
+Thirteen phases shipped, the last of them (Phase 13, outreach expansion) in two halves — 13a, the
+follow-up cadence, and 13b, LinkedIn connection requests. See
 `README.md` for the full command reference. The first ten, one line
 each (Phase 11 and Phase 12 each get their own section below, since both have more nuance than a
 one-liner captures):
@@ -251,15 +267,38 @@ draining it via `list_pending` as a first-class entry point rather than a CLI de
 Automated email discovery was **declined, not deferred** — the reasoning is recorded in
 `DIVERGENCES.md` so a later phase does not read it as an open gap.
 
-**13b remains:** LinkedIn connection requests (`careeros outreach connect`), gated on the ToS
-decision recorded above rather than on an open question.
+### Phase 13b — shipped (LinkedIn connection requests)
+
+**Phase 13 is complete.** `careeros outreach connect --job <id> --person <id>` drafts a LinkedIn
+connection note within LinkedIn's own 300-character limit, shows the exact bytes alongside the
+profile URL it will navigate, and sends the invitation through the isolated CareerOS browser
+profile only after an explicit approval. `careeros/operations/connect.py` holds the
+propose/decide/execute trio, `careeros/browser/connect/` the connector,
+`careeros/skills/connection_note.py` the drafter. The browser runs **headful** by design and
+`execute_connection_request` passes `headless=False` itself, so the command cannot forget to ask
+for it.
+
+What makes this flow different from the other three, and shapes everything about it: the external
+action is **irreversible and visible to a third party**. An unwanted email can be ignored; a
+connection request appears in the recipient's notifications and there is no withdraw path here. So
+CareerOS refuses a duplicate at *both* propose and execute — one request per human being, ever,
+across every job, keyed on `sent_at` — and consumes the approval before the browser is launched.
+`docs/agent-integration.md` §13 is the contract; the divergences from the spec are in
+`DIVERGENCES.md`, and there are five: the forward-looking cap, the `people update --linkedin-url`
+flag the spec's remedy assumed existed, `ConnectionAlreadySent` as a new error type,
+`connection_request_teardown_failed` as a fifth event, and `CadencePolicy` never being loaded by
+this flow at all.
 
 **Outstanding manual verification, not dischargeable by a green suite:**
 - **Phase 12's** manual exit condition — a real outreach send driven from an agent session — is
-  still outstanding. Phase 13a does **not** discharge it.
+  still outstanding. Neither Phase 13a nor Phase 13b discharges it.
 - **Phase 13a's own** exit condition needs an LLM credential for the drafting step, which this
   environment does not have. The automated half is green; the end-to-end run against a real model
-  has not happened.
+  has not happened. Phase 13b does **not** discharge it.
+- **Phase 13b's own** exit condition needs an authorized LinkedIn session in the isolated CareerOS
+  browser profile, which this environment does not have, plus an LLM credential. Separately, the
+  LinkedIn selectors have never been observed against live HTML — see the pending section at the
+  top of this file and `DIVERGENCES.md`.
 
 ---
 

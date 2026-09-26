@@ -2,12 +2,15 @@
 
 This document is the contract for driving CareerOS from a process that is not the
 `careeros` CLI — an agent session (Claude Code or otherwise), a script, or a future
-third runtime. It covers both approval-gated flows the operations layer exposes today:
-outreach send (`careeros/operations/outreach.py`, Phase 12a, §1-§10) and job apply
-(`careeros/operations/apply.py`, Phase 12b, §11).
+third runtime. It covers all four approval-gated flows the operations layer exposes today:
+outreach send (`careeros/operations/outreach.py`, Phase 12a, §1-§10), job apply
+(`careeros/operations/apply.py`, Phase 12b, §11), follow-ups
+(`careeros/operations/follow_up.py`, Phase 13a, §12) and LinkedIn connection requests
+(`careeros/operations/connect.py`, Phase 13b, §13).
 
 Everything here is grounded in code that ships today: `careeros/operations/approvals.py`,
-`careeros/operations/outreach.py`, `careeros/operations/apply.py`, `careeros/operations/errors.py`,
+`careeros/operations/outreach.py`, `careeros/operations/apply.py`,
+`careeros/operations/follow_up.py`, `careeros/operations/connect.py`, `careeros/operations/errors.py`,
 `careeros/operations/approval_queue.py`, `careeros/runtime/factory.py`, `careeros/runtime/base.py`,
 and `careeros/core/models.py`. `tests/test_agent_integration.py` is the worked, literally
 cross-process example for outreach that this document's outreach snippets are drawn from.
@@ -846,3 +849,261 @@ responsible for emitting an equivalent of if you want the same audit trail:
 | `follow_up_propose_error` | `outreach follow-up` | `propose_follow_up` raised something other than `PolicyBlocked`, which logs itself — the only durable trace that a relationship was considered and failed rather than simply not being due |
 | `follow_up_run_aborted` | `outreach follow-up` | three consecutive `DraftFailed` ended the run early, on the assumption the LLM provider is down and further attempts would be paid for and discarded |
 | `cadence_closed` | `outreach close` | the cadence was ended deliberately. The summary names the *prior* `referral_state`, because setting `"closed"` overwrites it and the append-only log is then the only place a confirmed referral that was later closed out is still visible |
+
+## 13. Connection requests — `propose_connection_request` → `resolve_approval` → `execute_connection_request`
+
+The fourth flow, and the only one that produces something **another person sees and nobody can
+recall**. Read §13.1 before using it: everything unusual about the shape below follows from that
+one property, and an integrator that treats this like §12 with a different verb will get the
+ordering and the refusals wrong.
+
+`careeros/operations/connect.py` exposes it. `ACTION` is `"send_connection_request"`.
+
+### 13.1 Why this flow is not shaped like the other three
+
+**The external action is irreversible and visible to a third party.** An unwanted email can be
+ignored, deleted, or filtered; a LinkedIn connection request appears in the recipient's
+notifications the moment it is sent, and there is no withdraw path in this codebase. So the two
+properties below are not defensive habits carried over from §11 and §12 — they are the reason this
+flow exists in the shape it does:
+
+- **The duplicate refusal is checked twice: at propose *and* at execute.** `ConnectionAlreadySent`
+  fires from both. Not as a belt-and-braces restatement: propose refuses so nothing is drafted or
+  written, and execute refuses because an approval minted before an unrelated send can otherwise
+  still be sitting `approved` when that send lands. The rule it enforces is **one request per human
+  being, ever, across every job** — `careeros/operations/connect.py` enumerates all of
+  `connections/` and keys on `sent_at`, not on the `(job_id, person_id)` record id, because the
+  recipient sees one notification whichever job prompted it. `send_state` is deliberately *not* the
+  key: a regeneration rewrites it, so only `sent_at` remembers that a real send happened.
+- **`mark_executed` runs before the browser is launched.** Same ordering as `execute_apply` and
+  `execute_follow_up`, for a sharper reason: consuming the approval afterwards would leave it
+  `approved` with a matching digest for the entire duration of a *headful* browser session, which
+  is long enough for a Ctrl-C or a second process to send twice. Consuming first means a crash
+  mid-send leaves a stale `executed` approval against an unsent request — recoverable, and a strictly
+  better failure than an invitation in somebody's notifications. LinkedIn would probably reject a
+  second invitation as already-pending; correctness here does not rest on that.
+
+**The browser is headful and this call is not quick.** `execute_connection_request` passes
+`headless=False` to `launch_browser` explicitly rather than relying on its default, so a real
+Chrome window opens on the user's LinkedIn account and stays open for the navigation, the invite
+modal, and a post-send confirmation wait. §11.2's warning applies unchanged: do not call this on a
+headless server, and do not call it where a caller expects a fast return.
+
+### 13.2 The sequence
+
+- `propose_connection_request(runtime, job_id, person_id, *, model=None, action_label)` — resolves
+  the person's LinkedIn URL to canonical form, refuses a duplicate, checks policy, checks the
+  LinkedIn session, drafts a note of at most 300 characters, writes a `ConnectionRequest` under
+  `connections/<id>.json`, and opens a `pending` approval with `action == "send_connection_request"`.
+  Returns a `ConnectionProposal` (`approval_id`, `request_id`, `summary`, `note_text`,
+  `recipient_name`, `linkedin_url`). Every refusal is checked before the LLM is called and before
+  anything is written, so a refusal leaves the workspace exactly as it found it.
+- `resolve_approval(runtime, approval_id, result, *, action_label)` — the generic function §5 and §7
+  describe. Not specific to any action.
+- `execute_connection_request(runtime, approval_id, *, action_label)` — verifies the action, refuses
+  a duplicate, re-verifies the note digest, re-verifies the profile URL against the Person, marks
+  the approval `executed`, and only then opens the browser. Returns a `ConnectionResult`
+  (`request_id`, `recipient_name`, `linkedin_url`, `sent_at`, `teardown_failed`).
+- `decline_connection_request(runtime, approval_id, *, action_label)` — the domain-side bookkeeping
+  after a `declined` decision: sets `send_state="declined"` and logs it. Unlike
+  `decline_follow_up` there is **no cadence field to advance and nothing re-proposes this request
+  unasked**, so skipping it does not cause the user to be re-prompted tomorrow — it only leaves the
+  record saying `drafted` when the user said no.
+
+`action_label` is required and keyword-only on all four, exactly as for outreach, apply and
+follow-ups.
+
+**Calling `propose_connection_request` again is how regeneration works.** The new call overwrites
+`note_text` on the same record and `open_approval` supersedes the prior open approval (§7), so a
+stale approval id can never execute against a note that has since been replaced. The session check
+re-runs on every regeneration, which also catches a session that expired during a long review.
+
+**Process 1 — propose:**
+
+```python
+from careeros.operations.approval_queue import queue_only
+from careeros.operations.connect import propose_connection_request
+from careeros.runtime.factory import open_agent_runtime
+
+runtime = open_agent_runtime(approval_callback=queue_only, session_id="agent-propose")
+proposal = propose_connection_request(runtime, "acme-sre-abc1", "acme-corp-jane-doe", action_label="agent")
+print(proposal.approval_id, proposal.request_id, proposal.linkedin_url)
+# -> surface proposal.summary, proposal.linkedin_url and proposal.note_text to the human in conversation
+```
+
+**Process 2 — decide and send** (a later session, with no memory of the first):
+
+```python
+from careeros.core.models import ConnectionRequest
+from careeros.operations.approval_queue import queue_only
+from careeros.operations.approvals import list_pending, resolve_approval
+from careeros.operations.connect import ACTION, execute_connection_request
+from careeros.runtime.base import ApprovalResult
+from careeros.runtime.factory import open_agent_runtime
+
+runtime = open_agent_runtime(approval_callback=queue_only, session_id="agent-send")
+
+for approval in list_pending(runtime.storage):
+    if approval.action != ACTION:
+        continue  # not this flow's business — same filter §12.1 describes
+    record = ConnectionRequest.load(runtime.storage, approval.entity_id)
+    print(approval.summary)
+    print(approval.payload["linkedin_url"], record.note_text)
+    # -> ask the human about THIS approval, showing the profile URL as well as the note
+    resolve_approval(
+        runtime, approval.id,
+        ApprovalResult(approved=True, reason="user said yes in chat"),
+        action_label="agent",
+    )
+    result = execute_connection_request(runtime, approval.id, action_label="agent")
+    print(result.recipient_name, result.linkedin_url, result.sent_at, result.teardown_failed)
+```
+
+**Show the note from the record, and show the profile URL beside it.** `approval.entity_id` is the
+`ConnectionRequest` id, and `ConnectionRequest.load(...).note_text` is the exact string
+`execute_connection_request` will type into LinkedIn, because the digest check ties the two
+together. Displaying the URL is not decoration: the note names a person, and the only thing that
+decides *which* person receives it is `payload["linkedin_url"]`. As in §12, do not re-render either
+through anything that interprets markup — the CLI renders both verbatim for exactly this reason.
+
+### 13.3 The payload, and why all four keys are read at execute
+
+Four keys are written at propose time, and `execute_connection_request` reads **all four**. There is
+no audit-only key here, so do not carry §12.3's split across: on this flow, editing a payload key by
+hand changes what happens.
+
+| key | read at execute? | notes |
+|---|---|---|
+| `person_id` | **yes** | the Person to load, the key the duplicate scan matches on, and half of the derived `request_id`; also read by `decline_connection_request` |
+| `job_id` | **yes** | the other half of the derived `request_id` — **not** audit-only, unlike §12.3's `job_id`; also read by `decline_connection_request` |
+| `linkedin_url` | **yes** | the profile that is navigated, and the value re-verified against the Person — see below |
+| `note_sha256` | **yes** | re-verified against the stored `note_text`; a mismatch raises `ArtifactChanged` |
+
+Verified by grepping every `payload_value` call site in `careeros/operations/connect.py` rather than
+by inference: four in `execute_connection_request`, two in `decline_connection_request`, none
+anywhere else. `request_id` is deliberately *not* on the payload — both executors re-derive it from
+`job_id` and `person_id` through the same `make_message_id` helper `propose` used, so the payload
+stays at exactly four keys and the two derivations cannot disagree.
+
+**`linkedin_url` is bound at propose time and re-verified against the Person's *current* URL,
+normalized, at execute time.** This is the load-bearing check in the flow. If the user ran
+`careeros people update <id> --linkedin-url` between approval and execution, they now believe this
+person is somebody else — and sending would put a note the user reviewed for Jane into a stranger's
+notifications, where it cannot be recalled. So a changed URL is an `ArtifactChanged` refusal naming
+`people/<id>.json`, not a re-read.
+
+Two details about that comparison that are easy to get wrong:
+
+- **It is payload-against-Person, never payload-against-record.** The URL exists in three places by
+  then — the `Person`, the `ConnectionRequest`, and the payload — but the record's copy and the
+  payload were both written by the same `propose` call and neither is ever rewritten afterwards.
+  Comparing those two would look like a check and be a guaranteed no-op. The `Person` is the only
+  one of the three a user can move, so it is the only one worth comparing against.
+- **Both sides are normalized before comparing.** `people update --linkedin-url` stores whatever
+  string was pasted, so `/in/jane-doe`, `www.linkedin.com/in/jane-doe` and
+  `https://www.linkedin.com/in/jane-doe/?trk=...` are the same human being and must not read as a
+  change. An absent or unparseable current URL counts as *changed*, not as "nothing to compare" —
+  otherwise clearing the field would defeat the check.
+
+### 13.4 The refusals, and what each means for a retry
+
+`propose_connection_request` refuses with:
+
+| raised | means | retry? |
+|---|---|---|
+| `EntityNotFound` (missing job/person/company) | an id does not resolve | not without fixing the id |
+| `EntityNotFound` (no usable LinkedIn URL) | `person.linkedin_url` is absent, **or** present but not normalizable to a LinkedIn profile URL | **yes**, after `careeros people update <id> --linkedin-url <url>`; the message names that flag, which Phase 13b added for exactly this reason |
+| `ConnectionAlreadySent(person_id, person_name, request_id, sent_at)` | this person already received a request that was sent | **never** — see below |
+| `PolicyBlocked` | the policy engine blocks the job; logged before it raises, so the audit trail shows the block | after editing `config/policies.json`, then re-propose |
+| `BoardSessionRequired("linkedin")` | not signed in to LinkedIn in the CareerOS browser profile | run `careeros browser login --board linkedin`, then re-propose; the check re-runs on every propose, regenerations included |
+| `BrowserUnavailable(..., profile_busy=True)` | something else holds the CareerOS browser profile lock | a whole-run condition, not a per-person one — stop the run rather than skipping this person |
+| `DraftFailed` | the note came back blank, whitespace-only, or over 300 characters | retry; note the LLM call is already paid for by the time this raises, so bound your retries |
+
+The **no usable LinkedIn URL** case is the one to actually handle, and it has two distinct triggers
+behind a single type. `linkedin_url` is written by only two things: `careeros research people` (which
+stores the scraper's raw href, and can be root-relative) and `careeros people update --linkedin-url`
+(which stores whatever the user pasted). Neither normalizes, so a *researched* person can be as
+non-canonical as a hand-entered one. Normalization happens in the operations layer at the moment the
+URL becomes load-bearing; what it refuses rather than rewrites is anything it cannot navigate
+honestly — a non-http(s) scheme, embedded userinfo or an explicit port, a path that is not
+`/in/<slug>`, or a host outside `linkedin.com`. If you write `linkedin_url` through this contract,
+write an absolute `https://www.linkedin.com/in/<slug>` and neither trigger can fire.
+
+`ConnectionAlreadySent` is **new in Phase 13b and not in the design spec's error list**, which names
+only `ConnectionNotSent` for this phase. Treat it as terminal for that person: it does not mean "try
+again later", it means careeros will not offer a second invitation to a human who can already see
+the first one. It is deliberately a separate type from `ConnectionNotSent` because the two mean
+opposite things to a retry — `ConnectionNotSent` is *the page* declining, this is *careeros*
+declining — and collapsing them would force a caller to string-match to tell them apart.
+
+`execute_connection_request` refuses with:
+
+| raised | means | approval left in |
+|---|---|---|
+| `WrongApprovalAction(approval_id, expected, actual)` | the id names an approval from another flow — checked before any payload read, which matters because the `send_outreach` and `send_follow_up` payloads both carry `person_id` and `job_id` and would otherwise satisfy every read here | `approved` |
+| `EntityNotFound` | the `ConnectionRequest` or the `Person` no longer loads | `approved` |
+| `ConnectionAlreadySent` | a sent request to this person exists — checked again **at the point of action** | `approved`, but see below |
+| `ArtifactChanged("connections/<id>.json")` | the stored note changed since approval | `approved` |
+| `ArtifactChanged("people/<id>.json")` | the Person's LinkedIn URL changed since approval (§13.3) | `approved` |
+| `BrowserUnavailable` | Playwright is not installed, the profile is locked, or the browser raised | `failed` |
+| `ConnectionNotSent` | the connector returned `False` — LinkedIn did not complete the request | `failed` |
+
+**Every refusal above the `mark_executed` line leaves the approval `approved` and nothing
+attempted**, so fixing the cause and calling `execute_connection_request` again works without
+re-approving. The two below it do not: `mark_executed` has already run and `mark_failed` has moved
+the record to `failed`, so a retry needs a fresh `propose` — the same contract `FillIncomplete` has
+in §11.4, and `ConnectionNotSent` is shaped after it deliberately.
+
+`ConnectionNotSent` is not an error in the user's setup. The connector reports every ordinary page
+state by returning `False`: already connected, an invitation already pending, no Connect button, or
+a textarea that clipped the note. Report it as an outcome rather than a fault — the CLI prints it in
+yellow, not red. The `ConnectionRequest` record is deliberately left untouched (no
+`send_state="failed"`, unlike `execute_follow_up`), because the page's refusal is not a fact about
+the drafted note.
+
+**One honest wrinkle.** `ConnectionAlreadySent` raised from `execute` leaves the approval `approved`
+forever: the refusal fires before `mark_executed`, but it is permanent, so no retry can ever consume
+that record. If you are enumerating `list_pending` (or tracking `approved`-but-unexecuted records),
+expect that shape and resolve it yourself rather than retrying it — nothing in this layer prunes it.
+
+**There is no closed-relationship check**, unlike `execute_follow_up`. That is deliberate:
+`careeros outreach close` is scoped in its own help text to the *email* cadence, LinkedIn is the
+channel a user reaches for precisely when an email cadence closed unanswered, and 13a's terminal set
+includes `referral_confirmed` — refusing to connect with somebody who just agreed to refer you would
+be plainly wrong. The duplicate refusal is strictly stronger than the cadence rule anyway: one
+request per human being, ever.
+
+### 13.5 Activity events this flow emits
+
+Same discipline as §6.1, §11.5 and §12.5. From `careeros/operations/connect.py`:
+
+| `event_type` | Emitted by | When |
+|---|---|---|
+| `policy_blocked` | `propose_connection_request` | the policy engine blocks the job, logged *before* `PolicyBlocked` is raised and before any LLM call |
+| `connection_note_drafted` | `propose_connection_request` | every successful draft, before any human review — including each regeneration |
+| `approval_requested` / `approval_superseded` / `approval_granted` / `approval_declined` | `careeros/operations/approvals.py` | the generic approval-lifecycle events §6.1 describes; this flow uses the identical machinery |
+| `connection_request_sent` | `execute_connection_request` | the connector returned `True`. The summary names the profile URL that was navigated |
+| `connection_request_failed` | `execute_connection_request` | `ConnectionNotSent`, or any browser exception. The approval has already moved `executed -> failed` by the time this is logged. `detail` is always a type name, never an exception message — a Playwright or profile-lock `str()` can quote the browser profile's filesystem path, and this log is append-only |
+| `connection_request_teardown_failed` | `execute_connection_request` | the invitation went out and *then* browser teardown raised — see below |
+| `connection_request_declined` | `decline_connection_request` | the domain bookkeeping for a declined approval, separate from `approval_declined`, which records only the decision |
+
+**`connection_request_teardown_failed` is a fifth event beyond the four the design spec lists**, and
+it is the one an integrator must handle rather than merely log. When teardown raises after the
+connector has already returned `True`, recording the attempt as a failure would leave `sent_at`
+unset — and `sent_at` is the fact the duplicate refusal reads, so the next `propose` would draft a
+**second invitation into the notifications of somebody who can already see the first**. So the send
+is recorded as a send, and the anomaly gets its own durable event instead of being hidden inside the
+success one. `execute_connection_request` returns **normally** in this case, with
+`ConnectionResult.teardown_failed` set to `True` — it does not raise.
+
+**Warn on `result.teardown_failed`; do not report unqualified success.** The invitation did go out,
+so calling it a failure would be false, but the browser did not close and the user may have a
+process to deal with. `ApplyResult.teardown_failed` carries the identical contract (§11.4).
+
+**This flow's CLI command emits no events of its own.** `careeros outreach connect` produces the
+events in the table above and nothing else — every event comes from the operations layer, so an integration
+that calls `propose_connection_request` / `execute_connection_request` / `decline_connection_request`
+directly reproduces the CLI's complete audit trail for free. That is **unlike** `outreach follow-up`,
+which emits three CLI-only events an integrator is responsible for reproducing (§12.5's second
+table), and unlike `discover-and-apply` (§11.5). Do not assume §12's two-table shape here; there is
+no second table because there is nothing in it.
