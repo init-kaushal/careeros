@@ -27,3 +27,4 @@ htmlcov/
 # Worktrees
 .worktrees/
 .superpowers/
+_site/

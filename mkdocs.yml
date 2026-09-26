@@ -1,0 +1,56 @@
+site_name: CareerOS
+site_url: https://init-kaushal.github.io/careeros/
+site_description: Privacy-first, agent-portable career automation platform.
+repo_url: https://github.com/init-kaushal/careeros
+repo_name: init-kaushal/careeros
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+site_dir: _site
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.action.edit
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Agent Integration: agent-integration.md
+  - Internals:
+    - Spec → Implementation Gaps: superpowers/DIVERGENCES.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search
