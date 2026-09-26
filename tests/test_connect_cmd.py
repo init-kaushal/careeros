@@ -303,15 +303,17 @@ class TestTheNoteShownIsTheNoteSent:
         than the drafted note, and `verbatim_panel_args` exists precisely so
         a call site cannot protect the body and forget the title.
 
-        Scoped to the review display, and deliberately not more than that:
-        `Confirm.ask` is patched here, and with it real this run would still
-        raise MarkupError — `LocalRuntime.request_approval` hands the
-        approval summary to `Confirm.ask` as a raw str, so a "[/b]"-shaped
-        person name or company takes the confirmation prompt down. That is
-        pre-existing and shared: `outreach send` and `apply` reach the same
-        line and fail identically, verified by reproducing it. Fixing it
-        means changing `careeros/runtime/local.py`, which is outside this
-        command and needs its own tests for those two callers.
+        Scoped to the review display. `Confirm.ask` is patched here, so this
+        test pins the panel and not the confirmation prompt.
+
+        When this test was written the prompt really was a second, unfixed
+        crash site — `LocalRuntime.request_approval` handed the approval
+        summary to `Confirm.ask` as a raw str, so a "[/b]"-shaped person name
+        took down `outreach send` and `apply` as well as this command. That
+        was fixed immediately afterwards (`46be03c`), and it is pinned
+        separately by `tests/test_local_runtime_approval.py`, which drives the
+        real prompt. So the two surfaces are now covered by a test each
+        rather than by one test and a known gap.
         """
         ws_path, storage = _setup(tmp_path, person_name="Jane [/b] Doe")
 
