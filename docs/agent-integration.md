@@ -1070,9 +1070,23 @@ yellow, not red. The `ConnectionRequest` record is deliberately left untouched (
 the drafted note.
 
 **One honest wrinkle.** `ConnectionAlreadySent` raised from `execute` leaves the approval `approved`
-forever: the refusal fires before `mark_executed`, but it is permanent, so no retry can ever consume
-that record. If you are enumerating `list_pending` (or tracking `approved`-but-unexecuted records),
-expect that shape and resolve it yourself rather than retrying it — nothing in this layer prunes it.
+indefinitely. The refusal fires before `mark_executed`, which is the rule for every refusal in this
+flow — but this one is permanent, so in normal operation nothing will ever consume that record. It
+is also self-sealing: a re-propose raises the same refusal, so `open_approval` never runs and the
+supersede it would otherwise perform never happens. If you enumerate `approved`-but-unexecuted
+records, expect that shape; nothing in this layer prunes it.
+
+It is not strictly unconsumable, and the distinction matters if you are writing recovery tooling.
+The refusal reads `sent_at` on the *other* `connections/` record, so deleting that record makes the
+stranded approval executable again — verified directly. Withdrawing the invitation on LinkedIn does
+**not**, because that changes no CareerOS record. Prefer re-proposing after such a cleanup rather
+than executing the old approval: the note it carries was drafted before the situation changed, and a
+fresh propose re-digests what will actually be sent.
+
+Leaving it `approved` rather than superseding it at the refusal is deliberate. It keeps one simple
+invariant — every refusal before `mark_executed` leaves the approval retryable — and the record is
+inert rather than dangerous, since the duplicate check re-fires on every attempt. Superseding it
+would buy tidier enumeration at the cost of a special case, and would remove the cleanup path above.
 
 **There is no closed-relationship check**, unlike `execute_follow_up`. That is deliberate:
 `careeros outreach close` is scoped in its own help text to the *email* cadence, LinkedIn is the
