@@ -242,61 +242,6 @@ pytest
 Tests run fully offline — no API calls, no network, no real browser. Every
 LLM/browser/SMTP call mocked at the boundary.
 
-## Status
-
-Twelve phases shipped, plus the first half of the thirteenth. The first eleven, in order:
-
-1. **Workspace core** — onboarding, profile extraction, `StorageProvider` protocol, export/import
-2. **Job pipeline** — job schema, LLM-assisted scoring against your profile
-3. **Browser search** — `browse`, scraping LinkedIn/Indeed/Wellfound via a dedicated CareerOS profile
-4. **Auto-apply** — cover letter generation, platform-specific form fillers, approval-gated submit
-5. **Agent interoperability** — `AgentRuntime` seam (`LocalRuntime`, and a `ClaudeCodeRuntime`
-   exercised so far only by an internal test — see Phase 12 in `ROADMAP.md`) so every command's
-   approval logic is runtime-agnostic
-6. **Automation** — `discover-and-apply` for unattended, scheduled runs with a score-threshold policy
-7. **People + outreach** — company/people research, role-aware drafting, approval-gated email send
-8. **Compensation research** — evidence-backed comp data with an honest confidence rating
-9. **Policy engine, content sanitization, browser isolation** — deterministic pre-approval policy,
-   untrusted-content delimiters, and a dedicated browser profile
-10. **Job source connectors + deduplication** — `JobSource` connectors for Greenhouse and Lever,
-    and a dedup engine behind a single `JobStore` creation seam that all four job-creation paths
-    route through
-11. **Deep resume intelligence + resume variants** — evidence-backed skill extraction
-    (`careeros resume ingest`) where every stored skill carries a verified quote from the source
-    resume, plus `careeros resume variant` to render a job-tailored resume whose body is verbatim
-    spans of the master resume, with a self-validating sidecar recording provenance for every
-    bullet and header
-
-Phase 12 has also shipped, both halves: the outreach-send flow (12a) and the job-apply flow (12b)
-both now run through the same runtime-agnostic `careeros/operations/` layer over a durable
-`Approval` record, so an agent session outside the CLI can propose either action in one process and
-a human's decision execute it in another — see "Agent integration" above. Phase 12b also
-brought every remaining CLI command onto `CAREEROS_WORKSPACE`-aware workspace discovery and capped
-`discover-and-apply`'s JD text the same way the interactive `apply` command always has.
-
-All workspace I/O goes through the `StorageProvider` protocol, so storage backends can be
-swapped without touching business logic. Every meaningful action — both outcomes of any
-approval decision, not just the success path — writes to the append-only activity log.
-
-Phase 13 has shipped, both halves. 13a brought the follow-up cadence: a relationship now carries
-from its first message through repeated touches on a schedule you configure, stopping on its own at
-`max_touches` and on request at `careeros outreach close`, without you having to remember any of
-that state. The scheduled half proposes and never sends, so every message still passes a human
-first. 13b brought `careeros outreach connect`, the LinkedIn invitation flow described above —
-approval-gated per request, headful, and capped at one request per person for good. Automated email
-discovery was declined rather than deferred — see `docs/superpowers/DIVERGENCES.md` for the
-reasoning, along with the LinkedIn Terms-of-Service decision 13b rests on and the four things that
-decision explicitly does not license.
-
-Three manual verifications are outstanding, and a green test suite does not discharge any of them.
-Phase 12's — a real outreach send driven from an agent session against a real workspace rather than
-a test — remains open, and neither half of Phase 13 discharges it. Phase 13a's own exit condition
-needs an LLM credential for the drafting step, which is not configured here. Phase 13b's needs an
-authorized LinkedIn session in the isolated CareerOS browser profile, which this environment does
-not have, and separately a live-HTML check of the LinkedIn selectors, which no test can stand in
-for. The automated half of all three is green; the end-to-end runs have not happened. See
-[ROADMAP.md](ROADMAP.md) for all three.
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
