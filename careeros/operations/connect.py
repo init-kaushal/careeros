@@ -574,6 +574,13 @@ def execute_connection_request(
     # that part is presentational, since `is True` and a plain truthiness
     # test reject both identically for the bool the connector returns.
     sent = None
+    # _mark_sent is called inside the `with` block (immediately after the
+    # connector confirms the invitation went out) so that sent_at reaches
+    # storage before browser teardown runs. A process crash between the
+    # connector returning True and the `with` block exiting would otherwise
+    # leave sent_at unset, causing the duplicate guard (_sent_request_to)
+    # to miss a real prior send on retry.
+    _result = None
     try:
         # headless=False explicitly rather than relying on launch_browser's
         # default. §6.4 requires the user to watch the invitation being
@@ -583,6 +590,10 @@ def execute_connection_request(
             sent = CONNECTOR.send_connection_request(
                 page, linkedin_url, record.note_text,
             )
+            if sent is True:
+                _result = _mark_sent(
+                    runtime, record, person.name, linkedin_url, action_label,
+                )
     except ImportError as exc:
         _record_connection_failed(
             runtime, approval_id, request_id, person.name, action_label,
@@ -601,19 +612,11 @@ def execute_connection_request(
         )
         raise BrowserUnavailable(str(exc), profile_busy=True) from exc
     except Exception as exc:
-        if sent is True:
-            # The invitation went out before this fired, so it came from
-            # context teardown, not from the send. Recording it as a failure
-            # would leave sent_at unset — and sent_at is the fact the
-            # duplicate refusal reads, so the next propose would draft a
-            # *second* invitation to somebody who can already see the first
-            # one. The send is recorded as what it was, and the anomaly gets
-            # its own durable event rather than being hidden inside the
-            # success one.
-            result = _mark_sent(
-                runtime, record, person.name, linkedin_url, action_label,
-                teardown_failed=True,
-            )
+        if _result is not None:
+            # The invitation went out and sent_at is already in storage, but
+            # browser teardown raised. Log the anomaly and surface it to the
+            # caller via teardown_failed so they can warn rather than print
+            # unqualified success.
             runtime.record_activity(runtime.new_event(
                 "connection_request_teardown_failed", action_label,
                 "Browser teardown failed after the connection request to "
@@ -621,7 +624,13 @@ def execute_connection_request(
                 status="failed", entity_type="connection_request",
                 entity_id=request_id,
             ))
-            return result
+            return ConnectionResult(
+                request_id=_result.request_id,
+                recipient_name=_result.recipient_name,
+                linkedin_url=_result.linkedin_url,
+                sent_at=_result.sent_at,
+                teardown_failed=True,
+            )
         _record_connection_failed(
             runtime, approval_id, request_id, person.name, action_label,
             type(exc).__name__,
@@ -644,7 +653,7 @@ def execute_connection_request(
             "on this account. The request was not sent."
         )
 
-    return _mark_sent(runtime, record, person.name, linkedin_url, action_label)
+    return _result
 
 
 def decline_connection_request(

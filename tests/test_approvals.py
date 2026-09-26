@@ -282,6 +282,8 @@ class TestMarkExecutedAndFailed:
     def test_mark_failed_records_detail(self, tmp_path):
         runtime = _runtime(tmp_path)
         approval = _open(runtime)
+        resolve_approval(runtime, approval.id, ApprovalResult(approved=True, reason="ok"), action_label="test")
+        mark_executed(runtime, approval.id)
         marked = mark_failed(runtime, approval.id, "SMTPAuthenticationError")
         assert marked.state == FAILED
         assert marked.detail == "SMTPAuthenticationError"

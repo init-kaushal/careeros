@@ -282,7 +282,7 @@ def mark_executed(runtime: AgentRuntime, approval_id: str) -> Approval:
 
 
 def mark_failed(runtime: AgentRuntime, approval_id: str, detail: str) -> Approval:
-    approval = Approval.load(runtime.storage, approval_id)
+    approval = require_state(runtime.storage, approval_id, EXECUTED)
     approval = approval.model_copy(update={"state": FAILED, "detail": detail})
     approval.save(runtime.storage)
     return approval
