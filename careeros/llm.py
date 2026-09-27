@@ -21,6 +21,7 @@ def complete(*, model: str | None = None, **kwargs) -> litellm.ModelResponse:
     else:
         fallbacks = []
 
+    timeout = kwargs.pop("timeout", int(os.environ.get("CAREEROS_LLM_TIMEOUT", "120")))
     if fallbacks:
-        return litellm.completion(model=primary, fallbacks=fallbacks, **kwargs)
-    return litellm.completion(model=primary, **kwargs)
+        return litellm.completion(model=primary, fallbacks=fallbacks, timeout=timeout, **kwargs)
+    return litellm.completion(model=primary, timeout=timeout, **kwargs)

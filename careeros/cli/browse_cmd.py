@@ -86,8 +86,10 @@ def browse_cmd(
         scraper = CustomBoardScraper(board, cb.search_url)
         query = job_query_from_profile(profile, goals)
 
+    rprint(f"[dim]Opening browser for {board}...[/dim]")
     try:
         with launch_browser(headless=headless) as (_, page):
+            rprint(f"[dim]Searching {board}...[/dim]")
             try:
                 postings = scraper.search(page, query, limit)
             except Exception as exc:

@@ -1,7 +1,7 @@
 from careeros.browser.boards import BOARDS, BOARD_NAMES, Board
 
 
-def test_registry_covers_the_three_browser_boards():
+def test_registry_covers_browser_boards():
     assert set(BOARDS) == {"linkedin", "indeed", "wellfound"}
 
 
@@ -34,9 +34,6 @@ def test_board_is_immutable():
 
 
 def test_registry_matches_the_automation_board_whitelist():
-    # The literal that _VALID_AUTOMATION_BOARDS used to hold, asserted
-    # against the derived value, so the consolidation is provably
-    # behaviour-preserving rather than assumed to be.
     from careeros.core.models import _VALID_AUTOMATION_BOARDS
     assert _VALID_AUTOMATION_BOARDS == ("linkedin", "indeed", "wellfound")
     assert _VALID_AUTOMATION_BOARDS == BOARD_NAMES

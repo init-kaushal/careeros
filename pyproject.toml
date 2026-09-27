@@ -26,6 +26,7 @@ careeros = "careeros.cli.main:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["careeros"]
+artifacts = ["careeros/templates/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
