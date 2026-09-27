@@ -10,16 +10,16 @@ Your resume, skills, and job data live in a directory you own — plain files yo
 
 ### Cowork workspace (recommended for job discovery)
 
-A markdown-native workspace for Claude Code / Claude.ai. Claude uses your real Chrome browser session via Claude-in-Chrome — no automation detection, works on any job board including React SPAs like Instahyre.
+A markdown-native workspace for Claude Code or ChatGPT Projects. The agent interviews you once to build your profile, then browses, scores, and saves jobs in chat.
 
 ```bash
-careeros init ~/my-job-search
-# then open ~/my-job-search in Claude Code and say "browse linkedin"
+careeros init ~/my-job-search                # Claude Code (recommended)
+careeros init ~/my-job-search --runtime gpt  # ChatGPT Projects
 ```
 
-One command scaffolds the workspace. Claude interviews you once to build your profile, then browses, scores, and saves jobs in chat.
+Claude Code uses your real Chrome session via Claude-in-Chrome — no automation detection, works on LinkedIn and Instahyre. ChatGPT Projects uses GPT web search for public boards; authenticated boards require pasting page content.
 
-Full setup: [Getting Started → Cowork workspace](getting-started.md#cowork-workspace-recommended)
+Full setup: [Cowork guides](cowork/index.md) · [Claude Code](cowork/claude-code.md) · [GPT Work](cowork/chatgpt.md)
 
 ### CLI (for apply, outreach, and full automation)
 
@@ -42,7 +42,8 @@ Full walkthrough: [Getting Started → CLI setup](getting-started.md#cli-setup)
 
 | Step | Command |
 |---|---|
-| **Scaffold Cowork workspace** | `careeros init ~/my-job-search` |
+| **Scaffold Cowork workspace (Claude)** | `careeros init ~/my-job-search` |
+| **Scaffold Cowork workspace (GPT)** | `careeros init ~/my-job-search --runtime gpt` |
 | **Refresh Cowork skills** | `careeros init ~/my-job-search --refresh` |
 | Create CLI workspace | `careeros onboard` |
 | Configure a job board | `careeros board setup linkedin` |
