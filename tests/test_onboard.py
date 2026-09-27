@@ -135,16 +135,15 @@ def test_onboard_registers_known_board_names(tmp_path, resume_file, mock_extract
     assert set(load_registered_boards(storage)) == {"linkedin", "greenhouse"}
 
 
-def test_onboard_skips_unknown_board_names(tmp_path, resume_file, mock_extraction, monkeypatch):
+def test_onboard_registers_unknown_board_names(tmp_path, resume_file, mock_extraction, monkeypatch):
+    # Any board name is accepted; connectors determine what can be auto-browsed.
     monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
     runner = CliRunner()
-    result, ws_path = _run_onboard(runner, tmp_path, resume_file,
-                                   board_names="linkedin, naukri")
+    _, ws_path = _run_onboard(runner, tmp_path, resume_file,
+                              board_names="linkedin, naukri")
     storage = LocalFilesystemStorage(ws_path)
     from careeros.boards_config import load_registered_boards
-    assert load_registered_boards(storage) == ["linkedin"]
-    assert "naukri" in result.output
-    assert "not a known board" in result.output
+    assert set(load_registered_boards(storage)) == {"linkedin", "naukri"}
 
 
 def test_onboard_blank_boards_registers_none(tmp_path, resume_file,

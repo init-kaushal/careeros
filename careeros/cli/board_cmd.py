@@ -69,12 +69,17 @@ def list_cmd(
     table.add_column("Set up")
 
     for name in sorted(registered):
-        board_type = "browser" if name in BROWSER_BOARD_NAMES else "api"
-        if board_type == "browser":
+        if name in BROWSER_BOARD_NAMES:
+            board_type = "browser"
             ready = _is_browser_board_ready(name)
-        else:
+            status = "[green]yes[/green]" if ready else "[yellow]no — run: careeros board setup " + name + "[/yellow]"
+        elif name in API_BOARD_NAMES:
+            board_type = "api"
             ready = _is_api_board_ready(name, runtime)
-        status = "[green]yes[/green]" if ready else "[yellow]no — run: careeros board setup " + name + "[/yellow]"
+            status = "[green]yes[/green]" if ready else "[yellow]no — run: careeros board setup " + name + "[/yellow]"
+        else:
+            board_type = "custom"
+            status = "[dim]no connector yet[/dim]"
         table.add_row(name, board_type, status)
 
     console.print(table)
@@ -87,18 +92,17 @@ def setup_cmd(
 ) -> None:
     """Configure a job board. Browser boards trigger a sign-in; API boards ask for the board URL."""
     name = name.lower().strip()
-    if name not in ALL_KNOWN_BOARDS:
-        rprint(f"[red]Unknown board '{name}'.[/red]")
-        rprint(f"[dim]Known boards: {', '.join(sorted(ALL_KNOWN_BOARDS))}[/dim]")
-        raise typer.Exit(1)
-
     runtime = _open_runtime(workspace)
     register_board(runtime.storage, name)
 
     if name in BROWSER_BOARD_NAMES:
         _setup_browser_board(name, runtime)
-    else:
+    elif name in API_BOARD_NAMES:
         _setup_api_board(name, runtime)
+    else:
+        rprint(f"[green]{name} registered.[/green]")
+        rprint(f"[yellow]No connector available for '{name}' yet — it's saved so you can track it.[/yellow]")
+        rprint(f"[dim]Supported for auto-browsing: {', '.join(sorted(ALL_KNOWN_BOARDS))}[/dim]")
 
 
 def _setup_browser_board(name: str, runtime: LocalRuntime) -> None:

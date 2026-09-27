@@ -241,16 +241,11 @@ def onboard_cmd(
     rprint("[dim]API-based:     greenhouse, lever[/dim]")
     boards_raw = Prompt.ask("Boards", default="")
     board_names = [b.strip().lower() for b in boards_raw.split(",") if b.strip()]
-    known = [b for b in board_names if b in ALL_KNOWN_BOARDS]
-    unknown = [b for b in board_names if b not in ALL_KNOWN_BOARDS]
-    save_registered_boards(runtime.storage, known)
-    if known:
-        rprint("[green]Registered: " + ", ".join(known) + "[/green]")
-    for b in unknown:
-        rprint(f"[yellow]Skipped '{b}'[/yellow] [dim](not a known board)[/dim]")
-    if known:
+    save_registered_boards(runtime.storage, board_names)
+    if board_names:
+        rprint("[green]Registered: " + ", ".join(board_names) + "[/green]")
         rprint("\n[dim]Configure each board after onboarding:[/dim]")
-        for b in known:
+        for b in board_names:
             rprint(f"[dim]  careeros board setup {b}[/dim]")
 
     # Step 6: goals (optional)
