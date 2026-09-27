@@ -8,12 +8,14 @@ from rich.console import Console
 
 try:
     import readline
-    # Keep left/right/backspace/Home/End for in-line editing.
-    # Disable up/down history navigation — it replaces the visible prompt line,
-    # making the question appear to vanish.
+    # Wipe any history loaded from ~/.zsh_history / ~/.bash_history so that
+    # pressing ↑ finds nothing and leaves the prompt line untouched.
+    readline.clear_history()
+    readline.set_history_length(0)
+    # Belt-and-suspenders: also map ↑/↓ to no-ops.
     readline.parse_and_bind(r'"\e[A": ""')
     readline.parse_and_bind(r'"\e[B": ""')
-except ImportError:
+except (ImportError, Exception):
     pass
 
 from careeros.cli.resume_cmd import _MASTER
@@ -38,7 +40,7 @@ def _parse_board_entries(raw: str) -> tuple[list[dict], list[str]]:
     """Parse a comma-separated list of board URLs or slugs into source dicts.
 
     Returns (entries, unrecognized) where unrecognized items are passed back
-    to the caller for display (e.g. browser-only boards like LinkedIn).
+    to the caller for display.
     Accepts:
       https://boards.greenhouse.io/stripe/jobs/123  → greenhouse:stripe
       https://jobs.lever.co/acme                   → lever:acme
@@ -51,17 +53,25 @@ def _parse_board_entries(raw: str) -> tuple[list[dict], list[str]]:
         item = chunk.strip()
         if not item:
             continue
-        # Full Greenhouse URL
+        # Full Greenhouse URL with slug
         m = re.search(r'boards\.greenhouse\.io/([^/?#\s]+)', item)
         if m:
             slug = m.group(1).strip("/")
             entries.append({"source": "greenhouse", "board": slug, "company": slug, "mode": "SEARCH_ONLY"})
             continue
-        # Full Lever URL
+        # Base Greenhouse URL with no company slug
+        if re.search(r'boards\.greenhouse\.io/?$', item.rstrip("/")):
+            unrecognized.append(("_base_greenhouse", item))
+            continue
+        # Full Lever URL with slug
         m = re.search(r'jobs\.lever\.co/([^/?#\s]+)', item)
         if m:
             slug = m.group(1).strip("/")
             entries.append({"source": "lever", "board": slug, "company": slug, "mode": "SEARCH_ONLY"})
+            continue
+        # Base Lever URL with no company slug
+        if re.search(r'jobs\.lever\.co/?$', item.rstrip("/")):
+            unrecognized.append(("_base_lever", item))
             continue
         # Short form source:slug
         if ":" in item:
@@ -70,6 +80,12 @@ def _parse_board_entries(raw: str) -> tuple[list[dict], list[str]]:
             if source in ("greenhouse", "lever") and slug:
                 entries.append({"source": source, "board": slug, "company": slug, "mode": "SEARCH_ONLY"})
                 continue
+        # Browser-based boards: match short name OR URL containing the name
+        item_lower = item.lower()
+        matched_board = next((b for b in _BROWSER_BOARDS if b in item_lower), None)
+        if matched_board:
+            unrecognized.append(("_browser", matched_board))
+            continue
         unrecognized.append(item)
     return entries, unrecognized
 
@@ -236,8 +252,15 @@ def onboard_cmd(
         rprint("[green]Added " + str(len(sources)) + " board(s): " +
                ", ".join(e["source"] + ":" + e["board"] for e in sources) + "[/green]")
     for item in unrecognized:
-        if item.lower() in _BROWSER_BOARDS:
-            rprint(f"[yellow]{item}[/yellow] [dim]is browser-based — run [bold]careeros browser login --board {item.lower()}[/bold] after setup.[/dim]")
+        if isinstance(item, tuple):
+            tag, val = item
+            if tag == "_browser":
+                rprint(f"[yellow]{val}[/yellow] [dim]is browser-based — set it up after onboarding with:[/dim]")
+                rprint(f"[dim]  careeros browser login --board {val}[/dim]")
+            elif tag == "_base_greenhouse":
+                rprint(f"[yellow]Skipped '{val}'[/yellow] [dim]— add the company slug, e.g. boards.greenhouse.io/[bold]stripe[/bold][/dim]")
+            elif tag == "_base_lever":
+                rprint(f"[yellow]Skipped '{val}'[/yellow] [dim]— add the company slug, e.g. jobs.lever.co/[bold]acme[/bold][/dim]")
         else:
             rprint(f"[yellow]Skipped '{item}'[/yellow] [dim](not a recognized Greenhouse or Lever URL)[/dim]")
 

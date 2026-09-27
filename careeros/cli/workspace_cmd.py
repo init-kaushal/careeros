@@ -15,9 +15,11 @@ from careeros.workspace.manifest import Manifest, check_schema_compatibility, Un
 
 try:
     import readline
+    readline.clear_history()
+    readline.set_history_length(0)
     readline.parse_and_bind(r'"\e[A": ""')
     readline.parse_and_bind(r'"\e[B": ""')
-except ImportError:
+except (ImportError, Exception):
     pass
 
 _console = Console()
@@ -228,8 +230,14 @@ def configure_cmd(
             rprint("[green]Saved " + str(len(sources)) + " board(s): " +
                    ", ".join(e["source"] + ":" + e["board"] for e in sources) + "[/green]")
         for item in unrecognized:
-            if item.lower() in _BROWSER_BOARDS:
-                rprint(f"[yellow]{item}[/yellow] [dim]is browser-based — run [bold]careeros browser login --board {item.lower()}[/bold][/dim]")
+            if isinstance(item, tuple):
+                tag, val = item
+                if tag == "_browser":
+                    rprint(f"[yellow]{val}[/yellow] [dim]is browser-based — run [bold]careeros browser login --board {val}[/bold][/dim]")
+                elif tag == "_base_greenhouse":
+                    rprint(f"[yellow]Skipped '{val}'[/yellow] [dim]— add the company slug, e.g. boards.greenhouse.io/[bold]stripe[/bold][/dim]")
+                elif tag == "_base_lever":
+                    rprint(f"[yellow]Skipped '{val}'[/yellow] [dim]— add the company slug, e.g. jobs.lever.co/[bold]acme[/bold][/dim]")
             else:
                 rprint(f"[yellow]Skipped '{item}'[/yellow] [dim](not a recognized Greenhouse or Lever URL)[/dim]")
 

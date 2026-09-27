@@ -56,11 +56,11 @@ Add the relevant lines to your shell profile (`~/.zshrc`, `~/.bashrc`) so you do
 hits a rate limit (429) or provider error:
 
 ```bash
-# Primary: NVIDIA NIM free tier; fallback: Gemini 2.0 Flash
-export CAREEROS_MODEL=nvidia_nim/meta/llama-3.1-70b-instruct
-export NVIDIA_NIM_API_KEY=nvapi-...
-export CAREEROS_FALLBACK_MODELS=gemini/gemini-2.0-flash-exp
+# Primary: Gemini free tier; fallback: NVIDIA NIM free tier
+export CAREEROS_MODEL=gemini/gemini-3.5-flash-lite
 export GEMINI_API_KEY=AIza...
+export CAREEROS_FALLBACK_MODELS=nvidia_nim/nvidia/nemotron-3.5-lightning-30b-a3b
+export NVIDIA_NIM_API_KEY=nvapi-...
 ```
 
 Fallbacks use LiteLLM's native retry logic — no configuration beyond the env var is needed.
@@ -84,10 +84,11 @@ The wizard walks you through six steps:
    verified skills). Confirm with `Y` to continue, or choose to pick a different file and re-extract.
 5. **Preferences and goals** — target roles, remote preference, compensation floor, locations, and
    optional short/long-term goals.
-6. **API job sources** — optional Greenhouse and Lever board slugs for API-based job discovery
-   (no browser needed). Enter the slug from the board URL — e.g. `stripe` for
-   `boards.greenhouse.io/stripe`. Browser-based boards (LinkedIn, Wellfound, Naukri) are set up
-   separately with `careeros browser login`.
+6. **API job sources** — optional Greenhouse and Lever boards for API-based job discovery
+   (no browser needed). Paste the full board URL — e.g. `https://boards.greenhouse.io/stripe` or
+   `https://jobs.lever.co/acme`. Multiple boards: comma-separate them.
+   Browser-based boards (LinkedIn, Indeed, Wellfound) are set up separately with
+   `careeros browser login`.
 7. **Done** — your workspace is ready.
 
 The whole process takes under a minute. All prompts support arrow keys, Home/End, and backspace for editing.
@@ -430,7 +431,7 @@ All 1280 unit tests should pass in under 15 seconds.
 
 | Scenario | Command | What to check |
 |---|---|---|
-| Onboard with PDF resume | `careeros onboard` | File picker shows `.pdf` files alongside `.md`/`.txt`. Profile confirmation displays name, title, years, summary, and skills. Re-pick works. |
+| Onboard with PDF resume | `careeros onboard` | Enter path to a `.pdf` resume. Profile confirmation displays name, title, years, summary, and skills. Re-pick works. |
 | Onboard with scanned PDF | `careeros onboard`, select an image-only PDF | Error: "PDF contained no extractable text — may be scanned/image-only." Clean exit. |
 | LLM fallback | Set `CAREEROS_MODEL` to a rate-limited provider, set `CAREEROS_FALLBACK_MODELS` to a working model, run any LLM-powered command | On 429, request retries with the fallback model transparently. |
 | Browser isolation | `careeros browser login --board linkedin` | Browser opens to LinkedIn login, not your regular Chrome profile. Session persists across commands. |
