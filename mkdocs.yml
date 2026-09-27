@@ -1,6 +1,6 @@
 site_name: CareerOS
 site_url: https://init-kaushal.github.io/careeros/
-site_description: Privacy-first, agent-portable career automation platform.
+site_description: Scaffold a markdown-native job-search workspace for Claude Code or ChatGPT Projects.
 repo_url: https://github.com/init-kaushal/careeros
 repo_name: init-kaushal/careeros
 edit_uri: edit/main/docs/
@@ -37,9 +37,10 @@ theme:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
-  - Agent Integration: agent-integration.md
-  - Internals:
-    - Spec → Implementation Gaps: superpowers/DIVERGENCES.md
+  - Cowork:
+    - Overview: cowork/index.md
+    - Claude Code: cowork/claude-code.md
+    - GPT Work: cowork/chatgpt.md
 
 markdown_extensions:
   - admonition
