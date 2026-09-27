@@ -26,7 +26,25 @@ _SEARCH_DIRS = [
     Path.home() / "Documents",
     Path.home(),
 ]
-_RESUME_EXTS = {".md", ".txt"}
+_RESUME_EXTS = {".md", ".txt", ".pdf"}
+
+
+def _read_resume(path: Path) -> str:
+    """Return the text content of a resume file. Supports .pdf, .md, .txt."""
+    if path.suffix.lower() == ".pdf":
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(path)
+            pages = [page.extract_text() or "" for page in reader.pages]
+            text = "\n\n".join(p.strip() for p in pages if p.strip())
+            if not text.strip():
+                raise ValueError("PDF contained no extractable text — may be scanned/image-only.")
+            return text
+        except ImportError:
+            raise RuntimeError(
+                "pypdf is not installed. Run: pip install pypdf"
+            )
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def _find_resume_candidates() -> list[Path]:
@@ -64,7 +82,7 @@ def _pick_resume_file() -> Path:
             idx = int(choice.strip())
             if 1 <= idx <= len(candidates):
                 return candidates[idx - 1]
-    path_str = Prompt.ask("\nPath to your resume (Markdown or plain text)")
+    path_str = Prompt.ask("\nPath to your resume (PDF, Markdown, or plain text)")
     return Path(path_str).expanduser()
 
 
@@ -127,7 +145,11 @@ def onboard_cmd(
         rprint("[red]File too large (max 10MB). Convert PDF to text first.[/red]")
         raise typer.Exit(1)
 
-    resume_text = resume_file.read_text(encoding="utf-8", errors="replace")
+    try:
+        resume_text = _read_resume(resume_file)
+    except Exception as exc:
+        rprint(f"[red]Could not read resume: {exc}[/red]")
+        raise typer.Exit(1)
     runtime.storage.atomic_write(_MASTER, resume_text.encode())
     runtime.record_activity(runtime.new_event(
         "resume_imported", "import", "Resume imported from " + str(resume_file), entity_type="resume"
@@ -155,8 +177,11 @@ def onboard_cmd(
             if not resume_file.exists():
                 rprint(f"[red]File not found: {resume_file}[/red]")
             else:
-                resume_text = resume_file.read_text(encoding="utf-8", errors="replace")
-                runtime.storage.atomic_write(_MASTER, resume_text.encode())
+                try:
+                    resume_text = _read_resume(resume_file)
+                    runtime.storage.atomic_write(_MASTER, resume_text.encode())
+                except Exception as exc:
+                    rprint(f"[red]Could not read resume: {exc}[/red]")
         else:
             rprint("[yellow]Continuing — edit profile/profile.json in your workspace to correct it.[/yellow]")
             break
