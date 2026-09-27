@@ -28,7 +28,7 @@ Every irreversible action is gated by an approval: CareerOS drafts, you review, 
 ## Privacy model
 
 - **Your data never reaches a CareerOS server** — there isn't one. The workspace is a folder on your machine.
-- **LLM calls go to whichever provider you configure.** Profile extraction, job scoring, cover letter drafting, and outreach drafting all send relevant data to that provider. Use `CAREEROS_MODEL=ollama/...` to keep every call local.
+- **LLM calls go to whichever provider you configure.** Profile extraction, job scoring, cover letter drafting, and outreach drafting all send relevant data to that provider. Use `CAREEROS_MODEL=ollama/...` to keep every call local. Set `CAREEROS_FALLBACK_MODELS` to a comma-separated list of fallback models tried automatically on rate limits or provider errors.
 - **Browser automation runs against a dedicated CareerOS profile** — not your personal Chrome. Sessions for job boards are isolated from your everyday browsing.
 
 ---
@@ -41,9 +41,11 @@ cd careeros
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 pip install playwright && playwright install chrome
-export ANTHROPIC_API_KEY=sk-ant-...
+export ANTHROPIC_API_KEY=sk-ant-...   # or any LiteLLM-supported provider
 careeros onboard
 ```
+
+The onboard wizard scans `~/Desktop`, `~/Downloads`, and `~/Documents` for resume files (PDF, `.md`, `.txt`) and presents a numbered pick list. It calls your LLM to extract the profile, then shows you a confirmation table before saving anything.
 
 Full walkthrough: [Getting Started](getting-started.md)
 

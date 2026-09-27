@@ -71,18 +71,23 @@ Fallbacks use LiteLLM's native retry logic — no configuration beyond the env v
 careeros onboard
 ```
 
-The wizard walks you through five steps:
+The wizard walks you through six steps:
 
 1. **Workspace location** — where to create your workspace directory (default: `~/my-career`)
-2. **Your name** — used in the profile
-3. **Your resume** — paste plain text, a LinkedIn export, or any text describing your background.
-   Leave blank to skip profile extraction and fill in the profile manually later.
-4. **Profile extraction** — CareerOS calls your configured LLM to parse your text into structured
-   data: skills, job titles, years of experience, and goals.
-5. **Done** — your workspace is ready.
+2. **Resume file** — CareerOS scans `~/Desktop`, `~/Downloads`, and `~/Documents` and shows a
+   numbered pick list. Choose a number, or type `0` to enter a path manually. Supported formats:
+   **PDF**, Markdown (`.md`), and plain text (`.txt`).
+   > Note: scanned/image-only PDFs are not supported — export a text-based PDF from Word, Google
+   > Docs, or LaTeX instead. If pypdf can't extract any text it will tell you.
+3. **Profile extraction** — CareerOS calls your LLM to extract name, title, years of experience,
+   and a summary from the resume text.
+4. **Confirmation** — the extracted profile is shown in full (name, title, years, summary snippet,
+   verified skills). Confirm with `Y` to continue, or choose to pick a different file and re-extract.
+5. **Preferences and goals** — target roles, remote preference, compensation floor, locations, and
+   optional short/long-term goals.
+6. **Done** — your workspace is ready.
 
-The whole process takes under a minute. If you skip the resume step, you can run `careeros onboard`
-again at any time to extract your profile.
+The whole process takes under a minute.
 
 ## 4. Check your workspace
 
@@ -268,7 +273,7 @@ The model selects and orders; it never writes new text. The result is saved as a
 To update your master resume and re-extract skills with evidence verification:
 
 ```bash
-careeros resume ingest /path/to/updated-resume.pdf
+careeros resume ingest /path/to/updated-resume.pdf   # PDF, .md, or .txt
 ```
 
 Skills without a verified quote from the resume text are dropped and named, not silently stored.
@@ -402,6 +407,9 @@ All 1280 unit tests should pass in under 15 seconds.
 
 | Scenario | Command | What to check |
 |---|---|---|
+| Onboard with PDF resume | `careeros onboard` | File picker shows `.pdf` files alongside `.md`/`.txt`. Profile confirmation displays name, title, years, summary, and skills. Re-pick works. |
+| Onboard with scanned PDF | `careeros onboard`, select an image-only PDF | Error: "PDF contained no extractable text — may be scanned/image-only." Clean exit. |
+| LLM fallback | Set `CAREEROS_MODEL` to a rate-limited provider, set `CAREEROS_FALLBACK_MODELS` to a working model, run any LLM-powered command | On 429, request retries with the fallback model transparently. |
 | Browser isolation | `careeros browser login --board linkedin` | Browser opens to LinkedIn login, not your regular Chrome profile. Session persists across commands. |
 | Policy block | Set `blocked_companies: ["Acme Corp"]` in `config/policies.json`, then `careeros apply --job <acme-id>` | Command exits immediately with a policy-blocked message. No cover letter drafted, no approval created. |
 | Duplicate invite prevention | `careeros outreach connect` twice for the same person | Second attempt raises `ConnectionAlreadySent` before any approval is opened. |
