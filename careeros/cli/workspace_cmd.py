@@ -207,7 +207,7 @@ def configure_cmd(
         rprint("[green]Goals saved.[/green]")
 
     if update_sources:
-        from careeros.cli.onboard import _parse_board_entries, _BROWSER_BOARDS
+        from careeros.cli.onboard import _parse_board_entries
 
         rprint("\n[bold]API Job Sources[/bold]")
         rprint("Paste Greenhouse or Lever board URLs (comma-separated), or press enter to keep current.")

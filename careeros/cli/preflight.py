@@ -24,8 +24,6 @@ def require_board_session(board: str) -> None:
         raise typer.Exit(1)
     if authorized:
         return
-    rprint(
-        "[red]Not signed in to " + board
-        + ". Run: careeros browser login --board " + board + "[/red]"
-    )
+    rprint("[red]" + board + " is not set up.[/red]")
+    rprint("[dim]Run: careeros board setup " + board + "[/dim]")
     raise typer.Exit(1)

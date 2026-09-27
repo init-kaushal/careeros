@@ -18,6 +18,7 @@ try:
 except (ImportError, Exception):
     pass
 
+from careeros.boards_config import ALL_KNOWN_BOARDS, BROWSER_BOARD_NAMES, save_registered_boards
 from careeros.cli.resume_cmd import _MASTER
 from careeros.config import GlobalConfig
 from careeros.core.models import Goals, Preferences, Profile
@@ -32,8 +33,6 @@ import uuid
 
 _MAX_RESUME_BYTES = 10 * 1024 * 1024  # 10MB — generous for any real resume as text
 _console = Console()
-
-_BROWSER_BOARDS = {"linkedin", "indeed", "wellfound", "naukri", "instahyre", "glassdoor"}
 
 
 def _parse_board_entries(raw: str) -> tuple[list[dict], list[str]]:
@@ -235,25 +234,24 @@ def onboard_cmd(
     )
     prefs.save(runtime.storage)
 
-    # Step 5: job sources (API-based only — Greenhouse and Lever)
-    rprint("\n[bold]API Job Sources[/bold]")
-    rprint("Paste Greenhouse or Lever board URLs (comma-separated), or press enter to skip.")
-    rprint("[dim]Example: https://boards.greenhouse.io/stripe, https://jobs.lever.co/acme[/dim]")
-    boards_raw = Prompt.ask("Board URLs", default="")
-    sources, unrecognized = _parse_board_entries(boards_raw)
-    runtime.storage.atomic_write("config/sources.json", json.dumps({"sources": sources}, indent=2).encode())
-    if sources:
-        rprint("[green]Added " + str(len(sources)) + " board(s): " +
-               ", ".join(e["source"] + ":" + e["board"] for e in sources) + "[/green]")
-    for item in unrecognized:
-        if isinstance(item, tuple):
-            tag, val = item
-            if tag == "_base_greenhouse":
-                rprint(f"[yellow]Skipped '{val}'[/yellow] [dim]— add the company slug, e.g. boards.greenhouse.io/[bold]stripe[/bold][/dim]")
-            elif tag == "_base_lever":
-                rprint(f"[yellow]Skipped '{val}'[/yellow] [dim]— add the company slug, e.g. jobs.lever.co/[bold]acme[/bold][/dim]")
-        else:
-            rprint(f"[yellow]Skipped '{item}'[/yellow] [dim](paste a full board URL, e.g. boards.greenhouse.io/company)[/dim]")
+    # Step 5: which job boards does the user want to use?
+    rprint("\n[bold]Job Boards[/bold]")
+    rprint("Which boards do you want to use? (comma-separated, or press enter to skip)")
+    rprint("[dim]Browser-based: linkedin, wellfound, indeed[/dim]")
+    rprint("[dim]API-based:     greenhouse, lever[/dim]")
+    boards_raw = Prompt.ask("Boards", default="")
+    board_names = [b.strip().lower() for b in boards_raw.split(",") if b.strip()]
+    known = [b for b in board_names if b in ALL_KNOWN_BOARDS]
+    unknown = [b for b in board_names if b not in ALL_KNOWN_BOARDS]
+    save_registered_boards(runtime.storage, known)
+    if known:
+        rprint("[green]Registered: " + ", ".join(known) + "[/green]")
+    for b in unknown:
+        rprint(f"[yellow]Skipped '{b}'[/yellow] [dim](not a known board)[/dim]")
+    if known:
+        rprint("\n[dim]Configure each board after onboarding:[/dim]")
+        for b in known:
+            rprint(f"[dim]  careeros board setup {b}[/dim]")
 
     # Step 6: goals (optional)
     goals = Goals()
@@ -272,6 +270,5 @@ def onboard_cmd(
 
     rprint(f"\n[bold green]CareerOS ready.[/bold green]")
     rprint(f"Workspace: {ws_path}")
-    rprint("Run [bold]careeros workspace status[/bold] to see your profile summary.")
-    rprint("\n[dim]To use LinkedIn, Indeed, or Wellfound:[/dim]")
-    rprint("[dim]  careeros browser login --board linkedin[/dim]")
+    rprint("Run [bold]careeros workspace status[/bold] to see your profile.")
+    rprint("Run [bold]careeros board setup <name>[/bold] to configure each board.")

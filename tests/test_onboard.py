@@ -40,12 +40,12 @@ def mock_extraction():
         yield
 
 
-def _run_onboard(runner, tmp_path, resume_file, ws_name="workspace", board_urls=""):
+def _run_onboard(runner, tmp_path, resume_file, ws_name="workspace", board_names=""):
     ws_path = str(tmp_path / ws_name)
     # Input sequence: workspace path, resume path, confirm profile (y),
     # roles (blank), remote (any), comp (blank), locations (blank),
-    # board URLs (single prompt), goals (n)
-    user_input = f"{ws_path}\n{resume_file}\ny\n\nany\n\n\n{board_urls}\nn\n"
+    # board names (single prompt), goals (n)
+    user_input = f"{ws_path}\n{resume_file}\ny\n\nany\n\n\n{board_names}\nn\n"
     with _no_candidates():
         return runner.invoke(app, ["onboard"], input=user_input), ws_path
 
@@ -125,50 +125,48 @@ def test_onboard_non_utf8_resume_does_not_crash(tmp_path, mock_extraction, monke
     assert profile.name == "Alice Johnson"
 
 
-def test_onboard_writes_board_entries(tmp_path, resume_file, mock_extraction, monkeypatch):
+def test_onboard_registers_known_board_names(tmp_path, resume_file, mock_extraction, monkeypatch):
     monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
     runner = CliRunner()
     _, ws_path = _run_onboard(runner, tmp_path, resume_file,
-                              board_urls="https://boards.greenhouse.io/stripe")
+                              board_names="linkedin, greenhouse")
     storage = LocalFilesystemStorage(ws_path)
-    raw = json.loads(storage.read("config/sources.json").decode())
-    assert raw["sources"] == [
-        {"source": "greenhouse", "board": "stripe", "company": "stripe",
-         "mode": "SEARCH_ONLY"}
-    ]
+    from careeros.boards_config import load_registered_boards
+    assert set(load_registered_boards(storage)) == {"linkedin", "greenhouse"}
 
 
-def test_onboard_defaults_company_to_the_board_slug(tmp_path, resume_file,
-                                                    mock_extraction, monkeypatch):
+def test_onboard_skips_unknown_board_names(tmp_path, resume_file, mock_extraction, monkeypatch):
     monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
     runner = CliRunner()
-    _, ws_path = _run_onboard(runner, tmp_path, resume_file,
-                              board_urls="https://jobs.lever.co/acme")
+    result, ws_path = _run_onboard(runner, tmp_path, resume_file,
+                                   board_names="linkedin, naukri")
     storage = LocalFilesystemStorage(ws_path)
-    raw = json.loads(storage.read("config/sources.json").decode())
-    assert raw["sources"] == [
-        {"source": "lever", "board": "acme", "company": "acme", "mode": "SEARCH_ONLY"}
-    ]
+    from careeros.boards_config import load_registered_boards
+    assert load_registered_boards(storage) == ["linkedin"]
+    assert "naukri" in result.output
+    assert "not a known board" in result.output
 
 
-def test_onboard_skips_an_entry_with_no_board(tmp_path, resume_file,
-                                              mock_extraction, monkeypatch):
-    # Blank input produces no entries.
+def test_onboard_blank_boards_registers_none(tmp_path, resume_file,
+                                             mock_extraction, monkeypatch):
     monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
     runner = CliRunner()
     _, ws_path = _run_onboard(runner, tmp_path, resume_file)
     storage = LocalFilesystemStorage(ws_path)
-    raw = json.loads(storage.read("config/sources.json").decode())
-    assert raw["sources"] == []
+    from careeros.boards_config import load_registered_boards
+    assert load_registered_boards(storage) == []
 
 
-def test_onboard_no_longer_offers_naukri(tmp_path, resume_file,
-                                         mock_extraction, monkeypatch):
+def test_onboard_sources_json_starts_empty(tmp_path, resume_file,
+                                           mock_extraction, monkeypatch):
+    # sources.json is now only populated by `careeros board setup`, not onboarding.
     monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
     runner = CliRunner()
-    result, _ = _run_onboard(runner, tmp_path, resume_file,
-                             board_urls="https://boards.greenhouse.io/stripe")
-    assert "naukri" not in result.output
+    _, ws_path = _run_onboard(runner, tmp_path, resume_file,
+                              board_names="greenhouse")
+    storage = LocalFilesystemStorage(ws_path)
+    raw = json.loads(storage.read("config/sources.json").decode())
+    assert raw["sources"] == []
 
 
 def test_onboard_uses_evidence_backed_ingestion_for_skills(tmp_path, resume_file, monkeypatch):

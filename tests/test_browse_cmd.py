@@ -321,7 +321,7 @@ class TestBrowseErrorHandling:
                 browse_app, ["--board", "linkedin", "--workspace", ws_path]
             )
         assert result.exit_code == 1
-        assert "careeros browser login --board linkedin" in result.output
+        assert "careeros board setup linkedin" in result.output
         mock_browser.assert_not_called()
 
     def test_board_url_needs_no_session(self, tmp_path):
