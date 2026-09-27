@@ -13,8 +13,9 @@ CareerOS covers the whole job-search loop:
 | Step | Command |
 |---|---|
 | Create your workspace | `careeros onboard` |
-| Update preferences / goals / sources | `careeros workspace configure` |
-| Sign in to job boards | `careeros browser login --board linkedin` |
+| Configure a job board | `careeros board setup linkedin` |
+| List boards and their status | `careeros board list` |
+| Update preferences / goals | `careeros workspace configure` |
 | Browse and score jobs | `careeros browse --board linkedin` |
 | Research companies and people | `careeros research company --job <id>` |
 | Apply with a tailored resume | `careeros apply --job <id>` |

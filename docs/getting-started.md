@@ -84,11 +84,14 @@ The wizard walks you through six steps:
    verified skills). Confirm with `Y` to continue, or choose to pick a different file and re-extract.
 5. **Preferences and goals** — target roles, remote preference, compensation floor, locations, and
    optional short/long-term goals.
-6. **API job sources** — optional Greenhouse and Lever boards for API-based job discovery
-   (no browser needed). Paste the full board URL — e.g. `https://boards.greenhouse.io/stripe` or
-   `https://jobs.lever.co/acme`. Multiple boards: comma-separate them.
-   Browser-based boards (LinkedIn, Indeed, Wellfound) are set up separately with
-   `careeros browser login`.
+6. **Job boards** — which boards do you want to use? Enter names, comma-separated:
+   - Browser-based: `linkedin`, `wellfound`, `indeed`
+   - API-based (no browser needed): `greenhouse`, `lever`
+
+   Example: `linkedin, greenhouse, wellfound`
+
+   This just registers the names. You configure each board afterwards with
+   `careeros board setup <name>` — see §5 below.
 7. **Done** — your workspace is ready.
 
 The whole process takes under a minute. All prompts support arrow keys, Home/End, and backspace for editing.
@@ -110,9 +113,37 @@ Goals:      3 goals
 Activity:   2 events today
 ```
 
-## 5. Update your configuration
+## 5. Set up your job boards
 
-To change preferences, goals, or API sources after onboarding:
+After onboarding, configure each board you registered:
+
+```bash
+careeros board setup linkedin      # opens a browser window → sign in → done
+careeros board setup wellfound     # same
+careeros board setup greenhouse    # asks for the board URL → saves it
+careeros board setup lever         # same
+```
+
+**Browser boards** (linkedin, wellfound, indeed) — CareerOS opens the board's login page in a
+dedicated browser profile, separate from your everyday Chrome. Sign in as normal; CareerOS detects
+the session and closes the window automatically.
+
+**API boards** (greenhouse, lever) — you will be prompted for the board URL, e.g.
+`https://boards.greenhouse.io/stripe`. No browser needed; jobs are fetched directly from the ATS
+API. Run `board setup` again to add a second company on the same platform.
+
+Check which boards are registered and ready:
+
+```bash
+careeros board list
+```
+
+If you try to browse a board that isn't set up, CareerOS will tell you exactly which command to
+run before it lets you proceed.
+
+## 6. Update your configuration
+
+To change preferences or goals after onboarding:
 
 ```bash
 careeros workspace configure
@@ -129,27 +160,6 @@ What would you like to update?
 ```
 
 Each section pre-fills your current values — edit only what you want to change. Arrow keys and backspace work in all prompts.
-
-## 6. Sign in to your job boards
-
-CareerOS drives a dedicated browser profile — separate from your everyday Chrome — so a scheduled
-run never holds sessions for anything but the boards you authorized:
-
-```bash
-careeros browser login --board linkedin
-careeros browser login --board indeed
-careeros browser login --board wellfound
-```
-
-Each command opens a real browser window at that board's login page. Sign in as normal; CareerOS
-detects the completed session and closes the window. Check what's authorized at any time:
-
-```bash
-careeros browser status
-```
-
-Re-run `login` whenever a session expires. You need an active session for every board you want to
-browse, apply to, or research against.
 
 ## 7. Browse and score jobs
 
@@ -431,10 +441,12 @@ All 1280 unit tests should pass in under 15 seconds.
 
 | Scenario | Command | What to check |
 |---|---|---|
-| Onboard with PDF resume | `careeros onboard` | Enter path to a `.pdf` resume. Profile confirmation displays name, title, years, summary, and skills. Re-pick works. |
+| Onboard with PDF resume | `careeros onboard` | Enter path to a `.pdf` resume. Profile confirmation displays name, title, years, summary, and skills. Re-pick works. Board names step accepts e.g. "linkedin, greenhouse". |
 | Onboard with scanned PDF | `careeros onboard`, select an image-only PDF | Error: "PDF contained no extractable text — may be scanned/image-only." Clean exit. |
 | LLM fallback | Set `CAREEROS_MODEL` to a rate-limited provider, set `CAREEROS_FALLBACK_MODELS` to a working model, run any LLM-powered command | On 429, request retries with the fallback model transparently. |
-| Browser isolation | `careeros browser login --board linkedin` | Browser opens to LinkedIn login, not your regular Chrome profile. Session persists across commands. |
+| Board setup (browser) | `careeros board setup linkedin` | Browser opens to LinkedIn login in the dedicated CareerOS profile (not your everyday Chrome). Session persists; `careeros board list` shows it as ready. |
+| Board setup (API) | `careeros board setup greenhouse` | Prompts for board URL, parses slug, appends to sources.json. `careeros board list` shows it as ready. |
+| Browse blocked without setup | `careeros browse --board linkedin` (no session) | Exits with "linkedin is not set up. Run: careeros board setup linkedin". Browser never opens. |
 | Policy block | Set `blocked_companies: ["Acme Corp"]` in `config/policies.json`, then `careeros apply --job <acme-id>` | Command exits immediately with a policy-blocked message. No cover letter drafted, no approval created. |
 | Duplicate invite prevention | `careeros outreach connect` twice for the same person | Second attempt raises `ConnectionAlreadySent` before any approval is opened. |
 | Apply approval flow | `careeros apply --job <id>` | Cover letter shown, `[a]ccept` advances to browser fill, approval in `approvals/` transitions pending → approved → executed. |
