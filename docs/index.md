@@ -1,69 +1,48 @@
 # CareerOS
 
-**Privacy-first, agent-portable career automation.**
+Scaffold a markdown-native job-search workspace for Claude Code or ChatGPT Projects.
 
-Your resume, skills, and job data live in a directory you own — plain files you can version-control, back up, or hand to any agent. No account, no cloud sync, no vendor lock-in.
+Your profile, jobs, and activity log live in a plain-text directory you own — version-control it, back it up, hand it to any agent. No account. No cloud sync.
 
 ---
 
-## Two ways to use CareerOS
+## How it works
 
-### Cowork workspace (recommended for job discovery)
-
-A markdown-native workspace for Claude Code or ChatGPT Projects. The agent interviews you once to build your profile, then browses, scores, and saves jobs in chat.
+One command scaffolds a workspace. On the first session, the agent interviews you to build your profile and scoring rubric. After that, you chat: "browse linkedin", "show pipeline", "mark Stripe as applied."
 
 ```bash
 careeros init ~/my-job-search                # Claude Code (recommended)
 careeros init ~/my-job-search --runtime gpt  # ChatGPT Projects
 ```
 
-Claude Code uses your real Chrome session via Claude-in-Chrome — no automation detection, works on LinkedIn and Instahyre. ChatGPT Projects uses GPT web search for public boards; authenticated boards require pasting page content.
-
-Full setup: [Cowork guides](cowork/index.md) · [Claude Code](cowork/claude-code.md) · [GPT Work](cowork/chatgpt.md)
-
-### CLI (for apply, outreach, and full automation)
-
-The CLI handles the full job-search lifecycle after you have jobs in your pipeline: applying, researching companies and people, sending outreach, follow-up cadence, and LinkedIn connection requests.
-
-```bash
-careeros onboard              # create your CLI workspace (resume → profile)
-careeros apply --job <id>     # cover letter → approval → form fill
-careeros outreach send --job <id> --person <id>
-careeros outreach connect --job <id> --person <id>
-```
-
-Every irreversible action is approval-gated: CareerOS drafts, you review, then it executes. The full trail is logged to an append-only activity file.
-
-Full walkthrough: [Getting Started → CLI setup](getting-started.md#cli-setup)
+Full setup: [Getting Started](getting-started.md) · [Cowork guides](cowork/index.md)
 
 ---
 
-## Full command reference
+## Runtimes
 
-| Step | Command |
+| | Claude Code | GPT Work |
+|---|---|---|
+| **Command** | `careeros init ~/my-job-search` | `careeros init ~/my-job-search --runtime gpt` |
+| **Browse method** | Real Chrome via Claude-in-Chrome | GPT web search + paste for authenticated boards |
+| **File writes** | Direct | Code blocks for user to apply |
+| **LinkedIn / Instahyre** | Full (real logged-in session) | Paste page content into chat |
+
+---
+
+## Command reference
+
+| Command | What it does |
 |---|---|
-| **Scaffold Cowork workspace (Claude)** | `careeros init ~/my-job-search` |
-| **Scaffold Cowork workspace (GPT)** | `careeros init ~/my-job-search --runtime gpt` |
-| **Refresh Cowork skills** | `careeros init ~/my-job-search --refresh` |
-| Create CLI workspace | `careeros onboard` |
-| Configure a job board | `careeros board setup linkedin` |
-| List boards and their status | `careeros board list` |
-| Update preferences / goals | `careeros workspace configure` |
-| Browse and score jobs (CLI) | `careeros browse --board linkedin` |
-| Research companies and people | `careeros research company --job <id>` |
-| Apply with a tailored resume | `careeros apply --job <id>` |
-| Send outreach | `careeros outreach send --job <id> --person <id>` |
-| Follow-up cadence | `careeros outreach follow-up` |
-| LinkedIn connection requests | `careeros outreach connect --job <id> --person <id>` |
+| `careeros init <path>` | Scaffold a Claude Cowork workspace |
+| `careeros init <path> --runtime gpt` | Scaffold a GPT Work workspace |
+| `careeros init <path> --refresh` | Update skill files without touching user data |
 
 ---
 
-## Privacy model
+## Privacy
 
-- **Your data never reaches a CareerOS server** — there isn't one. Both the Cowork workspace and the CLI workspace are folders on your machine.
-- **LLM calls go to whichever provider you configure.** Profile extraction, job scoring, cover letter drafting, and outreach drafting all send relevant data to that provider. Use `CAREEROS_MODEL=ollama/...` to keep every call local.
-- **Cowork browsing uses your real Chrome** via the Claude-in-Chrome browser extension — your existing logged-in sessions, no separate browser profile needed.
-- **CLI browser automation runs against a dedicated CareerOS profile** — not your personal Chrome. Used for form-filling during `apply` and `outreach connect`.
+Your data never reaches a CareerOS server — there isn't one. The workspace is a folder on your machine. LLM calls go to whichever provider your agent runtime uses (Anthropic for Claude Code, OpenAI for GPT Work).
 
 ---
 
@@ -74,20 +53,4 @@ git clone https://github.com/init-kaushal/careeros
 cd careeros
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
-export ANTHROPIC_API_KEY=sk-ant-...   # or any LiteLLM-supported provider
 ```
-
-For the Cowork workflow, no additional dependencies are needed — just the Claude-in-Chrome browser extension in your Chrome.
-
-For CLI apply/outreach (form-filling):
-```bash
-pip install playwright && playwright install chrome
-```
-
-Full walkthrough: [Getting Started](getting-started.md)
-
----
-
-## For agent integrators
-
-CareerOS exposes an `AgentRuntime` protocol so an external agent session can propose and execute approval-gated actions (apply, send outreach, follow-up, connect) cross-process against a real workspace. The approval state machine, error vocabulary, and a worked example are in the [Agent Integration guide](agent-integration.md).
