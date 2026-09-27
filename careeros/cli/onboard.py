@@ -7,7 +7,12 @@ from rich import box
 from rich.console import Console
 
 try:
-    import readline  # noqa: F401 — enables arrow-key / cursor editing in prompts on macOS/Linux
+    import readline
+    # Keep left/right/backspace/Home/End for in-line editing.
+    # Disable up/down history navigation — it replaces the visible prompt line,
+    # making the question appear to vanish.
+    readline.parse_and_bind(r'"\e[A": ""')
+    readline.parse_and_bind(r'"\e[B": ""')
 except ImportError:
     pass
 
@@ -20,10 +25,53 @@ from careeros.skills.resume_ingest import ingest_resume
 from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import init_workspace
 import json
+import re
 import uuid
 
 _MAX_RESUME_BYTES = 10 * 1024 * 1024  # 10MB — generous for any real resume as text
 _console = Console()
+
+_BROWSER_BOARDS = {"linkedin", "indeed", "wellfound", "naukri", "instahyre", "glassdoor"}
+
+
+def _parse_board_entries(raw: str) -> tuple[list[dict], list[str]]:
+    """Parse a comma-separated list of board URLs or slugs into source dicts.
+
+    Returns (entries, unrecognized) where unrecognized items are passed back
+    to the caller for display (e.g. browser-only boards like LinkedIn).
+    Accepts:
+      https://boards.greenhouse.io/stripe/jobs/123  → greenhouse:stripe
+      https://jobs.lever.co/acme                   → lever:acme
+      greenhouse:stripe                             → greenhouse:stripe
+      lever:acme                                   → lever:acme
+    """
+    entries: list[dict] = []
+    unrecognized: list[str] = []
+    for chunk in raw.split(","):
+        item = chunk.strip()
+        if not item:
+            continue
+        # Full Greenhouse URL
+        m = re.search(r'boards\.greenhouse\.io/([^/?#\s]+)', item)
+        if m:
+            slug = m.group(1).strip("/")
+            entries.append({"source": "greenhouse", "board": slug, "company": slug, "mode": "SEARCH_ONLY"})
+            continue
+        # Full Lever URL
+        m = re.search(r'jobs\.lever\.co/([^/?#\s]+)', item)
+        if m:
+            slug = m.group(1).strip("/")
+            entries.append({"source": "lever", "board": slug, "company": slug, "mode": "SEARCH_ONLY"})
+            continue
+        # Short form source:slug
+        if ":" in item:
+            source, _, slug = item.partition(":")
+            source, slug = source.strip().lower(), slug.strip()
+            if source in ("greenhouse", "lever") and slug:
+                entries.append({"source": source, "board": slug, "company": slug, "mode": "SEARCH_ONLY"})
+                continue
+        unrecognized.append(item)
+    return entries, unrecognized
 
 def _read_resume(path: Path) -> str:
     """Return the text content of a resume file. Supports .pdf, .md, .txt."""
@@ -179,28 +227,19 @@ def onboard_cmd(
 
     # Step 5: job sources
     rprint("\n[bold]API Job Sources[/bold]")
-    rprint("CareerOS can poll company ATS boards directly (no browser needed).")
-    rprint("Supported: [cyan]Greenhouse[/cyan] and [cyan]Lever[/cyan]\n")
-    rprint("For each company, enter its board slug — the part after the ATS URL.")
-    rprint("  Greenhouse: [dim]boards.greenhouse.io/[bold]stripe[/bold][/dim] → slug is [cyan]stripe[/cyan]")
-    rprint("  Lever:      [dim]jobs.lever.co/[bold]acme[/bold][/dim]          → slug is [cyan]acme[/cyan]\n")
-
-    sources = []
-    gh_raw = Prompt.ask(
-        "Greenhouse slugs (comma-separated, or press enter to skip)", default=""
-    )
-    for slug in (s.strip() for s in gh_raw.split(",") if s.strip()):
-        sources.append({"source": "greenhouse", "board": slug, "company": slug, "mode": "SEARCH_ONLY"})
-
-    lv_raw = Prompt.ask(
-        "Lever slugs (comma-separated, or press enter to skip)", default=""
-    )
-    for slug in (s.strip() for s in lv_raw.split(",") if s.strip()):
-        sources.append({"source": "lever", "board": slug, "company": slug, "mode": "SEARCH_ONLY"})
-
+    rprint("Paste Greenhouse or Lever board URLs (comma-separated), or press enter to skip.")
+    rprint("[dim]Example: https://boards.greenhouse.io/stripe, https://jobs.lever.co/acme[/dim]")
+    boards_raw = Prompt.ask("Board URLs", default="")
+    sources, unrecognized = _parse_board_entries(boards_raw)
     runtime.storage.atomic_write("config/sources.json", json.dumps({"sources": sources}, indent=2).encode())
-    rprint("\n[dim]For browser-based boards (LinkedIn, Wellfound, Naukri, Indeed),[/dim]")
-    rprint("[dim]run [bold]careeros browser login --board <name>[/bold] after setup.[/dim]")
+    if sources:
+        rprint("[green]Added " + str(len(sources)) + " board(s): " +
+               ", ".join(e["source"] + ":" + e["board"] for e in sources) + "[/green]")
+    for item in unrecognized:
+        if item.lower() in _BROWSER_BOARDS:
+            rprint(f"[yellow]{item}[/yellow] [dim]is browser-based — run [bold]careeros browser login --board {item.lower()}[/bold] after setup.[/dim]")
+        else:
+            rprint(f"[yellow]Skipped '{item}'[/yellow] [dim](not a recognized Greenhouse or Lever URL)[/dim]")
 
     # Step 6: goals (optional)
     goals = Goals()

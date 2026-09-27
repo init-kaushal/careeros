@@ -14,7 +14,9 @@ from careeros.workspace.manager import open_workspace
 from careeros.workspace.manifest import Manifest, check_schema_compatibility, UnsupportedSchemaVersion
 
 try:
-    import readline  # noqa: F401
+    import readline
+    readline.parse_and_bind(r'"\e[A": ""')
+    readline.parse_and_bind(r'"\e[B": ""')
 except ImportError:
     pass
 
@@ -203,10 +205,11 @@ def configure_cmd(
         rprint("[green]Goals saved.[/green]")
 
     if update_sources:
+        from careeros.cli.onboard import _parse_board_entries, _BROWSER_BOARDS
+
         rprint("\n[bold]API Job Sources[/bold]")
-        rprint("Enter company board slugs for each ATS. Leave blank to keep current entries.")
-        rprint("  Greenhouse: [dim]boards.greenhouse.io/[bold]stripe[/bold][/dim] → slug is [cyan]stripe[/cyan]")
-        rprint("  Lever:      [dim]jobs.lever.co/[bold]acme[/bold][/dim]          → slug is [cyan]acme[/cyan]\n")
+        rprint("Paste Greenhouse or Lever board URLs (comma-separated), or press enter to keep current.")
+        rprint("[dim]Example: https://boards.greenhouse.io/stripe, https://jobs.lever.co/acme[/dim]")
 
         try:
             raw = json.loads(storage.read("config/sources.json").decode())
@@ -214,19 +217,20 @@ def configure_cmd(
         except Exception:
             existing = []
 
-        current_gh = ", ".join(e["board"] for e in existing if e.get("source") == "greenhouse")
-        current_lv = ", ".join(e["board"] for e in existing if e.get("source") == "lever")
-
-        gh_raw = Prompt.ask("Greenhouse slugs (comma-separated)", default=current_gh)
-        lv_raw = Prompt.ask("Lever slugs (comma-separated)", default=current_lv)
-
-        sources = []
-        for slug in (s.strip() for s in gh_raw.split(",") if s.strip()):
-            sources.append({"source": "greenhouse", "board": slug, "company": slug, "mode": "SEARCH_ONLY"})
-        for slug in (s.strip() for s in lv_raw.split(",") if s.strip()):
-            sources.append({"source": "lever", "board": slug, "company": slug, "mode": "SEARCH_ONLY"})
-
+        current = ", ".join(
+            ("https://boards.greenhouse.io/" if e["source"] == "greenhouse" else "https://jobs.lever.co/") + e["board"]
+            for e in existing if e.get("board")
+        )
+        boards_raw = Prompt.ask("Board URLs", default=current)
+        sources, unrecognized = _parse_board_entries(boards_raw)
         storage.atomic_write("config/sources.json", json.dumps({"sources": sources}, indent=2).encode())
-        rprint("[green]Sources saved.[/green]")
+        if sources:
+            rprint("[green]Saved " + str(len(sources)) + " board(s): " +
+                   ", ".join(e["source"] + ":" + e["board"] for e in sources) + "[/green]")
+        for item in unrecognized:
+            if item.lower() in _BROWSER_BOARDS:
+                rprint(f"[yellow]{item}[/yellow] [dim]is browser-based — run [bold]careeros browser login --board {item.lower()}[/bold][/dim]")
+            else:
+                rprint(f"[yellow]Skipped '{item}'[/yellow] [dim](not a recognized Greenhouse or Lever URL)[/dim]")
 
     rprint("\n[bold green]Done.[/bold green] Run [bold]careeros workspace status[/bold] to confirm.")
