@@ -232,13 +232,11 @@ def configure_cmd(
         for item in unrecognized:
             if isinstance(item, tuple):
                 tag, val = item
-                if tag == "_browser":
-                    rprint(f"[yellow]{val}[/yellow] [dim]is browser-based — run [bold]careeros browser login --board {val}[/bold][/dim]")
-                elif tag == "_base_greenhouse":
+                if tag == "_base_greenhouse":
                     rprint(f"[yellow]Skipped '{val}'[/yellow] [dim]— add the company slug, e.g. boards.greenhouse.io/[bold]stripe[/bold][/dim]")
                 elif tag == "_base_lever":
                     rprint(f"[yellow]Skipped '{val}'[/yellow] [dim]— add the company slug, e.g. jobs.lever.co/[bold]acme[/bold][/dim]")
             else:
-                rprint(f"[yellow]Skipped '{item}'[/yellow] [dim](not a recognized Greenhouse or Lever URL)[/dim]")
+                rprint(f"[yellow]Skipped '{item}'[/yellow] [dim](paste a full board URL, e.g. boards.greenhouse.io/company)[/dim]")
 
     rprint("\n[bold green]Done.[/bold green] Run [bold]careeros workspace status[/bold] to confirm.")

@@ -80,12 +80,6 @@ def _parse_board_entries(raw: str) -> tuple[list[dict], list[str]]:
             if source in ("greenhouse", "lever") and slug:
                 entries.append({"source": source, "board": slug, "company": slug, "mode": "SEARCH_ONLY"})
                 continue
-        # Browser-based boards: match short name OR URL containing the name
-        item_lower = item.lower()
-        matched_board = next((b for b in _BROWSER_BOARDS if b in item_lower), None)
-        if matched_board:
-            unrecognized.append(("_browser", matched_board))
-            continue
         unrecognized.append(item)
     return entries, unrecognized
 
@@ -241,7 +235,7 @@ def onboard_cmd(
     )
     prefs.save(runtime.storage)
 
-    # Step 5: job sources
+    # Step 5: job sources (API-based only — Greenhouse and Lever)
     rprint("\n[bold]API Job Sources[/bold]")
     rprint("Paste Greenhouse or Lever board URLs (comma-separated), or press enter to skip.")
     rprint("[dim]Example: https://boards.greenhouse.io/stripe, https://jobs.lever.co/acme[/dim]")
@@ -254,15 +248,12 @@ def onboard_cmd(
     for item in unrecognized:
         if isinstance(item, tuple):
             tag, val = item
-            if tag == "_browser":
-                rprint(f"[yellow]{val}[/yellow] [dim]is browser-based — set it up after onboarding with:[/dim]")
-                rprint(f"[dim]  careeros browser login --board {val}[/dim]")
-            elif tag == "_base_greenhouse":
+            if tag == "_base_greenhouse":
                 rprint(f"[yellow]Skipped '{val}'[/yellow] [dim]— add the company slug, e.g. boards.greenhouse.io/[bold]stripe[/bold][/dim]")
             elif tag == "_base_lever":
                 rprint(f"[yellow]Skipped '{val}'[/yellow] [dim]— add the company slug, e.g. jobs.lever.co/[bold]acme[/bold][/dim]")
         else:
-            rprint(f"[yellow]Skipped '{item}'[/yellow] [dim](not a recognized Greenhouse or Lever URL)[/dim]")
+            rprint(f"[yellow]Skipped '{item}'[/yellow] [dim](paste a full board URL, e.g. boards.greenhouse.io/company)[/dim]")
 
     # Step 6: goals (optional)
     goals = Goals()
@@ -282,3 +273,5 @@ def onboard_cmd(
     rprint(f"\n[bold green]CareerOS ready.[/bold green]")
     rprint(f"Workspace: {ws_path}")
     rprint("Run [bold]careeros workspace status[/bold] to see your profile summary.")
+    rprint("\n[dim]To use LinkedIn, Indeed, or Wellfound:[/dim]")
+    rprint("[dim]  careeros browser login --board linkedin[/dim]")
