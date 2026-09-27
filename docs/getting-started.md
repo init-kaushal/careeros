@@ -33,6 +33,16 @@ Verify the install:
 careeros --help
 ```
 
+> **Every new terminal session:** you must activate the venv before using `careeros`:
+> ```bash
+> source ~/Projects/careeros/.venv/bin/activate
+> ```
+> To avoid this, add the venv's `bin` directory to your PATH permanently in `~/.zshrc`:
+> ```bash
+> export PATH="$HOME/Projects/careeros/.venv/bin:$PATH"
+> ```
+> Then `source ~/.zshrc` once and `careeros` will be available in every terminal.
+
 ## 2. Set your API key and model
 
 ```bash
