@@ -6,6 +6,11 @@ from rich.table import Table
 from rich import box
 from rich.console import Console
 
+try:
+    import readline  # noqa: F401 — enables arrow-key / cursor editing in prompts on macOS/Linux
+except ImportError:
+    pass
+
 from careeros.cli.resume_cmd import _MASTER
 from careeros.config import GlobalConfig
 from careeros.core.models import Goals, Preferences, Profile
@@ -160,7 +165,7 @@ def onboard_cmd(
     # ingested.error and an empty/partial result, which is the honest outcome of
     # verbatim-verification guarantees.
     while True:
-        rprint("\nExtracting profile from resume…")
+        rprint("\nExtracting profile from resume… [dim](this may take up to a minute)[/dim]")
         profile = extract_basic_profile(resume_text)
         ingested = ingest_resume(resume_text, _MASTER)
 
@@ -216,22 +221,29 @@ def onboard_cmd(
     prefs.save(runtime.storage)
 
     # Step 5: job sources
-    rprint("\n[bold]Job Sources[/bold]")
-    rprint("API job boards to poll, as source:board:Company triples.")
-    rprint("Available sources: greenhouse, lever. Example: greenhouse:stripe:Stripe")
-    sources_raw = Prompt.ask("Sources (comma-separated, or press enter to skip)", default="")
+    rprint("\n[bold]API Job Sources[/bold]")
+    rprint("CareerOS can poll company ATS boards directly (no browser needed).")
+    rprint("Supported: [cyan]Greenhouse[/cyan] and [cyan]Lever[/cyan]\n")
+    rprint("For each company, enter its board slug — the part after the ATS URL.")
+    rprint("  Greenhouse: [dim]boards.greenhouse.io/[bold]stripe[/bold][/dim] → slug is [cyan]stripe[/cyan]")
+    rprint("  Lever:      [dim]jobs.lever.co/[bold]acme[/bold][/dim]          → slug is [cyan]acme[/cyan]\n")
+
     sources = []
-    for chunk in sources_raw.split(","):
-        parts = [p.strip() for p in chunk.split(":")]
-        if len(parts) < 2 or not parts[0] or not parts[1]:
-            continue
-        sources.append({
-            "source": parts[0],
-            "board": parts[1],
-            "company": parts[2] if len(parts) > 2 and parts[2] else parts[1],
-            "mode": "SEARCH_ONLY",
-        })
+    gh_raw = Prompt.ask(
+        "Greenhouse slugs (comma-separated, or press enter to skip)", default=""
+    )
+    for slug in (s.strip() for s in gh_raw.split(",") if s.strip()):
+        sources.append({"source": "greenhouse", "board": slug, "company": slug, "mode": "SEARCH_ONLY"})
+
+    lv_raw = Prompt.ask(
+        "Lever slugs (comma-separated, or press enter to skip)", default=""
+    )
+    for slug in (s.strip() for s in lv_raw.split(",") if s.strip()):
+        sources.append({"source": "lever", "board": slug, "company": slug, "mode": "SEARCH_ONLY"})
+
     runtime.storage.atomic_write("config/sources.json", json.dumps({"sources": sources}, indent=2).encode())
+    rprint("\n[dim]For browser-based boards (LinkedIn, Wellfound, Naukri, Indeed),[/dim]")
+    rprint("[dim]run [bold]careeros browser login --board <name>[/bold] after setup.[/dim]")
 
     # Step 6: goals (optional)
     goals = Goals()

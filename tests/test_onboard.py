@@ -37,12 +37,13 @@ def mock_extraction():
         yield
 
 
-def _run_onboard(runner, tmp_path, resume_file, ws_name="workspace", sources="greenhouse"):
+def _run_onboard(runner, tmp_path, resume_file, ws_name="workspace",
+                 gh_sources="", lv_sources=""):
     ws_path = str(tmp_path / ws_name)
     # Input sequence: workspace path, resume path, confirm profile (y),
     # roles (blank), remote (any), comp (blank), locations (blank),
-    # sources, goals (n)
-    user_input = f"{ws_path}\n{resume_file}\ny\n\nany\n\n\n{sources}\nn\n"
+    # greenhouse slugs, lever slugs, goals (n)
+    user_input = f"{ws_path}\n{resume_file}\ny\n\nany\n\n\n{gh_sources}\n{lv_sources}\nn\n"
     with _no_candidates:
         return runner.invoke(app, ["onboard"], input=user_input), ws_path
 
@@ -125,12 +126,11 @@ def test_onboard_non_utf8_resume_does_not_crash(tmp_path, mock_extraction, monke
 def test_onboard_writes_board_entries(tmp_path, resume_file, mock_extraction, monkeypatch):
     monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
     runner = CliRunner()
-    _, ws_path = _run_onboard(runner, tmp_path, resume_file,
-                              sources="greenhouse:stripe:Stripe")
+    _, ws_path = _run_onboard(runner, tmp_path, resume_file, gh_sources="stripe")
     storage = LocalFilesystemStorage(ws_path)
     raw = json.loads(storage.read("config/sources.json").decode())
     assert raw["sources"] == [
-        {"source": "greenhouse", "board": "stripe", "company": "Stripe",
+        {"source": "greenhouse", "board": "stripe", "company": "stripe",
          "mode": "SEARCH_ONLY"}
     ]
 
@@ -139,7 +139,7 @@ def test_onboard_defaults_company_to_the_board_slug(tmp_path, resume_file,
                                                     mock_extraction, monkeypatch):
     monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
     runner = CliRunner()
-    _, ws_path = _run_onboard(runner, tmp_path, resume_file, sources="lever:acme")
+    _, ws_path = _run_onboard(runner, tmp_path, resume_file, lv_sources="acme")
     storage = LocalFilesystemStorage(ws_path)
     raw = json.loads(storage.read("config/sources.json").decode())
     assert raw["sources"] == [
@@ -149,10 +149,10 @@ def test_onboard_defaults_company_to_the_board_slug(tmp_path, resume_file,
 
 def test_onboard_skips_an_entry_with_no_board(tmp_path, resume_file,
                                               mock_extraction, monkeypatch):
-    # The legacy answer shape. It must produce no entry rather than an inert one.
+    # Blank input for both source prompts produces no entries.
     monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
     runner = CliRunner()
-    _, ws_path = _run_onboard(runner, tmp_path, resume_file, sources="greenhouse")
+    _, ws_path = _run_onboard(runner, tmp_path, resume_file)
     storage = LocalFilesystemStorage(ws_path)
     raw = json.loads(storage.read("config/sources.json").decode())
     assert raw["sources"] == []
@@ -162,8 +162,7 @@ def test_onboard_no_longer_offers_naukri(tmp_path, resume_file,
                                          mock_extraction, monkeypatch):
     monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
     runner = CliRunner()
-    result, _ = _run_onboard(runner, tmp_path, resume_file,
-                             sources="greenhouse:stripe:Stripe")
+    result, _ = _run_onboard(runner, tmp_path, resume_file, gh_sources="stripe")
     assert "naukri" not in result.output
 
 
