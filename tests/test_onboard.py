@@ -9,6 +9,10 @@ from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import open_workspace
 from datetime import datetime, timezone
 
+# Suppress the file-picker scan so tests always go through the manual path
+# prompt and don't accidentally pick up real files from ~/Desktop or ~/Downloads.
+_no_candidates = patch("careeros.cli.onboard._find_resume_candidates", return_value=[])
+
 
 def _today():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -39,7 +43,8 @@ def _run_onboard(runner, tmp_path, resume_file, ws_name="workspace", sources="gr
     # roles (blank), remote (any), comp (blank), locations (blank),
     # sources, goals (n)
     user_input = f"{ws_path}\n{resume_file}\ny\n\nany\n\n\n{sources}\nn\n"
-    return runner.invoke(app, ["onboard"], input=user_input), ws_path
+    with _no_candidates:
+        return runner.invoke(app, ["onboard"], input=user_input), ws_path
 
 
 def test_onboard_creates_manifest(tmp_path, resume_file, mock_extraction, monkeypatch):
@@ -85,7 +90,8 @@ def test_onboard_missing_resume_exits(tmp_path, monkeypatch):
     monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
     runner = CliRunner()
     ws_path = str(tmp_path / "ws")
-    result = runner.invoke(app, ["onboard"], input=f"{ws_path}\n/nonexistent/resume.md\n")
+    with _no_candidates:
+        result = runner.invoke(app, ["onboard"], input=f"{ws_path}\n/nonexistent/resume.md\n")
     assert result.exit_code != 0
 
 
@@ -97,7 +103,8 @@ def test_onboard_oversized_resume_exits(tmp_path, monkeypatch):
     big_resume.write_text("x" * 1000)
     runner = CliRunner()
     ws_path = str(tmp_path / "ws")
-    result = runner.invoke(app, ["onboard"], input=f"{ws_path}\n{big_resume}\n")
+    with _no_candidates:
+        result = runner.invoke(app, ["onboard"], input=f"{ws_path}\n{big_resume}\n")
     assert result.exit_code != 0
     assert "too large" in result.output.lower()
 

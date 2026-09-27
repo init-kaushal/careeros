@@ -2,6 +2,9 @@ from pathlib import Path
 import typer
 from rich import print as rprint
 from rich.prompt import Confirm, Prompt
+from rich.table import Table
+from rich import box
+from rich.console import Console
 
 from careeros.cli.resume_cmd import _MASTER
 from careeros.config import GlobalConfig
@@ -15,6 +18,80 @@ import json
 import uuid
 
 _MAX_RESUME_BYTES = 10 * 1024 * 1024  # 10MB — generous for any real resume as text
+_console = Console()
+
+_SEARCH_DIRS = [
+    Path.home() / "Desktop",
+    Path.home() / "Downloads",
+    Path.home() / "Documents",
+    Path.home(),
+]
+_RESUME_EXTS = {".md", ".txt"}
+
+
+def _find_resume_candidates() -> list[Path]:
+    """Return up to 10 .md/.txt files from common locations, resume-named files first."""
+    seen: set[Path] = set()
+    priority: list[Path] = []
+    rest: list[Path] = []
+    for d in _SEARCH_DIRS:
+        if not d.is_dir():
+            continue
+        for f in sorted(d.iterdir()):
+            if f.suffix.lower() not in _RESUME_EXTS or not f.is_file():
+                continue
+            if f in seen:
+                continue
+            seen.add(f)
+            if any(kw in f.name.lower() for kw in ("resume", "cv", "curriculum")):
+                priority.append(f)
+            else:
+                rest.append(f)
+    candidates = priority + rest
+    return candidates[:10]
+
+
+def _pick_resume_file() -> Path:
+    """Interactive file picker: numbered list of candidates + manual-path fallback."""
+    candidates = _find_resume_candidates()
+    if candidates:
+        rprint("\n[bold]Resume files found:[/bold]")
+        for i, p in enumerate(candidates, 1):
+            rprint(f"  [cyan]{i}[/cyan]  {p}")
+        rprint(f"  [cyan]0[/cyan]  Enter a different path")
+        choice = Prompt.ask("\nPick a number", default="1")
+        if choice.strip().isdigit():
+            idx = int(choice.strip())
+            if 1 <= idx <= len(candidates):
+                return candidates[idx - 1]
+    path_str = Prompt.ask("\nPath to your resume (Markdown or plain text)")
+    return Path(path_str).expanduser()
+
+
+def _show_profile_summary(profile, ingested) -> None:
+    """Print a rich table summarising everything extracted from the resume."""
+    skills = ingested.skills
+    table = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
+    table.add_column(style="bold cyan", no_wrap=True)
+    table.add_column()
+    table.add_row("Name", profile.name or "(not found)")
+    table.add_row("Title", profile.title or "(not found)")
+    table.add_row("Experience", f"{profile.years_of_experience} years" if profile.years_of_experience else "?")
+    if profile.summary:
+        snippet = profile.summary[:120] + ("…" if len(profile.summary) > 120 else "")
+        table.add_row("Summary", snippet)
+    if skills.skills:
+        table.add_row("Skills", ", ".join(s.name for s in skills.skills))
+    else:
+        table.add_row("Skills", "(none verified)")
+    rprint("\n[bold]Extracted profile:[/bold]")
+    _console.print(table)
+    if ingested.error:
+        rprint("[bold red]  Skill extraction failed: " + ingested.error + "[/bold red]")
+        rprint("[yellow]  Run 'careeros resume ingest' once your API key is working.[/yellow]")
+    elif ingested.dropped:
+        rprint("[yellow]  Dropped " + str(len(ingested.dropped))
+               + " unverifiable skill(s): " + ", ".join(ingested.dropped) + "[/yellow]")
 
 
 def onboard_cmd(
@@ -41,54 +118,51 @@ def onboard_cmd(
     runtime.record_activity(runtime.new_event("workspace_created", "init", "Workspace initialized at " + ws_path))
     rprint(f"\n[green]Workspace created at {ws_path}[/green]")
 
-    # Step 2: resume
-    resume_path_str = Prompt.ask("\nPath to your resume (Markdown or plain text)")
-    resume_file = Path(resume_path_str).expanduser()
+    # Step 2: resume — file picker with numbered candidates
+    resume_file = _pick_resume_file()
     if not resume_file.exists():
         rprint(f"[red]File not found: {resume_file}[/red]")
         raise typer.Exit(1)
     if resume_file.stat().st_size > _MAX_RESUME_BYTES:
-        rprint("[red]Resume file is too large (max 10MB). If this is a PDF, convert it to text first.[/red]")
+        rprint("[red]File too large (max 10MB). Convert PDF to text first.[/red]")
         raise typer.Exit(1)
 
     resume_text = resume_file.read_text(encoding="utf-8", errors="replace")
     runtime.storage.atomic_write(_MASTER, resume_text.encode())
     runtime.record_activity(runtime.new_event(
-        "resume_imported", "import", "Resume imported from " + resume_path_str, entity_type="resume"
+        "resume_imported", "import", "Resume imported from " + str(resume_file), entity_type="resume"
     ))
 
-    # Step 3: profile extraction — extract_basic_profile never raises; on any
-    # failure it returns an empty Profile(), same sentinel pattern every other
-    # skill in this codebase uses. Skills come from ingest_resume, the one
-    # extractor that verifies each skill's quote against the resume; a sparse
-    # or empty result is the honest outcome of that guarantee, not a failure.
-    rprint("\nExtracting profile from resume...")
-    profile = extract_basic_profile(resume_text)
-    ingested = ingest_resume(resume_text, _MASTER)
-    skills = ingested.skills
+    # Step 3: profile extraction + confirmation loop
+    # extract_basic_profile and ingest_resume never raise — failures surface via
+    # ingested.error and an empty/partial result, which is the honest outcome of
+    # verbatim-verification guarantees.
+    while True:
+        rprint("\nExtracting profile from resume…")
+        profile = extract_basic_profile(resume_text)
+        ingested = ingest_resume(resume_text, _MASTER)
 
-    rprint("\n[bold]Extracted profile:[/bold]")
-    rprint(f"  Name:       {profile.name or '(not found)'}")
-    rprint(f"  Title:      {profile.title or '(not found)'}")
-    rprint(f"  Experience: {profile.years_of_experience or '?'} years")
-    rprint(f"  Skills:     {len(skills.skills)} verified")
-    if ingested.error:
-        # Onboard has no existing data to protect, so it always finishes —
-        # but a failed LLM call is not the same as "nothing verified," and
-        # the user needs to know skill extraction never actually ran.
-        rprint("[bold red]  Skill extraction failed: " + ingested.error + "[/bold red]")
-        rprint("[yellow]  Your profile was created without skills. Once your API key or "
-               "network access is working, run 'careeros resume ingest' to retry.[/yellow]")
-    elif ingested.dropped:
-        rprint("[yellow]  Dropped " + str(len(ingested.dropped))
-               + " skill(s) with no verifiable quote: "
-               + ", ".join(ingested.dropped) + "[/yellow]")
+        _show_profile_summary(profile, ingested)
 
-    if not Confirm.ask("\nDoes this look right?", default=True):
-        rprint("[yellow]Edit profile/profile.json in your workspace to correct it.[/yellow]")
+        if Confirm.ask("\nDoes this look right?", default=True):
+            break
+        rprint("\n[yellow]Options:[/yellow]")
+        rprint("  [cyan]1[/cyan]  Pick a different resume file")
+        rprint("  [cyan]2[/cyan]  Continue anyway (edit profile/profile.json later)")
+        fix = Prompt.ask("Choice", default="2")
+        if fix.strip() == "1":
+            resume_file = _pick_resume_file()
+            if not resume_file.exists():
+                rprint(f"[red]File not found: {resume_file}[/red]")
+            else:
+                resume_text = resume_file.read_text(encoding="utf-8", errors="replace")
+                runtime.storage.atomic_write(_MASTER, resume_text.encode())
+        else:
+            rprint("[yellow]Continuing — edit profile/profile.json in your workspace to correct it.[/yellow]")
+            break
 
     profile.save(runtime.storage)
-    skills.save(runtime.storage)
+    ingested.skills.save(runtime.storage)
     runtime.record_activity(runtime.new_event(
         "profile_extracted", "extract", "Profile extracted: " + (profile.name or ""), entity_type="profile"
     ))
