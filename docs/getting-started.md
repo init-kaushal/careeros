@@ -74,9 +74,8 @@ careeros onboard
 The wizard walks you through six steps:
 
 1. **Workspace location** — where to create your workspace directory (default: `~/my-career`)
-2. **Resume file** — CareerOS scans `~/Desktop`, `~/Downloads`, and `~/Documents` and shows a
-   numbered pick list. Choose a number, or type `0` to enter a path manually. Supported formats:
-   **PDF**, Markdown (`.md`), and plain text (`.txt`).
+2. **Resume file** — enter the full path to your resume. Supported formats: **PDF**, Markdown
+   (`.md`), and plain text (`.txt`).
    > Note: scanned/image-only PDFs are not supported — export a text-based PDF from Word, Google
    > Docs, or LaTeX instead. If pypdf can't extract any text it will tell you.
 3. **Profile extraction** — CareerOS calls your LLM to extract name, title, years of experience,

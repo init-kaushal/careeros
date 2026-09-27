@@ -9,9 +9,12 @@ from careeros.storage.filesystem import LocalFilesystemStorage
 from careeros.workspace.manager import open_workspace
 from datetime import datetime, timezone
 
-# Suppress the file-picker scan so tests always go through the manual path
-# prompt and don't accidentally pick up real files from ~/Desktop or ~/Downloads.
-_no_candidates = patch("careeros.cli.onboard._find_resume_candidates", return_value=[])
+from contextlib import nullcontext as _nullcontext
+
+# The file-picker directory scan was removed; _no_candidates is now a no-op.
+# Each call returns a fresh nullcontext so tests can reuse it across fixtures.
+def _no_candidates():
+    return _nullcontext()
 
 
 def _today():
@@ -44,7 +47,7 @@ def _run_onboard(runner, tmp_path, resume_file, ws_name="workspace",
     # roles (blank), remote (any), comp (blank), locations (blank),
     # greenhouse slugs, lever slugs, goals (n)
     user_input = f"{ws_path}\n{resume_file}\ny\n\nany\n\n\n{gh_sources}\n{lv_sources}\nn\n"
-    with _no_candidates:
+    with _no_candidates():
         return runner.invoke(app, ["onboard"], input=user_input), ws_path
 
 
@@ -91,7 +94,7 @@ def test_onboard_missing_resume_exits(tmp_path, monkeypatch):
     monkeypatch.setattr("careeros.config.CONFIG_PATH", tmp_path / "config.json")
     runner = CliRunner()
     ws_path = str(tmp_path / "ws")
-    with _no_candidates:
+    with _no_candidates():
         result = runner.invoke(app, ["onboard"], input=f"{ws_path}\n/nonexistent/resume.md\n")
     assert result.exit_code != 0
 
@@ -104,7 +107,7 @@ def test_onboard_oversized_resume_exits(tmp_path, monkeypatch):
     big_resume.write_text("x" * 1000)
     runner = CliRunner()
     ws_path = str(tmp_path / "ws")
-    with _no_candidates:
+    with _no_candidates():
         result = runner.invoke(app, ["onboard"], input=f"{ws_path}\n{big_resume}\n")
     assert result.exit_code != 0
     assert "too large" in result.output.lower()

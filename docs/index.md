@@ -46,7 +46,7 @@ export ANTHROPIC_API_KEY=sk-ant-...   # or any LiteLLM-supported provider
 careeros onboard
 ```
 
-The onboard wizard scans `~/Desktop`, `~/Downloads`, and `~/Documents` for resume files (PDF, `.md`, `.txt`) and presents a numbered pick list. It calls your LLM to extract the profile, then shows you a confirmation table before saving anything.
+The onboard wizard asks for your resume path (PDF, `.md`, `.txt`), calls your LLM to extract the profile, and shows you a confirmation table before saving anything.
 
 Full walkthrough: [Getting Started](getting-started.md)
 

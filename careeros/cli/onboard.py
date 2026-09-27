@@ -25,15 +25,6 @@ import uuid
 _MAX_RESUME_BYTES = 10 * 1024 * 1024  # 10MB — generous for any real resume as text
 _console = Console()
 
-_SEARCH_DIRS = [
-    Path.home() / "Desktop",
-    Path.home() / "Downloads",
-    Path.home() / "Documents",
-    Path.home(),
-]
-_RESUME_EXTS = {".md", ".txt", ".pdf"}
-
-
 def _read_resume(path: Path) -> str:
     """Return the text content of a resume file. Supports .pdf, .md, .txt."""
     if path.suffix.lower() == ".pdf":
@@ -52,41 +43,7 @@ def _read_resume(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-def _find_resume_candidates() -> list[Path]:
-    """Return up to 10 .md/.txt files from common locations, resume-named files first."""
-    seen: set[Path] = set()
-    priority: list[Path] = []
-    rest: list[Path] = []
-    for d in _SEARCH_DIRS:
-        if not d.is_dir():
-            continue
-        for f in sorted(d.iterdir()):
-            if f.suffix.lower() not in _RESUME_EXTS or not f.is_file():
-                continue
-            if f in seen:
-                continue
-            seen.add(f)
-            if any(kw in f.name.lower() for kw in ("resume", "cv", "curriculum")):
-                priority.append(f)
-            else:
-                rest.append(f)
-    candidates = priority + rest
-    return candidates[:10]
-
-
 def _pick_resume_file() -> Path:
-    """Interactive file picker: numbered list of candidates + manual-path fallback."""
-    candidates = _find_resume_candidates()
-    if candidates:
-        rprint("\n[bold]Resume files found:[/bold]")
-        for i, p in enumerate(candidates, 1):
-            rprint(f"  [cyan]{i}[/cyan]  {p}")
-        rprint(f"  [cyan]0[/cyan]  Enter a different path")
-        choice = Prompt.ask("\nPick a number", default="1")
-        if choice.strip().isdigit():
-            idx = int(choice.strip())
-            if 1 <= idx <= len(candidates):
-                return candidates[idx - 1]
     path_str = Prompt.ask("\nPath to your resume (PDF, Markdown, or plain text)")
     return Path(path_str).expanduser()
 
