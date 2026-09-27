@@ -64,6 +64,7 @@ def launch_browser(headless: bool = False) -> Generator[tuple[BrowserContext, Pa
                 user_data_dir=str(profile_dir),
                 headless=headless,
                 channel="chrome",
+                args=["--disable-blink-features=AutomationControlled"],
             )
         except Exception as exc:
             if _is_profile_lock_error(exc):
@@ -72,6 +73,8 @@ def launch_browser(headless: bool = False) -> Generator[tuple[BrowserContext, Pa
                     "process. Wait for it to finish, or stop it, then retry."
                 ) from exc
             raise
+        # Remove the webdriver flag that sites use to detect automation.
+        context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         page = context.new_page()
         try:
             yield context, page
