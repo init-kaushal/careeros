@@ -80,14 +80,18 @@ The wizard walks you through six steps:
    > Note: scanned/image-only PDFs are not supported — export a text-based PDF from Word, Google
    > Docs, or LaTeX instead. If pypdf can't extract any text it will tell you.
 3. **Profile extraction** — CareerOS calls your LLM to extract name, title, years of experience,
-   and a summary from the resume text.
+   and a summary from the resume text. *(this may take up to a minute)*
 4. **Confirmation** — the extracted profile is shown in full (name, title, years, summary snippet,
    verified skills). Confirm with `Y` to continue, or choose to pick a different file and re-extract.
 5. **Preferences and goals** — target roles, remote preference, compensation floor, locations, and
    optional short/long-term goals.
-6. **Done** — your workspace is ready.
+6. **API job sources** — optional Greenhouse and Lever board slugs for API-based job discovery
+   (no browser needed). Enter the slug from the board URL — e.g. `stripe` for
+   `boards.greenhouse.io/stripe`. Browser-based boards (LinkedIn, Wellfound, Naukri) are set up
+   separately with `careeros browser login`.
+7. **Done** — your workspace is ready.
 
-The whole process takes under a minute.
+The whole process takes under a minute. All prompts support arrow keys, Home/End, and backspace for editing.
 
 ## 4. Check your workspace
 
@@ -106,7 +110,27 @@ Goals:      3 goals
 Activity:   2 events today
 ```
 
-## 5. Sign in to your job boards
+## 5. Update your configuration
+
+To change preferences, goals, or API sources after onboarding:
+
+```bash
+careeros workspace configure
+```
+
+You'll see a menu:
+
+```
+What would you like to update?
+  1  Job preferences (roles, remote, salary, locations)
+  2  Career goals (short-term, long-term)
+  3  API job sources (Greenhouse / Lever slugs)
+  4  All of the above
+```
+
+Each section pre-fills your current values — edit only what you want to change. Arrow keys and backspace work in all prompts.
+
+## 6. Sign in to your job boards
 
 CareerOS drives a dedicated browser profile — separate from your everyday Chrome — so a scheduled
 run never holds sessions for anything but the boards you authorized:
@@ -127,7 +151,7 @@ careeros browser status
 Re-run `login` whenever a session expires. You need an active session for every board you want to
 browse, apply to, or research against.
 
-## 6. Browse and score jobs
+## 7. Browse and score jobs
 
 ```bash
 careeros browse --board linkedin
@@ -156,7 +180,7 @@ careeros job search --source greenhouse --company acme
 careeros job search --source lever --company acme
 ```
 
-## 7. Research a job
+## 8. Research a job
 
 Before applying or reaching out, research the company and its people:
 
@@ -176,7 +200,7 @@ careeros people update <id> --linkedin-url https://www.linkedin.com/in/...
 careeros people update <id> --email name@company.com
 ```
 
-## 8. Apply to a job
+## 9. Apply to a job
 
 ```bash
 careeros apply --job <id>
@@ -200,9 +224,9 @@ A browser window opens and fills the form. You watch it happen. CareerOS detects
 logs the event. An `Approval` record is kept under `approvals/` so the whole lifecycle — proposed,
 approved, executed — has a durable trail.
 
-To use a resume variant tailored to this specific job, see §11 below.
+To use a resume variant tailored to this specific job, see §12 below.
 
-## 9. Set policies (optional)
+## 10. Set policies (optional)
 
 Before running any automated commands, consider setting policies. CareerOS checks these before
 proposing any application — a blocked job never reaches the approval step:
@@ -225,7 +249,7 @@ EOF
 A policy block is permanent: it cannot be overridden with a flag or env var. Edit the file to
 change it.
 
-## 10. Run unattended discovery and apply
+## 11. Run unattended discovery and apply
 
 ```bash
 careeros discover-and-apply
@@ -258,7 +282,7 @@ Add API board sources (no browser required for discovery):
 Run from cron or launchd for fully automated discovery. Every save, merge, policy block, and
 application is logged to the activity trail.
 
-## 11. Resume variants
+## 12. Resume variants
 
 Build a resume tailored to one specific job:
 
@@ -278,7 +302,7 @@ careeros resume ingest /path/to/updated-resume.pdf   # PDF, .md, or .txt
 
 Skills without a verified quote from the resume text are dropped and named, not silently stored.
 
-## 12. Outreach
+## 13. Outreach
 
 Draft and send outreach to a researched person:
 
@@ -306,7 +330,7 @@ careeros outreach close --job <id> --person <id> --reason "Accepted offer elsewh
 `outreach follow-up` never sends on its own — it only drafts and leaves pending approvals.
 `outreach review` is the only path that sends.
 
-## 13. LinkedIn connection requests
+## 14. LinkedIn connection requests
 
 ```bash
 careeros outreach connect --job <id> --person <id>
