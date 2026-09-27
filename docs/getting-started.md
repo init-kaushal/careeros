@@ -50,6 +50,21 @@ export CAREEROS_MODEL=ollama/llama3.2
 
 Add the relevant lines to your shell profile (`~/.zshrc`, `~/.bashrc`) so you don't need to set them each session.
 
+### Optional: fallback models
+
+`CAREEROS_FALLBACK_MODELS` accepts a comma-separated list of models tried in order when the primary
+hits a rate limit (429) or provider error:
+
+```bash
+# Primary: NVIDIA NIM free tier; fallback: Gemini 2.0 Flash
+export CAREEROS_MODEL=nvidia_nim/meta/llama-3.1-70b-instruct
+export NVIDIA_NIM_API_KEY=nvapi-...
+export CAREEROS_FALLBACK_MODELS=gemini/gemini-2.0-flash-exp
+export GEMINI_API_KEY=AIza...
+```
+
+Fallbacks use LiteLLM's native retry logic — no configuration beyond the env var is needed.
+
 ## 3. Run the onboarding wizard
 
 ```bash
