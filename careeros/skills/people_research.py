@@ -1,8 +1,5 @@
-import os
-import litellm
+from careeros.llm import complete
 from careeros.skills.sanitize import wrap_untrusted
-
-DEFAULT_LLM_MODEL = "claude-haiku-4-5-20251001"
 _VALID_CATEGORIES = ("ic", "em", "recruiter", "hiring_manager")
 
 _CLASSIFY_INSTRUCTIONS = """\
@@ -13,11 +10,10 @@ Return ONLY the category word, nothing else.
 
 
 def classify_person_role(name: str, title: str, model: str | None = None) -> str:
-    effective_model = model or os.environ.get("CAREEROS_MODEL", DEFAULT_LLM_MODEL)
     user_text = wrap_untrusted("Name: " + name + "\nTitle: " + title)
     try:
-        resp = litellm.completion(
-            model=effective_model,
+        resp = complete(
+            model=model,
             max_tokens=16,
             messages=[
                 {"role": "system", "content": _CLASSIFY_INSTRUCTIONS},

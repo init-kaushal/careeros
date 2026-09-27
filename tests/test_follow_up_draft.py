@@ -1,3 +1,4 @@
+from careeros.llm import DEFAULT_MODEL
 import os
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
@@ -34,7 +35,7 @@ class TestGenerateFollowUpMessage:
         from careeros.skills.follow_up_draft import generate_follow_up_message
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "  \nJust circling back on this.\n  "
-        with patch("careeros.skills.follow_up_draft.litellm.completion", return_value=mock_resp):
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp):
             result = generate_follow_up_message(
                 _make_person("ic"), _make_job(), _make_company(), _make_profile(), Goals(),
                 prior_text="Hi Jane, I noticed we both...", touch_number=2,
@@ -43,7 +44,7 @@ class TestGenerateFollowUpMessage:
 
     def test_returns_empty_string_on_failure(self):
         from careeros.skills.follow_up_draft import generate_follow_up_message
-        with patch("careeros.skills.follow_up_draft.litellm.completion", side_effect=Exception("boom")):
+        with patch("careeros.llm.litellm.completion", side_effect=Exception("boom")):
             result = generate_follow_up_message(
                 _make_person("em"), _make_job(), _make_company(), _make_profile(), Goals(),
                 prior_text="Hi Jane, I noticed we both...", touch_number=1,
@@ -54,7 +55,7 @@ class TestGenerateFollowUpMessage:
         from careeros.skills.follow_up_draft import generate_follow_up_message
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = None
-        with patch("careeros.skills.follow_up_draft.litellm.completion", return_value=mock_resp):
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp):
             result = generate_follow_up_message(
                 _make_person("ic"), _make_job(), _make_company(), _make_profile(), Goals(),
                 prior_text="Hi Jane, I noticed we both...", touch_number=1,
@@ -65,7 +66,7 @@ class TestGenerateFollowUpMessage:
         from careeros.skills.follow_up_draft import generate_follow_up_message
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "Draft text"
-        with patch("careeros.skills.follow_up_draft.litellm.completion", return_value=mock_resp) as mock_llm, \
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm, \
              patch.dict(os.environ, {"CAREEROS_MODEL": "gpt-4o"}):
             generate_follow_up_message(
                 _make_person("ic"), _make_job(), _make_company(), _make_profile(), Goals(),
@@ -74,23 +75,23 @@ class TestGenerateFollowUpMessage:
         assert mock_llm.call_args.kwargs["model"] == "gpt-4o"
 
     def test_falls_back_to_default_model_without_env(self):
-        from careeros.skills.follow_up_draft import generate_follow_up_message, DEFAULT_LLM_MODEL
+        from careeros.skills.follow_up_draft import generate_follow_up_message
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "Draft text"
         env_without_careeros_model = {k: v for k, v in os.environ.items() if k != "CAREEROS_MODEL"}
-        with patch("careeros.skills.follow_up_draft.litellm.completion", return_value=mock_resp) as mock_llm, \
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm, \
              patch.dict(os.environ, env_without_careeros_model, clear=True):
             generate_follow_up_message(
                 _make_person("ic"), _make_job(), _make_company(), _make_profile(), Goals(),
                 prior_text="Hi Jane, I noticed we both...", touch_number=1,
             )
-        assert mock_llm.call_args.kwargs["model"] == DEFAULT_LLM_MODEL
+        assert mock_llm.call_args.kwargs["model"] == DEFAULT_MODEL
 
     def test_model_param_overrides_env(self):
         from careeros.skills.follow_up_draft import generate_follow_up_message
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "Draft text"
-        with patch("careeros.skills.follow_up_draft.litellm.completion", return_value=mock_resp) as mock_llm, \
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm, \
              patch.dict(os.environ, {"CAREEROS_MODEL": "gpt-4o"}):
             generate_follow_up_message(
                 _make_person("ic"), _make_job(), _make_company(), _make_profile(), Goals(),
@@ -104,7 +105,7 @@ class TestGenerateFollowUpMessage:
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "Draft text"
         prior = "Hi Jane, I noticed we both work on distributed systems..."
-        with patch("careeros.skills.follow_up_draft.litellm.completion", return_value=mock_resp) as mock_llm:
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm:
             generate_follow_up_message(
                 _make_person("ic"), _make_job(), _make_company(), _make_profile(), Goals(),
                 prior_text=prior, touch_number=2,
@@ -128,7 +129,7 @@ class TestGenerateFollowUpMessage:
             captured_prompts.append(kwargs["messages"][1]["content"])
             return mock_resp
 
-        with patch("careeros.skills.follow_up_draft.litellm.completion", side_effect=_capture):
+        with patch("careeros.llm.litellm.completion", side_effect=_capture):
             generate_follow_up_message(
                 _make_person("ic"), _make_job(), _make_company(), _make_profile(), Goals(),
                 prior_text="Hi Jane, following up on my note.", touch_number=1,
@@ -146,7 +147,7 @@ class TestGenerateFollowUpMessage:
         from careeros.skills.follow_up_draft import generate_follow_up_message
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "Draft text"
-        with patch("careeros.skills.follow_up_draft.litellm.completion", return_value=mock_resp) as mock_llm:
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm:
             generate_follow_up_message(
                 _make_person("ic"), _make_job(), _make_company(), _make_profile(), Goals(),
                 prior_text="Hi Jane, following up.", touch_number=1,
@@ -163,7 +164,7 @@ class TestGenerateFollowUpMessage:
         from careeros.skills.follow_up_draft import generate_follow_up_message
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "Draft text"
-        with patch("careeros.skills.follow_up_draft.litellm.completion", return_value=mock_resp) as mock_llm:
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm:
             generate_follow_up_message(
                 _make_person("ic"), _make_job(), _make_company(), _make_profile(), Goals(),
                 prior_text="Hi Jane, following up.", touch_number=1,

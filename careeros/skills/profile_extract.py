@@ -1,9 +1,7 @@
 import json
-import os
-import litellm
+from careeros.llm import complete
 from careeros.core.models import Profile
 
-DEFAULT_LLM_MODEL = "claude-haiku-4-5-20251001"
 _CONTENT_CAP = 4000
 
 # Instruction-only templates — resume text is concatenated, never interpolated,
@@ -44,12 +42,11 @@ def extract_basic_profile(
     owns those, because a skill needs verified evidence and this does not
     produce any.
     """
-    effective_model = model or os.environ.get("CAREEROS_MODEL", DEFAULT_LLM_MODEL)
     capped_text = resume_text[:_CONTENT_CAP]
 
     try:
-        profile_resp = litellm.completion(
-            model=effective_model,
+        profile_resp = complete(
+            model=model,
             max_tokens=512,
             messages=[{"role": "user", "content": _PROFILE_INSTRUCTIONS + capped_text}],
         )

@@ -24,7 +24,7 @@ def test_verified_candidates_become_skills_with_evidence():
     payload = _payload(
         {"name": "Python", "quote": "Python, Go, Kubernetes", "last_used": "2026"},
     )
-    with patch("litellm.completion", return_value=_resp(payload)):
+    with patch("careeros.llm.litellm.completion", return_value=_resp(payload)):
         result = ingest_resume(_RESUME, "resumes/master.md")
 
     assert result.dropped == ()
@@ -43,7 +43,7 @@ def test_fabricated_skill_is_dropped():
     payload = _payload(
         {"name": "Rust", "quote": "Expert in Rust since 2015", "last_used": "2026"},
     )
-    with patch("litellm.completion", return_value=_resp(payload)):
+    with patch("careeros.llm.litellm.completion", return_value=_resp(payload)):
         result = ingest_resume(_RESUME, "resumes/master.md")
 
     assert result.skills.skills == []
@@ -56,7 +56,7 @@ def test_mixed_candidates_keep_exactly_the_real_ones():
         {"name": "Rust", "quote": "Expert in Rust since 2015", "last_used": "2026"},
         {"name": "Go", "quote": "Python, Go, Kubernetes", "last_used": "2026"},
     )
-    with patch("litellm.completion", return_value=_resp(payload)):
+    with patch("careeros.llm.litellm.completion", return_value=_resp(payload)):
         result = ingest_resume(_RESUME, "resumes/master.md")
 
     assert [s.name for s in result.skills.skills] == ["Python", "Go"]
@@ -68,7 +68,7 @@ def test_last_used_is_stored_without_verification():
     payload = _payload(
         {"name": "Python", "quote": "Python, Go, Kubernetes", "last_used": "2018"},
     )
-    with patch("litellm.completion", return_value=_resp(payload)):
+    with patch("careeros.llm.litellm.completion", return_value=_resp(payload)):
         result = ingest_resume(_RESUME, "resumes/master.md")
     assert result.skills.skills[0].last_used == "2018"
 
@@ -78,7 +78,7 @@ def test_duplicate_names_are_collapsed_keeping_the_first():
         {"name": "Python", "quote": "Python, Go, Kubernetes", "last_used": "2026"},
         {"name": "python", "quote": "Python, Go", "last_used": "2020"},
     )
-    with patch("litellm.completion", return_value=_resp(payload)):
+    with patch("careeros.llm.litellm.completion", return_value=_resp(payload)):
         result = ingest_resume(_RESUME, "resumes/master.md")
     assert len(result.skills.skills) == 1
     assert result.skills.skills[0].last_used == "2026"
@@ -89,7 +89,7 @@ def test_input_is_capped_so_late_content_cannot_be_cited():
     long_resume = ("filler line\n" * 5000) + "SKILLS\nRust\n"
     assert len(long_resume) > _CONTENT_CAP
     payload = _payload({"name": "Rust", "quote": "Rust", "last_used": "2026"})
-    with patch("litellm.completion", return_value=_resp(payload)) as mock:
+    with patch("careeros.llm.litellm.completion", return_value=_resp(payload)) as mock:
         result = ingest_resume(long_resume, "resumes/master.md")
 
     sent = mock.call_args.kwargs["messages"][1]["content"]
@@ -98,21 +98,21 @@ def test_input_is_capped_so_late_content_cannot_be_cited():
 
 
 def test_llm_exception_yields_an_empty_result_without_raising():
-    with patch("litellm.completion", side_effect=RuntimeError("boom")):
+    with patch("careeros.llm.litellm.completion", side_effect=RuntimeError("boom")):
         result = ingest_resume(_RESUME, "resumes/master.md")
     assert result.skills.skills == []
     assert result.dropped == ()
 
 
 def test_unparseable_response_yields_an_empty_result():
-    with patch("litellm.completion", return_value=_resp("not json at all")):
+    with patch("careeros.llm.litellm.completion", return_value=_resp("not json at all")):
         result = ingest_resume(_RESUME, "resumes/master.md")
     assert result.skills.skills == []
 
 
 def test_uses_system_plus_wrapped_user_messages():
     payload = _payload({"name": "Python", "quote": "Python, Go, Kubernetes", "last_used": "2026"})
-    with patch("litellm.completion", return_value=_resp(payload)) as mock:
+    with patch("careeros.llm.litellm.completion", return_value=_resp(payload)) as mock:
         ingest_resume(_RESUME, "resumes/master.md")
 
     messages = mock.call_args.kwargs["messages"]
@@ -126,14 +126,14 @@ def test_numeric_last_used_does_not_raise_and_is_coerced():
     payload = json.dumps({"skills": [
         {"name": "Python", "quote": "Python, Go, Kubernetes", "last_used": 2026}
     ]})
-    with patch("litellm.completion", return_value=_resp(payload)):
+    with patch("careeros.llm.litellm.completion", return_value=_resp(payload)):
         result = ingest_resume(_RESUME, "resumes/master.md")
     assert [s.name for s in result.skills.skills] == ["Python"]
     assert result.skills.skills[0].last_used == "2026"
 
 
 def test_non_dict_payload_yields_empty_result_without_raising():
-    with patch("litellm.completion", return_value=_resp("[1, 2, 3]")):
+    with patch("careeros.llm.litellm.completion", return_value=_resp("[1, 2, 3]")):
         result = ingest_resume(_RESUME, "resumes/master.md")
     assert result.skills.skills == []
     assert result.dropped == ()
@@ -145,7 +145,7 @@ def test_non_string_quote_is_dropped_not_fatal():
         {"name": "Broken", "quote": ["not", "a", "string"], "last_used": "2026"},
         {"name": "Python", "quote": "Python, Go, Kubernetes", "last_used": "2026"},
     ]})
-    with patch("litellm.completion", return_value=_resp(payload)):
+    with patch("careeros.llm.litellm.completion", return_value=_resp(payload)):
         result = ingest_resume(_RESUME, "resumes/master.md")
     assert [s.name for s in result.skills.skills] == ["Python"]
     assert result.dropped == ("Broken",)
@@ -159,7 +159,7 @@ def test_a_later_verifiable_duplicate_is_kept_when_the_first_fails():
         {"name": "Python", "quote": "Expert in Python since 2009", "last_used": "2026"},
         {"name": "Python", "quote": "Python, Go, Kubernetes", "last_used": "2026"},
     ]})
-    with patch("litellm.completion", return_value=_resp(payload)):
+    with patch("careeros.llm.litellm.completion", return_value=_resp(payload)):
         result = ingest_resume(_RESUME, "resumes/master.md")
     assert [s.name for s in result.skills.skills] == ["Python"]
     assert result.dropped == ()
@@ -170,7 +170,7 @@ def test_null_skills_payload_yields_empty_result_without_raising():
     # support. {"skills": null} must not reach `for candidate in None`.
     import json
     payload = json.dumps({"skills": None})
-    with patch("litellm.completion", return_value=_resp(payload)):
+    with patch("careeros.llm.litellm.completion", return_value=_resp(payload)):
         result = ingest_resume(_RESUME, "resumes/master.md")
     assert result.skills.skills == []
     assert result.dropped == ()
@@ -180,7 +180,7 @@ def test_null_skills_payload_yields_empty_result_without_raising():
 def test_non_list_skills_payload_yields_empty_result_without_raising():
     import json
     payload = json.dumps({"skills": "Python, Go"})
-    with patch("litellm.completion", return_value=_resp(payload)):
+    with patch("careeros.llm.litellm.completion", return_value=_resp(payload)):
         result = ingest_resume(_RESUME, "resumes/master.md")
     assert result.skills.skills == []
     assert result.dropped == ()
@@ -195,7 +195,7 @@ def test_non_string_name_is_skipped_not_fatal():
         {"name": 123, "quote": "Python, Go, Kubernetes", "last_used": "2026"},
         {"name": "Python", "quote": "Python, Go, Kubernetes", "last_used": "2026"},
     ]})
-    with patch("litellm.completion", return_value=_resp(payload)):
+    with patch("careeros.llm.litellm.completion", return_value=_resp(payload)):
         result = ingest_resume(_RESUME, "resumes/master.md")
     assert [s.name for s in result.skills.skills] == ["Python"]
     assert result.dropped == ()
@@ -210,7 +210,7 @@ def test_case_differing_duplicate_appears_in_exactly_one_list():
         {"name": "Python", "quote": "Expert in Python since 2009", "last_used": "2026"},
         {"name": "python", "quote": "Python, Go, Kubernetes", "last_used": "2026"},
     ]})
-    with patch("litellm.completion", return_value=_resp(payload)):
+    with patch("careeros.llm.litellm.completion", return_value=_resp(payload)):
         result = ingest_resume(_RESUME, "resumes/master.md")
     stored_names = {s.name for s in result.skills.skills}
     assert stored_names == {"python"}
@@ -224,14 +224,14 @@ def test_dict_last_used_does_not_raise_and_is_stringified():
     payload = json.dumps({"skills": [
         {"name": "Python", "quote": "Python, Go, Kubernetes", "last_used": {"year": 2020}},
     ]})
-    with patch("litellm.completion", return_value=_resp(payload)):
+    with patch("careeros.llm.litellm.completion", return_value=_resp(payload)):
         result = ingest_resume(_RESUME, "resumes/master.md")
     assert [s.name for s in result.skills.skills] == ["Python"]
     assert result.skills.skills[0].last_used == str({"year": 2020})
 
 
 def test_llm_call_failure_sets_the_error_field():
-    with patch("litellm.completion", side_effect=RuntimeError("bad api key")):
+    with patch("careeros.llm.litellm.completion", side_effect=RuntimeError("bad api key")):
         result = ingest_resume(_RESUME, "resumes/master.md")
     assert result.skills.skills == []
     assert result.dropped == ()
@@ -241,7 +241,7 @@ def test_llm_call_failure_sets_the_error_field():
 def test_unparseable_response_does_not_set_the_error_field():
     # The LLM call succeeded; the model just answered with garbage. That is
     # not the "API key or network is broken" failure mode `error` exists for.
-    with patch("litellm.completion", return_value=_resp("not json at all")):
+    with patch("careeros.llm.litellm.completion", return_value=_resp("not json at all")):
         result = ingest_resume(_RESUME, "resumes/master.md")
     assert result.skills.skills == []
     assert result.error is None

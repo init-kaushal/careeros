@@ -21,7 +21,7 @@ class TestScoreJob:
         from careeros.skills.job_score import score_job
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = '{"score": 85, "reasoning": "Great fit.", "strengths": ["Kubernetes"], "gaps": ["Java"]}'
-        with patch("litellm.completion", return_value=mock_resp):
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp):
             result = score_job("SRE job posting", _make_profile(), _make_skills())
         assert result["score"] == 85
         assert result["reasoning"] == "Great fit."
@@ -30,7 +30,7 @@ class TestScoreJob:
 
     def test_returns_fallback_on_llm_error(self):
         from careeros.skills.job_score import score_job
-        with patch("litellm.completion", side_effect=Exception("API error")):
+        with patch("careeros.llm.litellm.completion", side_effect=Exception("API error")):
             result = score_job("SRE job posting", _make_profile(), _make_skills())
         assert result == {"score": 0, "reasoning": "Could not score.", "strengths": [], "gaps": []}
 
@@ -38,7 +38,7 @@ class TestScoreJob:
         from careeros.skills.job_score import score_job
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = '{"score": 85}'
-        with patch("litellm.completion", return_value=mock_resp):
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp):
             result = score_job("SRE job posting", _make_profile(), _make_skills())
         assert result["score"] == 85
         assert result["reasoning"] == ""
@@ -49,7 +49,7 @@ class TestScoreJob:
         from careeros.skills.job_score import score_job
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = '{"score": 150, "reasoning": "great", "strengths": [], "gaps": []}'
-        with patch("litellm.completion", return_value=mock_resp):
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp):
             result = score_job("SRE job posting", _make_profile(), _make_skills())
         assert result["score"] == 100
 
@@ -57,7 +57,7 @@ class TestScoreJob:
         from careeros.skills.job_score import score_job
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "not json at all"
-        with patch("litellm.completion", return_value=mock_resp):
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp):
             result = score_job("SRE job posting", _make_profile(), _make_skills())
         assert result["score"] == 0
 
@@ -65,7 +65,7 @@ class TestScoreJob:
         from careeros.skills.job_score import score_job
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = '```json\n{"score": 70, "reasoning": "ok", "strengths": [], "gaps": []}\n```'
-        with patch("litellm.completion", return_value=mock_resp):
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp):
             result = score_job("SRE job posting", _make_profile(), _make_skills())
         assert result["score"] == 70
 
@@ -73,7 +73,7 @@ class TestScoreJob:
         from careeros.skills.job_score import score_job
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = '{"score": 50, "reasoning": "ok", "strengths": [], "gaps": []}'
-        with patch("litellm.completion", return_value=mock_resp) as mock_llm, \
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm, \
              patch.dict(os.environ, {"CAREEROS_MODEL": "gpt-4o"}):
             score_job("text", _make_profile(), _make_skills())
         call_model = mock_llm.call_args[1]["model"]
@@ -83,7 +83,7 @@ class TestScoreJob:
         from careeros.skills.job_score import score_job
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = '{"score": 50, "reasoning": "ok", "strengths": [], "gaps": []}'
-        with patch("litellm.completion", return_value=mock_resp) as mock_llm, \
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm, \
              patch.dict(os.environ, {"CAREEROS_MODEL": "gpt-4o"}):
             score_job("text", _make_profile(), _make_skills(), model="claude-haiku-4-5-20251001")
         assert mock_llm.call_args[1]["model"] == "claude-haiku-4-5-20251001"
@@ -92,7 +92,7 @@ class TestScoreJob:
         from careeros.skills.job_score import score_job
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = '{"score": 50, "reasoning": "ok", "strengths": [], "gaps": []}'
-        with patch("litellm.completion", return_value=mock_resp) as mock_llm:
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm:
             score_job("some jd text", _make_profile(), _make_skills())
         prompt = mock_llm.call_args[1]["messages"][0]["content"]
         assert "Senior SRE" in prompt
@@ -101,7 +101,7 @@ class TestScoreJob:
         from careeros.skills.job_score import score_job
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = '{"score": "85", "reasoning": "ok", "strengths": [], "gaps": []}'
-        with patch("litellm.completion", return_value=mock_resp):
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp):
             result = score_job("some jd", _make_profile(), _make_skills())
         assert result["score"] == 85
         assert isinstance(result["score"], int)
@@ -111,7 +111,7 @@ class TestScoreJob:
         long_jd = "x" * 5000
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = '{"score": 50, "reasoning": "ok", "strengths": [], "gaps": []}'
-        with patch("litellm.completion", return_value=mock_resp) as mock_llm:
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm:
             score_job(long_jd, _make_profile(), _make_skills())
         prompt = mock_llm.call_args[1]["messages"][1]["content"]
         assert "x" * 4001 not in prompt
@@ -121,7 +121,7 @@ class TestScoreJob:
         from careeros.skills.job_score import score_job
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = '{"score": 50, "reasoning": "ok", "strengths": [], "gaps": []}'
-        with patch("litellm.completion", return_value=mock_resp) as mock_llm:
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm:
             score_job("some jd text", _make_profile(), _make_skills())
         messages = mock_llm.call_args[1]["messages"]
         assert len(messages) == 2

@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 
-import litellm
+from careeros.llm import complete
 
 from careeros.core.models import Evidence, Skills, VariantSection
 from careeros.skills.resume_evidence import normalize_quote, verify_quote
 from careeros.skills.sanitize import wrap_untrusted
 
-DEFAULT_LLM_MODEL = "claude-haiku-4-5-20251001"
 
 # 11a caps ingest content at 4000, roughly one page. A two-page resume would
 # have its tail invisible to the selector, so this is larger. Verification
@@ -131,7 +129,6 @@ def select_variant_content(
     can never contribute text, because every quote must still be a verbatim
     span of the capped master resume.
     """
-    effective_model = model or os.environ.get("CAREEROS_MODEL", DEFAULT_LLM_MODEL)
     capped = master_text[:_MASTER_CAP]
     # Computed once: verification is per block, never against the whole
     # capped text, so a quote cannot be stitched across a paragraph break.
@@ -142,8 +139,8 @@ def select_variant_content(
     )[:_SKILL_HINT_CAP]
 
     try:
-        resp = litellm.completion(
-            model=effective_model,
+        resp = complete(
+            model=model,
             max_tokens=2048,
             messages=[
                 {"role": "system", "content": _VARIANT_INSTRUCTIONS},

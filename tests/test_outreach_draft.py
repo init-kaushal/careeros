@@ -33,7 +33,7 @@ class TestGenerateOutreachMessage:
         from careeros.skills.outreach_draft import generate_outreach_message
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "Hi Jane, I noticed we both..."
-        with patch("careeros.skills.outreach_draft.litellm.completion", return_value=mock_resp):
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp):
             result = generate_outreach_message(
                 _make_person("ic"), _make_job(), _make_company(), _make_profile(), Goals()
             )
@@ -49,7 +49,7 @@ class TestGenerateOutreachMessage:
             captured_prompts.append(kwargs["messages"][0]["content"])
             return mock_resp
 
-        with patch("careeros.skills.outreach_draft.litellm.completion", side_effect=_capture):
+        with patch("careeros.llm.litellm.completion", side_effect=_capture):
             generate_outreach_message(_make_person("ic"), _make_job(), _make_company(), _make_profile(), Goals())
             generate_outreach_message(_make_person("recruiter"), _make_job(), _make_company(), _make_profile(), Goals())
 
@@ -57,7 +57,7 @@ class TestGenerateOutreachMessage:
 
     def test_returns_empty_string_on_failure(self):
         from careeros.skills.outreach_draft import generate_outreach_message
-        with patch("careeros.skills.outreach_draft.litellm.completion", side_effect=Exception("boom")):
+        with patch("careeros.llm.litellm.completion", side_effect=Exception("boom")):
             result = generate_outreach_message(
                 _make_person("em"), _make_job(), _make_company(), _make_profile(), Goals()
             )
@@ -67,7 +67,7 @@ class TestGenerateOutreachMessage:
         from careeros.skills.outreach_draft import generate_outreach_message
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "Draft text"
-        with patch("careeros.skills.outreach_draft.litellm.completion", return_value=mock_resp) as mock_llm:
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm:
             generate_outreach_message(_make_person("ic"), _make_job(), _make_company(), _make_profile(), Goals())
         messages = mock_llm.call_args.kwargs["messages"]
         assert len(messages) == 2
@@ -81,7 +81,7 @@ class TestGenerateOutreachMessage:
         from careeros.skills.outreach_draft import generate_outreach_message
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "Draft text"
-        with patch("careeros.skills.outreach_draft.litellm.completion", return_value=mock_resp) as mock_llm:
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm:
             generate_outreach_message(_make_person("ic"), _make_job(), _make_company(), _make_profile(), Goals())
         messages = mock_llm.call_args.kwargs["messages"]
         assert "Senior SRE" in messages[0]["content"]

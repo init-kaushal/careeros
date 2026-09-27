@@ -1,9 +1,6 @@
-import os
-import litellm
 from careeros.core.models import Goals, Profile, Skills
+from careeros.llm import complete
 from careeros.skills.sanitize import wrap_untrusted
-
-DEFAULT_LLM_MODEL = "claude-haiku-4-5-20251001"
 _JD_CAP = 4000
 
 _CL_INSTRUCTIONS = """\
@@ -38,13 +35,12 @@ def generate_cover_letter(
     model: str | None = None,
 ) -> str:
     """Generate a tailored cover letter. Returns '' on any failure. Never raises."""
-    effective_model = model or os.environ.get("CAREEROS_MODEL", DEFAULT_LLM_MODEL)
     profile_text = _build_profile_text(profile, skills, goals)
     system_text = _CL_INSTRUCTIONS + profile_text
     user_text = "Job description:\n" + wrap_untrusted(jd_text[:_JD_CAP])
     try:
-        resp = litellm.completion(
-            model=effective_model,
+        resp = complete(
+            model=model,
             max_tokens=1024,
             messages=[
                 {"role": "system", "content": system_text},

@@ -1,9 +1,6 @@
-import os
-import litellm
 from careeros.core.models import Company, Goals, Job, Person, Profile
+from careeros.llm import complete
 from careeros.skills.sanitize import wrap_untrusted
-
-DEFAULT_LLM_MODEL = "claude-haiku-4-5-20251001"
 
 _INSTRUCTIONS_BY_ROLE = {
     "ic": (
@@ -74,15 +71,14 @@ def generate_follow_up_message(
     person: Person, job: Job, company: Company, profile: Profile, goals: Goals,
     prior_text: str, touch_number: int, model: str | None = None,
 ) -> str:
-    effective_model = model or os.environ.get("CAREEROS_MODEL", DEFAULT_LLM_MODEL)
     instructions = _INSTRUCTIONS_BY_ROLE.get(person.role_category, _INSTRUCTIONS_BY_ROLE["ic"])
     trusted_context = _build_trusted_context(profile, goals)
     system_text = instructions + _COMMON_SUFFIX + trusted_context
     untrusted_context = _build_untrusted_context(person, job, company, prior_text, touch_number)
     user_text = wrap_untrusted(untrusted_context)
     try:
-        resp = litellm.completion(
-            model=effective_model,
+        resp = complete(
+            model=model,
             max_tokens=256,
             messages=[
                 {"role": "system", "content": system_text},

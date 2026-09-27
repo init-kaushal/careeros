@@ -1,3 +1,4 @@
+from careeros.llm import DEFAULT_MODEL
 import os
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
@@ -57,19 +58,19 @@ def _mock_resp(content):
 
 class TestGenerateConnectionNote:
     def test_returns_generated_text_stripped(self):
-        with patch("careeros.skills.connection_note.litellm.completion",
+        with patch("careeros.llm.litellm.completion",
                    return_value=_mock_resp("  \nHi Jane — we both work on storage.\n  ")):
             result = _draft()
         assert result == "Hi Jane — we both work on storage."
 
     def test_returns_empty_string_on_llm_exception(self):
-        with patch("careeros.skills.connection_note.litellm.completion",
+        with patch("careeros.llm.litellm.completion",
                    side_effect=Exception("boom")):
             result = _draft()
         assert result == ""
 
     def test_returns_empty_string_on_empty_content(self):
-        with patch("careeros.skills.connection_note.litellm.completion",
+        with patch("careeros.llm.litellm.completion",
                    return_value=_mock_resp(None)):
             result = _draft()
         # Empty string, not the None the model handed back: the operations
@@ -81,7 +82,7 @@ class TestGenerateConnectionNote:
         # A blank note is a failure, not a valid note: LinkedIn's own Send
         # button is happy to submit one, so refusing it here is the guard that
         # stops an empty request going out.
-        with patch("careeros.skills.connection_note.litellm.completion",
+        with patch("careeros.llm.litellm.completion",
                    return_value=_mock_resp("   \n\t  \n")):
             result = _draft()
         assert result == ""
@@ -96,14 +97,14 @@ class TestNoteCharacterLimit:
         from careeros.skills.connection_note import NOTE_CHAR_LIMIT
         at_cap = "x" * 300
         assert len(at_cap) == NOTE_CHAR_LIMIT
-        with patch("careeros.skills.connection_note.litellm.completion",
+        with patch("careeros.llm.litellm.completion",
                    return_value=_mock_resp(at_cap)):
             result = _draft()
         assert result == at_cap
 
     def test_note_over_the_cap_fails(self):
         over_cap = "x" * 301
-        with patch("careeros.skills.connection_note.litellm.completion",
+        with patch("careeros.llm.litellm.completion",
                    return_value=_mock_resp(over_cap)):
             result = _draft()
         assert result == ""
@@ -114,7 +115,7 @@ class TestNoteCharacterLimit:
         # the model's text — of any length — comes back.
         long_note = "Hi Jane — " + "I have spent a decade on distributed storage systems. " * 6
         assert len(long_note) > 300
-        with patch("careeros.skills.connection_note.litellm.completion",
+        with patch("careeros.llm.litellm.completion",
                    return_value=_mock_resp(long_note)):
             result = _draft()
         assert result == ""
@@ -123,7 +124,7 @@ class TestNoteCharacterLimit:
     def test_cap_is_stated_in_the_system_instruction(self):
         # The model is told the limit as well as checked against it; being
         # checked alone would just mean frequent failures.
-        with patch("careeros.skills.connection_note.litellm.completion",
+        with patch("careeros.llm.litellm.completion",
                    return_value=_mock_resp("Note text")) as mock_llm:
             _draft()
         assert "300" in mock_llm.call_args.kwargs["messages"][0]["content"]
@@ -131,7 +132,7 @@ class TestNoteCharacterLimit:
 
 class TestUntrustedBoundary:
     def test_sends_system_and_wrapped_user_message(self):
-        with patch("careeros.skills.connection_note.litellm.completion",
+        with patch("careeros.llm.litellm.completion",
                    return_value=_mock_resp("Note text")) as mock_llm:
             _draft()
         messages = mock_llm.call_args.kwargs["messages"]
@@ -143,7 +144,7 @@ class TestUntrustedBoundary:
         assert "Acme Corp" in messages[1]["content"]
 
     def test_scraped_inputs_are_wrapped_in_the_user_message(self):
-        with patch("careeros.skills.connection_note.litellm.completion",
+        with patch("careeros.llm.litellm.completion",
                    return_value=_mock_resp("Note text")) as mock_llm:
             _draft()
         messages = mock_llm.call_args.kwargs["messages"]
@@ -153,7 +154,7 @@ class TestUntrustedBoundary:
             assert scraped in wrapped
 
     def test_scraped_inputs_never_reach_the_system_message(self):
-        with patch("careeros.skills.connection_note.litellm.completion",
+        with patch("careeros.llm.litellm.completion",
                    return_value=_mock_resp("Note text")) as mock_llm:
             _draft()
         system_content = mock_llm.call_args.kwargs["messages"][0]["content"]
@@ -163,7 +164,7 @@ class TestUntrustedBoundary:
     def test_trusted_profile_fields_stay_in_system_message(self):
         profile = Profile(name="Alice Smith", title="Senior SRE", summary="Ran storage at scale.")
         goals = Goals(short_term=["Lead a storage team"])
-        with patch("careeros.skills.connection_note.litellm.completion",
+        with patch("careeros.llm.litellm.completion",
                    return_value=_mock_resp("Note text")) as mock_llm:
             _draft(profile=profile, goals=goals)
         messages = mock_llm.call_args.kwargs["messages"]
@@ -175,7 +176,7 @@ class TestUntrustedBoundary:
     def test_missing_optional_scraped_fields_are_omitted_not_stringified(self):
         person = _make_person(title=None)
         company = Company(id="acme-corp", name="Acme Corp", researched_at="2026-09-19T00:00:00Z")
-        with patch("careeros.skills.connection_note.litellm.completion",
+        with patch("careeros.llm.litellm.completion",
                    return_value=_mock_resp("Note text")) as mock_llm:
             result = _draft(person=person, job=_make_job(description=None), company=company)
         assert result == "Note text"
@@ -191,7 +192,7 @@ class TestRoleAndModelSelection:
             captured[len(captured)] = kwargs["messages"][0]["content"]
             return _mock_resp("Note text")
 
-        with patch("careeros.skills.connection_note.litellm.completion", side_effect=_capture):
+        with patch("careeros.llm.litellm.completion", side_effect=_capture):
             _draft(person=_make_person("ic"))
             _draft(person=_make_person("recruiter"))
         assert captured[0] != captured[1]
@@ -204,35 +205,35 @@ class TestRoleAndModelSelection:
             captured[len(captured)] = kwargs["messages"][0]["content"]
             return _mock_resp("Note text")
 
-        with patch("careeros.skills.connection_note.litellm.completion", side_effect=_capture):
+        with patch("careeros.llm.litellm.completion", side_effect=_capture):
             _draft(person=_make_person("ic"))
             _draft(person=_make_person("archduke"))
         assert captured[0] == captured[1]
         assert captured[1].startswith(_INSTRUCTIONS_BY_ROLE["ic"])
 
     def test_uses_careeros_model_env_var(self):
-        with patch("careeros.skills.connection_note.litellm.completion",
+        with patch("careeros.llm.litellm.completion",
                    return_value=_mock_resp("Note text")) as mock_llm, \
              patch.dict(os.environ, {"CAREEROS_MODEL": "gpt-4o"}):
             _draft()
         assert mock_llm.call_args.kwargs["model"] == "gpt-4o"
 
     def test_falls_back_to_default_model_without_env(self):
-        from careeros.skills.connection_note import DEFAULT_LLM_MODEL
+        from careeros.llm import DEFAULT_MODEL
         env_without_careeros_model = {k: v for k, v in os.environ.items() if k != "CAREEROS_MODEL"}
-        with patch("careeros.skills.connection_note.litellm.completion",
+        with patch("careeros.llm.litellm.completion",
                    return_value=_mock_resp("Note text")) as mock_llm, \
              patch.dict(os.environ, env_without_careeros_model, clear=True):
             _draft()
         # Pinned to the literal as well as to the constant. Asserting only
-        # against DEFAULT_LLM_MODEL would compare the module to itself and pass
+        # against DEFAULT_MODEL would compare the module to itself and pass
         # for any value it happened to hold; the drafter's default model is a
         # cost decision and should not change silently.
-        assert DEFAULT_LLM_MODEL == "claude-haiku-4-5-20251001"
-        assert mock_llm.call_args.kwargs["model"] == DEFAULT_LLM_MODEL
+        assert DEFAULT_MODEL == "claude-haiku-4-5-20251001"
+        assert mock_llm.call_args.kwargs["model"] == DEFAULT_MODEL
 
     def test_model_param_overrides_env(self):
-        with patch("careeros.skills.connection_note.litellm.completion",
+        with patch("careeros.llm.litellm.completion",
                    return_value=_mock_resp("Note text")) as mock_llm, \
              patch.dict(os.environ, {"CAREEROS_MODEL": "gpt-4o"}):
             _draft(model="claude-haiku-4-5-20251001")

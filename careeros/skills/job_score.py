@@ -1,10 +1,7 @@
 import json
-import os
-import litellm
 from careeros.core.models import Profile, Skills
+from careeros.llm import complete
 from careeros.skills.sanitize import wrap_untrusted
-
-DEFAULT_LLM_MODEL = "claude-haiku-4-5-20251001"
 _JD_CAP = 4000
 
 _SCORE_INSTRUCTIONS = """\
@@ -56,13 +53,12 @@ def score_job(
     skills: Skills,
     model: str | None = None,
 ) -> dict:
-    effective_model = model or os.environ.get("CAREEROS_MODEL", DEFAULT_LLM_MODEL)
     profile_text = _build_profile_text(profile, skills)
     system_text = _SCORE_INSTRUCTIONS + profile_text
     user_text = "Job description:\n" + wrap_untrusted(jd_text[:_JD_CAP])
     try:
-        resp = litellm.completion(
-            model=effective_model,
+        resp = complete(
+            model=model,
             max_tokens=512,
             messages=[
                 {"role": "system", "content": system_text},

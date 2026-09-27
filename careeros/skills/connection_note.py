@@ -1,9 +1,6 @@
-import os
-import litellm
 from careeros.core.models import Company, Goals, Job, Person, Profile
+from careeros.llm import complete
 from careeros.skills.sanitize import wrap_untrusted
-
-DEFAULT_LLM_MODEL = "claude-haiku-4-5-20251001"
 
 # LinkedIn caps a connection-request note at 300 characters. This is why the
 # note is its own skill rather than a reuse of the email drafters: an
@@ -102,15 +99,14 @@ def generate_connection_note(
     operations layer turns '' into DraftFailed, the same contract
     follow_up_draft.generate_follow_up_message has with operations/follow_up.
     """
-    effective_model = model or os.environ.get("CAREEROS_MODEL", DEFAULT_LLM_MODEL)
     instructions = _INSTRUCTIONS_BY_ROLE.get(person.role_category, _INSTRUCTIONS_BY_ROLE["ic"])
     trusted_context = _build_trusted_context(profile, goals)
     system_text = instructions + _COMMON_SUFFIX + trusted_context
     untrusted_context = _build_untrusted_context(person, job, company)
     user_text = wrap_untrusted(untrusted_context)
     try:
-        resp = litellm.completion(
-            model=effective_model,
+        resp = complete(
+            model=model,
             # 300 characters is well under 128 tokens; the ceiling exists so a
             # model that ignores the limit is cut off cheaply rather than
             # billed for an essay we are about to reject anyway.

@@ -1,9 +1,6 @@
 import json
-import os
-import litellm
+from careeros.llm import complete
 from careeros.skills.sanitize import wrap_untrusted
-
-DEFAULT_LLM_MODEL = "claude-haiku-4-5-20251001"
 _CONTENT_CAP = 4000
 
 _EXTRACT_INSTRUCTIONS = """\
@@ -35,11 +32,10 @@ def _parse_json(text: str) -> dict:
 
 
 def extract_compensation_data(page_content: str, model: str | None = None) -> dict:
-    effective_model = model or os.environ.get("CAREEROS_MODEL", DEFAULT_LLM_MODEL)
     user_text = "Page content:\n" + wrap_untrusted(page_content[:_CONTENT_CAP])
     try:
-        resp = litellm.completion(
-            model=effective_model,
+        resp = complete(
+            model=model,
             max_tokens=256,
             messages=[
                 {"role": "system", "content": _EXTRACT_INSTRUCTIONS},

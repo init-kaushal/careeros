@@ -21,13 +21,13 @@ class TestGenerateCoverLetter:
         from careeros.skills.cover_letter import generate_cover_letter
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "Dear Hiring Manager,\n\nI am excited..."
-        with patch("litellm.completion", return_value=mock_resp):
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp):
             result = generate_cover_letter("SRE job description", _make_profile(), _make_skills(), _make_goals())
         assert result == "Dear Hiring Manager,\n\nI am excited..."
 
     def test_returns_empty_string_on_llm_error(self):
         from careeros.skills.cover_letter import generate_cover_letter
-        with patch("litellm.completion", side_effect=Exception("API error")):
+        with patch("careeros.llm.litellm.completion", side_effect=Exception("API error")):
             result = generate_cover_letter("SRE job", _make_profile(), _make_skills(), _make_goals())
         assert result == ""
 
@@ -35,7 +35,7 @@ class TestGenerateCoverLetter:
         from careeros.skills.cover_letter import generate_cover_letter
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = None
-        with patch("litellm.completion", return_value=mock_resp):
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp):
             result = generate_cover_letter("SRE job", _make_profile(), _make_skills(), _make_goals())
         assert result == ""
 
@@ -43,7 +43,7 @@ class TestGenerateCoverLetter:
         from careeros.skills.cover_letter import generate_cover_letter
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "  \nDear Hiring Manager,\n\nText here.\n  "
-        with patch("litellm.completion", return_value=mock_resp):
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp):
             result = generate_cover_letter("SRE job", _make_profile(), _make_skills(), _make_goals())
         assert result == "Dear Hiring Manager,\n\nText here."
 
@@ -51,7 +51,7 @@ class TestGenerateCoverLetter:
         from careeros.skills.cover_letter import generate_cover_letter
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "Cover letter"
-        with patch("litellm.completion", return_value=mock_resp) as mock_llm, \
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm, \
              patch.dict(os.environ, {"CAREEROS_MODEL": "gpt-4o"}):
             generate_cover_letter("jd", _make_profile(), _make_skills(), _make_goals())
         assert mock_llm.call_args[1]["model"] == "gpt-4o"
@@ -60,7 +60,7 @@ class TestGenerateCoverLetter:
         from careeros.skills.cover_letter import generate_cover_letter
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "Cover letter"
-        with patch("litellm.completion", return_value=mock_resp) as mock_llm, \
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm, \
              patch.dict(os.environ, {"CAREEROS_MODEL": "gpt-4o"}):
             generate_cover_letter("jd", _make_profile(), _make_skills(), _make_goals(), model="claude-haiku-4-5-20251001")
         assert mock_llm.call_args[1]["model"] == "claude-haiku-4-5-20251001"
@@ -69,7 +69,7 @@ class TestGenerateCoverLetter:
         from careeros.skills.cover_letter import generate_cover_letter
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "Cover letter"
-        with patch("litellm.completion", return_value=mock_resp) as mock_llm:
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm:
             generate_cover_letter("some jd text", _make_profile(), _make_skills(), _make_goals())
         prompt = mock_llm.call_args[1]["messages"][0]["content"]
         assert "Senior SRE" in prompt
@@ -79,7 +79,7 @@ class TestGenerateCoverLetter:
         long_jd = "x" * 5000
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "Cover letter"
-        with patch("litellm.completion", return_value=mock_resp) as mock_llm:
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm:
             generate_cover_letter(long_jd, _make_profile(), _make_skills(), _make_goals())
         prompt = mock_llm.call_args[1]["messages"][1]["content"]
         assert "x" * 4001 not in prompt
@@ -88,7 +88,7 @@ class TestGenerateCoverLetter:
         from careeros.skills.cover_letter import generate_cover_letter
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "Cover letter"
-        with patch("litellm.completion", return_value=mock_resp) as mock_llm:
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm:
             generate_cover_letter("jd text", _make_profile(), _make_skills(), _make_goals())
         prompt = mock_llm.call_args[1]["messages"][0]["content"]
         assert "platform engineering role" in prompt
@@ -97,7 +97,7 @@ class TestGenerateCoverLetter:
         from careeros.skills.cover_letter import generate_cover_letter
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "Cover letter"
-        with patch("litellm.completion", return_value=mock_resp) as mock_llm:
+        with patch("careeros.llm.litellm.completion", return_value=mock_resp) as mock_llm:
             generate_cover_letter("some jd text", _make_profile(), _make_skills(), _make_goals())
         messages = mock_llm.call_args[1]["messages"]
         assert len(messages) == 2

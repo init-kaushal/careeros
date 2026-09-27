@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 
-import litellm
+from careeros.llm import complete
 
 from careeros.core.models import Evidence, Skill, Skills
 from careeros.skills.resume_evidence import verify_quote
 from careeros.skills.sanitize import wrap_untrusted
 
-DEFAULT_LLM_MODEL = "claude-haiku-4-5-20251001"
 _CONTENT_CAP = 4000
 
 _INGEST_INSTRUCTIONS = """\
@@ -62,12 +60,11 @@ def ingest_resume(
     `resume ingest`) depend on this holding for every possible model
     response, not just well-formed ones.
     """
-    effective_model = model or os.environ.get("CAREEROS_MODEL", DEFAULT_LLM_MODEL)
     capped = resume_text[:_CONTENT_CAP]
 
     try:
-        resp = litellm.completion(
-            model=effective_model,
+        resp = complete(
+            model=model,
             max_tokens=2048,
             messages=[
                 {"role": "system", "content": _INGEST_INSTRUCTIONS},

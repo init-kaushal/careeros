@@ -242,7 +242,7 @@ def test_onboard_survives_a_malformed_ingest_response_end_to_end(tmp_path, resum
 
     runner = CliRunner()
     with patch("careeros.cli.onboard.extract_basic_profile", return_value=profile), \
-         patch("litellm.completion", return_value=resp):
+         patch("careeros.llm.litellm.completion", return_value=resp):
         result, ws_path = _run_onboard(runner, tmp_path, resume_file)
 
     assert result.exit_code == 0, result.output
