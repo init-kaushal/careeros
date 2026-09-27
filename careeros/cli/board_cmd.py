@@ -14,8 +14,11 @@ from careeros.boards_config import (
     ALL_KNOWN_BOARDS,
     API_BOARD_NAMES,
     BROWSER_BOARD_NAMES,
+    CustomBoard,
+    load_custom_boards,
     load_registered_boards,
     register_board,
+    save_custom_board,
 )
 from careeros.config_sources import load_board_entries
 from careeros.runtime.factory import WorkspaceNotConfigured, open_local_runtime, resolve_storage
@@ -63,24 +66,34 @@ def list_cmd(
         rprint(f"[dim]Known boards: {', '.join(sorted(ALL_KNOWN_BOARDS))}[/dim]")
         return
 
+    custom_boards = load_custom_boards(runtime.storage)
+
     table = Table(show_header=True)
     table.add_column("Board")
     table.add_column("Type")
-    table.add_column("Set up")
+    table.add_column("Ready")
+    table.add_column("Search URL", no_wrap=False)
 
     for name in sorted(registered):
         if name in BROWSER_BOARD_NAMES:
             board_type = "browser"
             ready = _is_browser_board_ready(name)
-            status = "[green]yes[/green]" if ready else "[yellow]no — run: careeros board setup " + name + "[/yellow]"
+            status = "[green]yes[/green]" if ready else "[yellow]no — careeros board setup " + name + "[/yellow]"
+            search_url = ""
         elif name in API_BOARD_NAMES:
             board_type = "api"
             ready = _is_api_board_ready(name, runtime)
-            status = "[green]yes[/green]" if ready else "[yellow]no — run: careeros board setup " + name + "[/yellow]"
+            status = "[green]yes[/green]" if ready else "[yellow]no — careeros board setup " + name + "[/yellow]"
+            search_url = ""
+        elif name in custom_boards:
+            board_type = "custom"
+            status = "[green]yes[/green]"
+            search_url = "[dim]" + custom_boards[name].search_url + "[/dim]"
         else:
             board_type = "custom"
-            status = "[dim]no connector yet[/dim]"
-        table.add_row(name, board_type, status)
+            status = "[yellow]no — careeros board setup " + name + "[/yellow]"
+            search_url = ""
+        table.add_row(name, board_type, status, search_url)
 
     console.print(table)
 
@@ -100,9 +113,7 @@ def setup_cmd(
     elif name in API_BOARD_NAMES:
         _setup_api_board(name, runtime)
     else:
-        rprint(f"[green]{name} registered.[/green]")
-        rprint(f"[yellow]No connector available for '{name}' yet — it's saved so you can track it.[/yellow]")
-        rprint(f"[dim]Supported for auto-browsing: {', '.join(sorted(ALL_KNOWN_BOARDS))}[/dim]")
+        _setup_custom_board(name, runtime)
 
 
 def _setup_browser_board(name: str, runtime: LocalRuntime) -> None:
@@ -188,6 +199,43 @@ def _extract_api_slug(source: str, raw: str) -> str | None:
     if raw and "/" not in raw and "." not in raw:
         return raw
     return None
+
+
+def _setup_custom_board(name: str, runtime: LocalRuntime) -> None:
+    from careeros.browser.driver import BrowserProfileBusy, launch_browser
+
+    rprint(f"\n[bold]{name.capitalize()} — Custom Board Setup[/bold]")
+    rprint("[dim]Provide the login page and a search URL with [bold]{{query}}[/bold] where the search term goes.[/dim]")
+    rprint("[dim]Example search URL: https://instahyre.com/jobs/?q={{query}}[/dim]")
+
+    login_url = Prompt.ask("Login URL").strip()
+    search_url = Prompt.ask("Search URL").strip()
+
+    if "{query}" not in search_url:
+        rprint("[yellow]Warning: search URL has no {{query}} placeholder — the same URL will always be used.[/yellow]")
+
+    save_custom_board(runtime.storage, CustomBoard(name=name, login_url=login_url, search_url=search_url))
+    runtime.record_activity(runtime.new_event(
+        "board_custom_configured", "board-setup",
+        f"Configured custom board {name}",
+        entity_type="board", entity_id=name,
+    ))
+    rprint(f"\n[green]Config saved.[/green] Opening browser for sign-in…")
+    rprint("[yellow]Sign in, then press Enter here when done.[/yellow]")
+
+    try:
+        with launch_browser(headless=False) as (_, page):
+            page.goto(login_url, timeout=30000)
+            input()
+    except BrowserProfileBusy as exc:
+        rprint("[red]" + str(exc) + "[/red]")
+        raise typer.Exit(1)
+    except Exception as exc:
+        rprint("[yellow]Browser could not open: " + str(exc) + "[/yellow]")
+        rprint("[dim]Sign in manually and run 'careeros board setup " + name + "' again if needed.[/dim]")
+        return
+
+    rprint(f"[green]{name} is ready. Run: careeros browse --board {name}[/green]")
 
 
 def _append_to_sources(runtime: LocalRuntime, source: str, slug: str) -> None:

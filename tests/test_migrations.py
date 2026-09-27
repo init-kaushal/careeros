@@ -14,7 +14,7 @@ def test_run_pending_skips_applied(tmp_path):
     storage = LocalFilesystemStorage(str(tmp_path))
     run_pending(storage, applied=[])
     # run again — should apply nothing new when all are marked as applied
-    newly = run_pending(storage, applied=["001_initial", "002_applications", "003_approvals", "004_boards"])
+    newly = run_pending(storage, applied=["001_initial", "002_applications", "003_approvals", "004_boards", "005_custom_boards"])
     assert newly == []
 
 

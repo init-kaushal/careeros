@@ -8,8 +8,10 @@ from rich.console import Console
 from rich.prompt import Prompt
 from rich.table import Table
 
+from careeros.boards_config import load_custom_boards
 from careeros.browser.boards import BOARDS
 from careeros.browser.driver import BrowserProfileBusy, fetch_jd_text, launch_browser
+from careeros.browser.scrapers.custom import CustomBoardScraper
 from careeros.browser.scrapers.generic import GenericScraper
 from careeros.cli.preflight import require_board_session
 from careeros.core.job_store import JobStore
@@ -47,19 +49,22 @@ def browse_cmd(
     headless: bool = typer.Option(False, "--headless/--no-headless", help="Run browser headlessly"),
     workspace: str = typer.Option(None, "--workspace", help="Workspace path"),
 ) -> None:
-    valid_boards = set(BOARDS) | {"url"}
+    runtime = _open_runtime(workspace)
+    custom_boards = load_custom_boards(runtime.storage)
+
+    valid_boards = set(BOARDS) | {"url"} | set(custom_boards.keys())
     if board not in valid_boards:
-        rprint(f"[red]Invalid --board '{board}'. Valid: {' '.join(sorted(valid_boards))}[/red]")
+        rprint(f"[red]Board '{board}' is not configured.[/red]")
+        rprint(f"[dim]Run: careeros board setup {board}[/dim]")
         raise typer.Exit(1)
 
     if board == "url" and not url:
         rprint("[red]Provide --url when using --board url.[/red]")
         raise typer.Exit(1)
 
-    if board != "url":
+    # Only known browser boards have a session cookie to pre-flight check.
+    if board in BOARDS:
         require_board_session(board)
-
-    runtime = _open_runtime(workspace)
 
     try:
         profile = Profile.load(runtime.storage)
@@ -69,8 +74,17 @@ def browse_cmd(
 
     skills = Skills.load_or_empty(runtime.storage)
     goals = Goals.load_or_empty(runtime.storage)
-    query = job_query_from_profile(profile, goals) if board != "url" else (url or "")
-    scraper = GenericScraper() if board == "url" else SCRAPERS[board]
+
+    if board == "url":
+        scraper = GenericScraper()
+        query = url or ""
+    elif board in BOARDS:
+        scraper = SCRAPERS[board]
+        query = job_query_from_profile(profile, goals)
+    else:
+        cb = custom_boards[board]
+        scraper = CustomBoardScraper(board, cb.search_url)
+        query = job_query_from_profile(profile, goals)
 
     try:
         with launch_browser(headless=headless) as (_, page):
