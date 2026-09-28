@@ -10,26 +10,59 @@
 
 ## Skills
 
+### Discovery
 | Trigger | Skill |
 |---------|-------|
 | "browse [board]" / "find jobs on [board]" | `.claude/skills/browse/SKILL.md` |
 | "show pipeline" / "track" / "status" | `.claude/skills/track/SKILL.md` |
+
+### Research
+| Trigger | Skill |
+|---------|-------|
+| "research [company]" / "find people at [company]" / "comp research for [role]" | `.claude/skills/research/SKILL.md` |
+
+### Application
+| Trigger | Skill |
+|---------|-------|
+| "prep for [company]" / "tailor resume for [job]" / "what should I highlight for [company]?" | `.claude/skills/prep/SKILL.md` |
 | "apply to [job]" / "fill application for [job]" | `.claude/skills/apply/SKILL.md` |
-| "research [company]" / "find people at [company]" / "comp research" | `.claude/skills/research/SKILL.md` |
+
+### Outreach
+| Trigger | Skill |
+|---------|-------|
 | "connect with [person]" / "send outreach to [person]" / "draft email to [person]" | `.claude/skills/outreach/SKILL.md` |
 | "check follow-ups" / "who needs a follow-up?" / "follow-up queue" | `.claude/skills/follow-up/SKILL.md` |
+
+### Interview & Offer
+| Trigger | Skill |
+|---------|-------|
+| "prep for [company] interview" / "I have an interview at [company]" | `.claude/skills/interview/SKILL.md` |
+| "I got an offer from [company]" / "evaluate offer" / "help me negotiate" | `.claude/skills/offer/SKILL.md` |
 
 ## Workspace layout
 
 ```
-profile.md          — career profile + scoring rubric (fold file)
-boards.md           — configured boards and browse URLs
+profile.md              — career profile + scoring rubric (fold file)
+boards.md               — configured boards and browse URLs
 jobs/
-  pipeline.md       — active pipeline (fold file)
-  discovered/       — one directory per saved job
-    YYYY-MM-DD-company-title.md   — job details
+  pipeline.md           — active pipeline (fold file)
+  discovered/
+    YYYY-MM-DD-co-title.md     — job listing (one file per job)
     [job-slug]/
-      company.md    — company + compensation research
-      people.md     — contacts: hiring managers, recruiters, peers
-activity.md         — append-only action log (source of truth for follow-up cadence)
+      company.md        — company info + comp research
+      people.md         — hiring manager, recruiter, peers, interviewers
+      prep.md           — tailoring brief (skills to highlight, ATS keywords)
+      interview-prep.md — question bank, STAR stories, company refresher
+      offer.md          — offer details + negotiation notes
+activity.md             — append-only action log (source of truth for follow-up cadence)
 ```
+
+## Pipeline status icons
+
+| Icon | Meaning |
+|------|---------|
+| `[ ]` | Discovered |
+| `[~]` | Applied |
+| `[?]` | Interview |
+| `[✓]` | Offer / Accepted |
+| `[x]` | Closed / Declined |

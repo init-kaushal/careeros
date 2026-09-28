@@ -6,7 +6,17 @@ Scaffold a markdown-native job-search workspace for Claude Code or ChatGPT Proje
 
 ## What it does
 
-One command scaffolds a workspace directory with an agent entry point and skills. On the first session, the agent interviews you to build your profile and scoring rubric. After that, you chat: "browse linkedin", "show pipeline", "mark Stripe as applied."
+One command scaffolds a workspace. On the first session the agent interviews you to build your profile and scoring rubric. After that, you chat your way through the entire job-search lifecycle:
+
+| Phase | Example |
+|-------|---------|
+| **Discovery** | "browse linkedin" · "show pipeline" |
+| **Research** | "research Stripe" · "find the hiring manager at Stripe" · "comp research for staff engineer" |
+| **Application** | "prep my application for Stripe" · "apply to Stripe" |
+| **Outreach** | "connect with Jane Doe at Stripe" · "draft outreach email to the recruiter" |
+| **Follow-up** | "check follow-ups" · "who needs a follow-up?" |
+| **Interviews** | "I have an interview at Stripe on Friday" · "prep for my HM round" |
+| **Offers** | "I got an offer from Stripe" · "help me negotiate" · "compare my Stripe and Notion offers" |
 
 Your data — profile, jobs, activity log — lives in a plain-text directory you own. No account. No cloud sync.
 
@@ -39,17 +49,24 @@ careeros init ~/my-job-search --runtime gpt
 ## Workspace layout
 
 ```
-profile.md          — career profile + scoring rubric
-boards.md           — configured boards and search queries
+profile.md              — career profile + scoring rubric
+boards.md               — boards and search URLs
 jobs/
-  pipeline.md       — active pipeline
-  discovered/       — one .md per saved job
-activity.md         — append-only action log
-CLAUDE.md           — Claude Code entry point (framework-owned)
-AGENTS.md           — GPT Work entry point (framework-owned)
+  pipeline.md           — active pipeline
+  discovered/
+    YYYY-MM-DD-co-title.md    — job listing
+    [job-slug]/
+      company.md        — company info + comp research
+      people.md         — hiring manager, recruiter, peers
+      prep.md           — tailoring brief (keywords, bullets)
+      interview-prep.md — question bank + STAR stories
+      offer.md          — offer details + negotiation notes
+activity.md             — append-only action log
+CLAUDE.md / AGENTS.md   — agent entry point (framework-owned)
+.claude/skills/         — skill files (framework-owned)
 ```
 
-User data is never touched by `--refresh`. Framework files are always refreshable:
+Framework files are always refreshable — user data is never touched:
 
 ```bash
 careeros init ~/my-job-search --refresh

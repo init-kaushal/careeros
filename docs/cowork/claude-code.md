@@ -1,22 +1,19 @@
 # Claude Code setup
 
-Step-by-step guide for setting up a CareerOS Cowork workspace with Claude Code.
+Step-by-step guide for setting up and using CareerOS Cowork with Claude Code.
 
 ---
 
 ## Prerequisites
 
 - CareerOS installed (`pip install -e .` from the repo)
-- Claude Code CLI installed (`npm install -g @anthropic-ai/claude-code` or via the Mac app)
-- Chrome with the **Claude-in-Chrome** extension installed
+- Claude Code CLI or Claude.ai with Projects
+- Chrome with the **Claude-in-Chrome** extension
 
 ### Install Claude-in-Chrome
 
-Claude-in-Chrome lets Claude control your real Chrome browser — your existing logged-in sessions, no automation detection.
-
-1. Go to the [Claude-in-Chrome extension page](https://chromewebstore.google.com/detail/claude-in-chrome)
-2. Click **Add to Chrome**
-3. The extension runs silently in the background; no configuration needed
+1. Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/claude-in-chrome)
+2. No configuration needed — it runs in the background
 
 ---
 
@@ -26,121 +23,136 @@ Claude-in-Chrome lets Claude control your real Chrome browser — your existing 
 careeros init ~/my-job-search
 ```
 
-This copies the CareerOS templates into `~/my-job-search/`:
+Creates:
 
 ```
 ~/my-job-search/
-├── CLAUDE.md                         ← agent entry point
-└── .claude/
-    └── skills/
-        ├── onboard/SKILL.md
-        ├── browse/SKILL.md
-        └── track/SKILL.md
+├── CLAUDE.md
+└── .claude/skills/
+    ├── onboard/   browse/   track/
+    ├── research/  prep/     apply/
+    ├── outreach/  follow-up/
+    ├── interview/ offer/
 ```
-
-No user data is written yet — the agent does that during onboarding.
 
 ---
 
-## Step 2 — Open the workspace in Claude Code
+## Step 2 — Open in Claude Code
 
 ```bash
-# Option A: open in Claude Code CLI
 claude ~/my-job-search
-
-# Option B: Claude.ai Projects
-# Go to claude.ai → Projects → New Project
-# Set the working directory to ~/my-job-search
 ```
 
+Or in Claude.ai: Projects → New Project → set working directory to `~/my-job-search`.
+
 ---
 
-## Step 3 — First-run onboarding
+## Step 3 — Onboarding (first session only)
 
-Claude reads `CLAUDE.md` at session start. Since `profile.md` doesn't exist yet, it automatically loads the onboard skill and runs an 8-question interview:
+Claude detects that `profile.md` is missing and runs the onboarding interview automatically — 8 questions covering your role, stack, targets, location, compensation floor, and boards. It then writes:
 
-1. Current role and years of experience
-2. Primary skills and tech stack
-3. Target role titles
-4. Location and remote preference
-5. Minimum compensation (total package)
-6. Target companies (optional)
-7. Job boards to use
-8. LinkedIn profile URL
-
-After the interview, Claude writes these files directly to your workspace:
-
-- `profile.md` — your profile with a scoring rubric
-- `boards.md` — configured boards with search queries
-- `jobs/pipeline.md` — empty pipeline table
+- `profile.md` — profile + scoring rubric
+- `boards.md` — boards with search URLs
+- `jobs/pipeline.md` — empty pipeline
 - `activity.md` — initial log entry
-- `jobs/discovered/` — directory for saved jobs
 
 ---
 
-## Step 4 — Browse jobs
+## Step 4 — Full workflow
 
-Say: **"browse linkedin"** (or any board from your `boards.md`)
+### Find jobs
+```
+"browse linkedin"
+"find senior backend roles on wellfound"
+```
+Claude opens a new Chrome tab using your real logged-in session, extracts listings, scores them against your rubric, and saves selected ones to `jobs/discovered/`.
 
-Claude will:
-1. Open a new Chrome tab via Claude-in-Chrome
-2. Navigate to the board using your existing logged-in session
-3. Extract listings from the page
-4. Score each listing 0–10 against your rubric
-5. Show you a markdown table of scored results
-6. Ask which jobs to save
+### Research
+```
+"research Stripe"
+"find the hiring manager at Stripe"
+"comp research for staff engineer at Stripe"
+```
+Produces `jobs/discovered/[job]/company.md` and `people.md`.
 
-For jobs you select, Claude writes files to `jobs/discovered/` and updates `jobs/pipeline.md`.
+### Prep your application
+```
+"prep my application for Stripe"
+```
+Reads the JD, maps your profile against it, and writes a tailoring brief to `prep.md` — ATS keywords, which bullets to lead with, cover letter angle.
 
-### Supported boards
+### Apply
+```
+"apply to Stripe"
+```
+Claude drafts a cover letter → surveys the form → fills fields from your profile → shows you a preview → waits for your explicit approval → submits. Resume upload fields are flagged for you to handle.
 
-| Board | Method |
-|-------|--------|
-| LinkedIn | Chrome extension (real session, full access) |
-| Instahyre | Chrome extension + network request interception |
-| Wellfound | Chrome extension |
-| Indeed | Chrome extension |
-| Naukri | Chrome extension |
+### Outreach
+```
+"connect with the engineering manager at Stripe"
+"draft an outreach email to Jane Doe"
+```
+For LinkedIn: drafts a ≤300-character note → navigates to their profile → shows you the filled invite → waits for approval → sends.
+For email: produces a draft you send from your own client.
 
----
+### Follow-ups
+```
+"check follow-ups"
+"who needs a follow-up?"
+```
+Scans `activity.md` for overdue invites (7 days), email outreach (5 days), applications (10 days), and post-interview (3 days). Drafts per-item, confirms before each send.
 
-## Step 5 — Track your pipeline
+### Interview prep
+```
+"I have an interview at Stripe on Friday"
+"prep for my Stripe hiring manager round"
+```
+Looks up interviewers on LinkedIn, generates a question bank for the stage, drafts STAR stories from your profile, and writes `interview-prep.md`. After the interview, log how it went and Claude updates the pipeline.
 
-Say: **"show pipeline"** or **"track"**
+### Offer evaluation and negotiation
+```
+"I got an offer from Stripe"
+"help me negotiate with Stripe"
+"compare my Stripe and Notion offers"
+```
+Records the full offer (base, equity, bonus, benefits), calculates Year 1 and steady-state total comp, benchmarks against comp research, identifies negotiation levers, and drafts the negotiation email with a specific ask.
 
-Claude shows your pipeline with status icons:
-- `[ ]` Discovered
-- `[~]` Applied
-- `[?]` Interview
-- `[✓]` Offer
-- `[x]` Closed
+### Track pipeline
+```
+"show pipeline"
+"mark Stripe as applied"
+```
 
-To update: "mark Stripe as applied" — Claude updates `pipeline.md` and logs to `activity.md`.
+| Icon | Status |
+|------|--------|
+| `[ ]` | Discovered |
+| `[~]` | Applied |
+| `[?]` | Interview |
+| `[✓]` | Offer / Accepted |
+| `[x]` | Closed / Declined |
 
 ---
 
 ## Keeping skills up to date
 
-When you upgrade CareerOS, refresh skill files without touching your data:
-
 ```bash
 careeros init ~/my-job-search --refresh
 ```
 
-This updates `.claude/skills/` from the latest templates. Your `profile.md`, `boards.md`, `jobs/`, and `activity.md` are never touched.
+Updates all `.claude/skills/` files. Your profile, boards, jobs, and activity log are never touched.
 
 ---
 
 ## FAQ
 
-**Q: Why use my real Chrome instead of a dedicated browser profile?**
-
-A real logged-in session bypasses automation detection entirely. LinkedIn and Instahyre block headless browsers and Playwright within seconds; your real session works because it looks exactly like you browsing normally.
+**Q: Why use my real Chrome instead of a separate browser profile?**
+Your logged-in session bypasses automation detection on LinkedIn, Instahyre, and other SPAs. A dedicated profile would require re-login and triggers bot detection within seconds.
 
 **Q: Does CareerOS send my data anywhere?**
-
-No CareerOS server exists. LLM calls go to Anthropic (or whichever provider you configure). Your workspace files stay on your machine.
+No server. LLM calls go to Anthropic. Workspace files stay on your machine.
 
 **Q: Can I version-control the workspace?**
+Yes. `git init ~/my-job-search` works well. Consider gitignoring `jobs/discovered/` if it contains salary information you prefer not to commit.
 
-Yes. `git init ~/my-job-search` works well. Consider adding `jobs/discovered/` to a `.gitignore` if the files contain salary information you prefer not to commit.
+**Q: What if a form has a resume upload?**
+Claude flags it and asks you to upload manually. It continues filling all other fields while you handle the upload.
