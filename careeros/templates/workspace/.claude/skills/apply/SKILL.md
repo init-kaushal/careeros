@@ -129,6 +129,6 @@ Append to `activity.md`:
 
 - Never click Submit without explicit user approval — this is an irreversible external action.
 - Never enter a password, complete a password reset, or authenticate into any account on the user's behalf — always hand that back to the user, on any site, at any step.
-- If the form has a resume upload field, flag it: "There's a resume upload field — please upload your resume manually, then tell me when done."
+- If the form has a resume/cover-letter upload field, flag it — and if it's inside an iframe (common on iCIMS and similar ATSs), don't try to automate it at all: a file input's picker is a native OS dialog with no accessibility-tree ref to target, especially one nested in a cross-frame document. Tell the user exactly which prepared file to pick and from where: "There's a resume upload field — please click Replace Resume and pick `[path]`, then tell me when done."
 - If the application was already submitted (confirmation page already shown), log it and stop rather than trying to resubmit.
 - Close the tab after a successful submission.
