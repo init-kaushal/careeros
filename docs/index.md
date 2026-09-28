@@ -52,6 +52,18 @@ CareerOS drives the whole job-search workflow — discovery, company/people rese
 
 ---
 
+## Known ATS quirks
+
+Learned from running the `apply` skill against real applicant-tracking systems, not just LinkedIn Easy Apply:
+
+- **Some ATS forms live inside an iframe** (iCIMS is one). If the agent's page-reading tool comes back empty or finds the wrong element, that's usually why.
+- **A login wall can appear mid-form, not just at the start.** Typing your email into an ATS you've used before can trigger a "log in to your existing account" prompt partway through. CareerOS will stop and hand the tab back rather than touch a password field — it never authenticates on your behalf, even with a browser-saved password sitting right there.
+- **Returning-candidate forms often arrive pre-filled** from a prior application (name, resume, even an old cover letter). CareerOS checks these against your files instead of blindly overwriting them, and flags anything that looks stale.
+- **Consent questions are always yours.** AI-processing opt-outs, interview-recording consent, EEO/voluntary disclosures, sponsorship — CareerOS surfaces these and waits, even when the ATS has pre-selected a default.
+- **One-time platform preferences (like LinkedIn's profile-sharing modal) get remembered.** The first time, CareerOS asks; your answer is saved to `profile.md` under `## Platform preferences` so it doesn't ask again on the next application.
+
+---
+
 ## Privacy
 
 Your data never reaches a CareerOS server — there isn't one. The workspace is a folder on your machine. LLM calls go to whichever provider your agent runtime uses (Anthropic for Claude Code, OpenAI for GPT Work).

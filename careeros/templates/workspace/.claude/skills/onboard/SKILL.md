@@ -105,6 +105,9 @@ Then write all files in one go:
 - **Remote preference:** [from Q4]
 - **Target companies:** [from Q6]
 
+## Platform preferences
+*(filled in as they come up — one-time consent choices on job boards/ATS platforms that would otherwise be asked on every application, e.g. LinkedIn's profile-sharing toggle)*
+
 ## Scoring rubric (use when rating job listings 0–10)
 | Signal | Weight |
 |--------|--------|

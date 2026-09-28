@@ -41,11 +41,27 @@ Stop.
 
 Look for an "Apply" or "Easy Apply" button. Click it.
 
+**LinkedIn "Share your profile?" modal**: clicking an external "Apply ↗" button on LinkedIn (jobs marked "Responses managed off LinkedIn") often triggers a profile-sharing consent modal first. Check `profile.md` for a `## Platform preferences` line about this:
+- If a preference is already recorded, apply it silently and continue — don't ask again.
+- If none is recorded, ask once: "LinkedIn wants to share your profile with the employer before continuing to their site — leave that on? (yes / no / just this once)". On "yes" or "no" (not "just this once"), write the answer under `## Platform preferences` in `profile.md` so future applications don't ask again.
+
+**External ATS redirects** (iCIMS, Workday, Greenhouse, Lever, etc.): the job may open the employer's own applicant-tracking site in a new tab/domain. Treat that ATS the same as the board itself for the rest of this flow — the same login-wall and consequential-action rules below apply there too.
+
 ---
 
 ## STEP 3 — SURVEY THE FORM
 
 Before filling anything, read the full form using `read_page`. List every field and its current value.
+
+**Embedded forms**: some ATS platforms (iCIMS is a known one) render the real form inside an `<iframe>`, not the top-level document. If `read_page`/`form_input` find no usable fields (or only something unrelated like a language picker), check for an iframe and read/act inside `iframe.contentDocument` via `javascript_tool` instead.
+
+**Mid-form login walls**: a login/password prompt can appear partway through a multi-step form, not just on the first page — e.g. after you enter an email, the ATS may recognize it as an existing candidate account and ask for a password before continuing. Treat this exactly like the login check in STEP 2:
+> "This ATS wants you to log in to an existing account for [email] before continuing — log in yourself in the open tab, then tell me and I'll pick up from there."
+**Never type a password, trigger a password reset, or use a browser-saved/autofilled password on the user's behalf — even if the browser shows one filled in.** Stop and wait for the user to confirm they're logged in.
+
+**Returning-candidate pre-fill**: if the form already shows values (name, phone, resume, cover letter, past consent answers, etc.) from an earlier application, don't overwrite them from `profile.md` — verify they still match and flag anything that looks stale (an old resume filename, a generic cover letter that isn't the one tailored for this job) instead of silently replacing it.
+
+**Consent / policy questions** (AI processing of your data, interview recording/transcription tools, EEO/voluntary disclosures, sponsorship): these are the user's call, every time — list the question and its options and wait for an answer, even if a default is pre-selected.
 
 Show the user what you see:
 > "I can see these fields: [name, email, phone, ...]. I'll fill from your profile. Any fields you want to handle yourself?"
@@ -106,6 +122,7 @@ Append to `activity.md`:
 ## NOTES
 
 - Never click Submit without explicit user approval — this is an irreversible external action.
+- Never enter a password, complete a password reset, or authenticate into any account on the user's behalf — always hand that back to the user, on any site, at any step.
 - If the form has a resume upload field, flag it: "There's a resume upload field — please upload your resume manually, then tell me when done."
 - If the application was already submitted (confirmation page already shown), log it and stop rather than trying to resubmit.
 - Close the tab after a successful submission.
