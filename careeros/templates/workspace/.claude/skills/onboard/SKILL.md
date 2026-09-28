@@ -1,6 +1,6 @@
 # CareerOS Onboarding Skill
 
-**When to run:** `profile.md` does not exist. Run this before any other skill.
+**When to run:** `profile.md` does not exist — run the full interview before any other skill. Also run just the RESUME INTAKE section on its own whenever the user says "add my resume" / "update my resume" / "here's my resume", even if `profile.md` already exists.
 
 ---
 
@@ -63,6 +63,13 @@ Capture: selected boards.
 
 If they say default: construct the URL from their location and target roles.
 If they paste a URL: use it as-is.
+
+### Q9 — Resume intake
+> "Last one: do you have an existing resume? Paste the text, or give me a file path and I'll read it. I'll use it as the source of truth for `apply` and `prep` — no invented experience, just yours, tailored per job. (Say 'skip' if you don't have one handy — you can add it later by saying 'add my resume'.)"
+
+If they paste text: capture it verbatim.
+If they give a file path: read the file (.txt/.md directly; for .pdf/.docx, extract text if your runtime has a tool for it, otherwise ask them to paste the text instead).
+If they say skip: note that no resume is on file yet.
 
 ---
 
@@ -165,7 +172,21 @@ Add an entry here with the browse URL. Say "browse [board]" to use it.
 [today's date] onboarding complete — workspace initialized
 ```
 
-### 5. Create directory `jobs/discovered/` (empty, just the directory)
+### 5. `resume.md` (only if the user provided one in Q9)
+
+Write their resume verbatim, as given:
+
+```markdown
+# Resume — [Name]
+
+<!-- Source of truth for tailored resumes and applications. Update anytime by saying "add my resume" or "update my resume". -->
+
+[pasted or extracted resume text, unedited]
+```
+
+If they skipped Q9, don't create this file — `prep` and `apply` will ask for it when needed.
+
+### 6. Create directory `jobs/discovered/` (empty, just the directory)
 
 ---
 
@@ -177,6 +198,21 @@ After writing all files, say:
 >
 > - **Profile:** `profile.md` — edit anytime to adjust your scoring rubric or preferences
 > - **Boards configured:** [list the boards they chose]
+> - **Resume:** [`resume.md` saved — I'll use it for tailored resumes and applications. / not on file yet — say "add my resume" anytime.]
 > - **Pipeline:** `jobs/pipeline.md` — tracks everything you save
 >
 > To start: say **'browse [board]'** and I'll open it in Chrome, pull listings, score them against your profile, and save what you want to keep."
+
+---
+
+## RESUME-ONLY INTAKE (profile.md already exists)
+
+Triggered by: "add my resume" / "update my resume" / "here's my resume".
+
+1. Ask Q9 verbatim (above).
+2. Write/overwrite `resume.md` as in step 5 above.
+3. Append to `activity.md`:
+   ```
+   [date] resume added/updated on file
+   ```
+4. Say: "Got it — saved to `resume.md`. I'll use this for tailored resumes and applications from now on."

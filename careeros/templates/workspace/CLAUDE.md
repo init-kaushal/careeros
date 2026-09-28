@@ -10,6 +10,11 @@
 
 ## Skills
 
+### Profile
+| Trigger | Skill |
+|---------|-------|
+| "add my resume" / "update my resume" | `.claude/skills/onboard/SKILL.md` (resume-only intake) |
+
 ### Discovery
 | Trigger | Skill |
 |---------|-------|
@@ -43,6 +48,7 @@
 
 ```
 profile.md              — career profile + scoring rubric (fold file)
+resume.md                — your source-of-truth resume (added at onboarding, or via "add my resume")
 boards.md               — configured boards and browse URLs
 jobs/
   pipeline.md           — active pipeline (fold file)
@@ -52,6 +58,7 @@ jobs/
       company.md        — company info + comp research
       people.md         — hiring manager, recruiter, peers, interviewers
       prep.md           — tailoring brief (skills to highlight, ATS keywords)
+      resume.md          — tailored resume for this job, generated from resume.md (from prep)
       interview-prep.md — question bank, STAR stories, company refresher
       offer.md          — offer details + negotiation notes
 activity.md             — append-only action log (source of truth for follow-up cadence)

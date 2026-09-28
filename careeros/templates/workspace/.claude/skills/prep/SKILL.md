@@ -10,7 +10,8 @@ Run this before applying. It produces a tailoring brief — a cheat-sheet of wha
 
 Read:
 1. `profile.md` — full file (above and below the fold if needed — you need skills detail)
-2. The job file from `jobs/discovered/` matching the user's mention
+2. `resume.md` — if it doesn't exist, ask: "You don't have a resume on file yet — paste it or a file path and I'll save it, or say 'skip' for a tailoring brief without a full tailored resume." Proceed without it only if they say skip — in that case, skip STEP 4B below.
+3. The job file from `jobs/discovered/` matching the user's mention
 
 If the job file exists but has no JD text, navigate to the job URL and extract the full description:
 1. `tabs_create_mcp` — new tab
@@ -76,6 +77,29 @@ Based on the JD signals, these experiences from your profile are strongest:
 
 ---
 
+## STEP 4B — DRAFT TAILORED RESUME (skip if no `resume.md`)
+
+Using `resume.md` as the only source of content — never invent experience, skills, or numbers that aren't already there — produce a version tailored to this job:
+
+- Reorder bullets so the strongest matches (the "direct" fits from STEP 3) lead each section
+- Rework phrasing to mirror the JD's exact keywords, only where it's honestly accurate
+- Trim or de-emphasise sections least relevant to this role
+- Keep every fact traceable back to `resume.md` — if you can't find it there, don't add it here either; that's a STEP 3 gap, not something to paper over
+
+Write `jobs/discovered/[job-slug]/resume.md`:
+
+```markdown
+# Resume — [Name] — tailored for [Title] at [Company]
+
+<!-- Generated from resume.md for this application. Review before using. -->
+
+[tailored resume content, same format as resume.md]
+```
+
+Tell the user: "Tailored resume drafted at `jobs/discovered/[job-slug]/resume.md` — review it before using; I only reordered and reworded what's already in your resume, nothing invented. Say the word if you want it converted to PDF or Word."
+
+---
+
 ## STEP 5 — UPDATE PIPELINE
 
 If the job's status is still `discovered`, ask:
@@ -92,6 +116,6 @@ Append to `activity.md`:
 
 ## NOTES
 
-- Don't invent experience that isn't in profile.md. Flag gaps honestly.
+- Don't invent experience that isn't in profile.md or resume.md. Flag gaps honestly — in STEP 4B too, not just the brief.
 - ATS keyword matching matters — use the JD's exact phrasing where it's accurate.
 - The brief is for the user to use, not for Claude to auto-fill — don't jump to applying without being asked.

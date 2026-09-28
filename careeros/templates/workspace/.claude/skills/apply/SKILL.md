@@ -67,7 +67,7 @@ Fill each field from `profile.md`. Use `form_input` for text fields.
 - Location → current location
 - Years of experience → experience
 - LinkedIn URL → linkedin field
-- Resume upload → skip (note it for user)
+- Resume upload → if a tailored resume exists at `jobs/discovered/[job-slug]/resume.md` (from the prep skill), tell the user it's ready to upload from there; otherwise skip and note it for the user to handle manually
 - Cover letter → paste the drafted letter
 
 **For questions you can't answer from profile** (e.g. "Do you require visa sponsorship?", "Expected salary"):

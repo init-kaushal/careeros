@@ -12,6 +12,14 @@ Read `profile.md` above the fold.
 
 ---
 
+## STEP 0.5 — CHECK FOR REPLIES (best-effort)
+
+If this agent session has an email tool available (e.g. Gmail), search it for messages to/from each pending contact's email or the company's domain, since the date logged in `activity.md`. Use whatever it finds to mark an item as already replied-to before building the queue — that item isn't overdue, it just needs a status update instead (ask the user, then log the outcome to `activity.md`).
+
+If no email tool is available in this session, skip this step and rely on `activity.md` alone, as before.
+
+---
+
 ## STEP 1 — BUILD THE FOLLOW-UP QUEUE
 
 Scan activity.md for these event types and compute days since each:
@@ -115,3 +123,4 @@ For closed items (user says "close this cadence"):
 - Check if a LinkedIn invite has been accepted before drafting a follow-up message — navigate to their profile briefly to check.
 - If someone hasn't accepted a LinkedIn invite after 14+ days, it's usually better to close the cadence than send a cold message.
 - Never send the same follow-up type twice to the same person without a new trigger event.
+- Email reply-checking (STEP 0.5) is best-effort and depends on what's connected in the current session — it's never required, and its absence never blocks the queue.

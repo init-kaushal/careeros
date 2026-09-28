@@ -8,7 +8,7 @@ Your profile, jobs, and activity log live in a plain-text directory you own — 
 
 ## How it works
 
-One command scaffolds a workspace. On the first session, the agent interviews you to build your profile and scoring rubric. After that, you chat: "browse linkedin", "show pipeline", "mark Stripe as applied."
+One command scaffolds a workspace. On the first session, the agent interviews you to build your profile, scoring rubric, and (optionally) your resume. After that, you chat: "browse linkedin", "research Stripe", "prep for Stripe", "apply to Stripe", "connect with [recruiter]", "check follow-ups", "I have an interview at Stripe", "I got an offer from Stripe", "show pipeline" — covering discovery through offer, not just search.
 
 ```bash
 careeros init ~/my-job-search                # Claude Code (recommended)
@@ -37,6 +37,18 @@ Full setup: [Getting Started](getting-started.md) · [Cowork guides](cowork/inde
 | `careeros init <path>` | Scaffold a Claude Cowork workspace |
 | `careeros init <path> --runtime gpt` | Scaffold a GPT Work workspace |
 | `careeros init <path> --refresh` | Update skill files without touching user data |
+
+---
+
+## Scope — what this is and isn't
+
+CareerOS drives the whole job-search workflow — discovery, company/people research, resume tailoring, applying, outreach, follow-ups, interview prep, and offer negotiation — but it's a copilot you run, not a bot that job-hunts unattended:
+
+- **It never submits anything without asking first.** Applications, LinkedIn messages, and emails are always shown to you for a yes before anything irreversible happens.
+- **It doesn't generate your resume from nothing.** Give it a starting resume (at onboarding, or anytime by saying "add my resume") and it tailors copies per job — reordering and rewording what's already true, never inventing experience.
+- **Browsing is scoped to boards in `boards.md`.** LinkedIn, Instahyre, Wellfound, and Naukri are set up by default; add any other board by giving its URL the first time you say "browse [board]".
+- **It doesn't run on a schedule by itself.** Every skill fires from a chat trigger. If you want "browse linkedin" to run automatically (say, daily), wire that up with your agent runtime's own scheduling feature — CareerOS doesn't ship one.
+- **Follow-up tracking is mostly log-based.** It checks your email for replies when an email tool is available in your session, but otherwise relies on what's recorded in `activity.md`.
 
 ---
 
