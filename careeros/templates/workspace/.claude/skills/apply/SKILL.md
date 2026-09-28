@@ -47,6 +47,8 @@ Look for an "Apply" or "Easy Apply" button. Click it.
 
 **External ATS redirects** (iCIMS, Workday, Greenhouse, Lever, etc.): the job may open the employer's own applicant-tracking site in a new tab/domain. Treat that ATS the same as the board itself for the rest of this flow — the same login-wall and consequential-action rules below apply there too.
 
+**Session timeouts**: ATS candidate sessions can expire from inactivity faster than you'd expect (observed on iCIMS: a several-minute gap while doing other work was enough to silently bounce the tab back to the start of the form, logged out). If you're going to pause mid-application to do unrelated work, either finish the current page first or expect to redo the login step afterward — re-screenshot before assuming a previously-filled page is still in the state you left it.
+
 ---
 
 ## STEP 3 — SURVEY THE FORM
