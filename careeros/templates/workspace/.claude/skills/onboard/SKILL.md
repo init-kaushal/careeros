@@ -108,6 +108,9 @@ Then write all files in one go:
 ## Platform preferences
 *(filled in as they come up — one-time consent choices on job boards/ATS platforms that would otherwise be asked on every application, e.g. LinkedIn's profile-sharing toggle)*
 
+## Consent defaults
+*(filled in as they come up — recurring consent-style questions on application forms: AI/data processing, marketing opt-ins, interview recording tools, etc. See the apply skill's STEP 3 for how these get read and applied.)*
+
 ## Scoring rubric (use when rating job listings 0–10)
 | Signal | Weight |
 |--------|--------|

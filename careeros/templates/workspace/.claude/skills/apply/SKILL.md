@@ -57,11 +57,15 @@ Before filling anything, read the full form using `read_page`. List every field 
 
 **Mid-form login walls**: a login/password prompt can appear partway through a multi-step form, not just on the first page — e.g. after you enter an email, the ATS may recognize it as an existing candidate account and ask for a password before continuing. Treat this exactly like the login check in STEP 2:
 > "This ATS wants you to log in to an existing account for [email] before continuing — log in yourself in the open tab, then tell me and I'll pick up from there."
+Name the exact tab and field so it's a one-click job if they have a password manager extension (Bitwarden, 1Password, Keychain): "it's the password field on the tab now showing [ATS domain] — your password manager's autofill icon should pick it up."
 **Never type a password, trigger a password reset, or use a browser-saved/autofilled password on the user's behalf — even if the browser shows one filled in.** Stop and wait for the user to confirm they're logged in.
 
 **Returning-candidate pre-fill**: if the form already shows values (name, phone, resume, cover letter, past consent answers, etc.) from an earlier application, don't overwrite them from `profile.md` — verify they still match and flag anything that looks stale (an old resume filename, a generic cover letter that isn't the one tailored for this job) instead of silently replacing it.
 
-**Consent / policy questions** (AI processing of your data, interview recording/transcription tools, EEO/voluntary disclosures, sponsorship): these are the user's call, every time — list the question and its options and wait for an answer, even if a default is pre-selected.
+**Consent / policy questions** (AI processing of your data, interview recording/transcription tools, EEO/voluntary disclosures, sponsorship): check `profile.md` for a `## Consent defaults` section first.
+- If the question matches a recorded default, apply it silently and note what you set in the summary you show before filling — don't ask again.
+- If it's a marketing/communications opt-in ("send me job alerts", "join our talent community") with no recorded default, opt out unless the ATS requires opting in to proceed with the application — in which case opt in and flag it: "had to opt in to marketing emails to continue — you can unsubscribe later."
+- Anything else with no recorded default: ask, every time, and offer to save the answer to `## Consent defaults` if it's the kind of question likely to repeat.
 
 Show the user what you see:
 > "I can see these fields: [name, email, phone, ...]. I'll fill from your profile. Any fields you want to handle yourself?"
