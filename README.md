@@ -15,7 +15,7 @@ Your data — profile, jobs, activity log — lives in a plain-text directory yo
 ```bash
 git clone https://github.com/init-kaushal/careeros
 cd careeros
-python -m venv .venv && source .venv/bin/activate
+python3.11 -m venv .venv && source .venv/bin/activate   # requires Python 3.11+; check with `python3 --version`
 pip install -e .
 
 # Claude Code (recommended)
@@ -64,9 +64,21 @@ careeros init ~/my-job-search --refresh
 ## Development
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
+python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 pytest
+```
+
+## Troubleshooting
+
+**`careeros: bad interpreter: ... No such file or directory`**
+
+Your `.venv` is a symlink to a specific Python binary. If that Python gets removed or replaced later (e.g. `brew upgrade python` bumps the default `python@3.x`), the venv breaks. Recreate it:
+
+```bash
+rm -rf .venv
+python3.11 -m venv .venv && source .venv/bin/activate   # any Python 3.11+ works
+pip install -e .
 ```
 
 ## License

@@ -51,6 +51,8 @@ Your data never reaches a CareerOS server — there isn't one. The workspace is 
 ```bash
 git clone https://github.com/init-kaushal/careeros
 cd careeros
-python -m venv .venv && source .venv/bin/activate
+python3.11 -m venv .venv && source .venv/bin/activate   # requires Python 3.11+
 pip install -e .
 ```
+
+See [Getting Started → Troubleshooting](getting-started.md#troubleshooting) if `careeros` stops working after a Python upgrade.
