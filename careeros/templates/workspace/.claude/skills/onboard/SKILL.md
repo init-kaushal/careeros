@@ -71,6 +71,16 @@ If they paste text: capture it verbatim.
 If they give a file path: read the file (.txt/.md directly; for .pdf/.docx, extract text if your runtime has a tool for it, otherwise ask them to paste the text instead).
 If they say skip: note that no resume is on file yet.
 
+### Q9b — Resume format (only if they didn't skip Q9)
+> "Is your actual resume PDF built from a LaTeX project (e.g. Overleaf), or is plain text/Word close enough to how it should look?"
+
+If they name an Overleaf (or other LaTeX) master project:
+- Ask for the project URL if not already given.
+- Capture it — this becomes the `## Resume format` master in `profile.md`, and `prep` will clone it per application instead of trying to reconstruct the visual format from scratch.
+- Ask: "Want me to set up a couple of resume variants now — different emphases of your experience for different role types (e.g. platform/infra-heavy vs. backend/distributed-systems-heavy) — so `prep` can pick the closest match instead of tailoring from the same starting point every time? (yes / later)" If yes, this is a `prep`-adjacent task, not part of onboarding itself — note it in the finish message so the user can trigger it explicitly ("set up resume variants").
+
+If plain text/Word is fine: skip — `prep` will use the markdown-only path.
+
 ---
 
 ## WRITE THE FILES
@@ -110,6 +120,22 @@ Then write all files in one go:
 
 ## Consent defaults
 *(filled in as they come up — recurring consent-style questions on application forms: AI/data processing, marketing opt-ins, interview recording tools, etc. See the apply skill's STEP 3 for how these get read and applied.)*
+
+## Known ATS platforms
+*(filled in as they come up — per-vendor quirks worth knowing before the next application on the same ATS, e.g. "iCIMS: forms are inside an iframe, file uploads can't be automated, sessions can time out within a few minutes of inactivity." See the apply skill's STEP 2/3 for how these get read.)*
+
+## Resume format
+*(only if the user's resume PDF comes from a LaTeX/Overleaf master rather than plain text — see the onboard skill's Q9b)*
+<!--
+**Master:** [Overleaf project name] — [project URL] (never edit directly — always clone)
+
+## Resume variants
+- **[Variant name]** — [Overleaf project URL]
+  Emphasis: [2-4 keywords/themes this variant leads with]
+  Best for: [role types this fits]
+  Projects section: [which of the user's projects this variant showcases]
+(add more as they're built — each one follows the same clone-from-master pattern; see the prep skill's STEP 4B)
+-->
 
 ## Scoring rubric (use when rating job listings 0–10)
 | Signal | Weight |

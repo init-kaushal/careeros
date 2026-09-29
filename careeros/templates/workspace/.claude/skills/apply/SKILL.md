@@ -12,11 +12,19 @@ If ambiguous, show a numbered list and ask which one.
 
 Read `profile.md` above the fold — you'll need name, email, phone, location, and the scoring notes.
 
+**Finish materials before opening the ATS tab.** If a tailored resume PDF and cover letter aren't already sitting in the job's folder, run (or point the user at) the `prep` skill first and get those settled. Once an ATS candidate session is open, sessions can time out from inactivity in a few minutes (see STEP 2) — the fix isn't fighting the timeout, it's not leaving the tab idle for a multi-minute side-task in the first place. Do the drafting/tailoring work first, open the application tab last.
+
+Check `profile.md` for a `## Known ATS platforms` section. If this job's ATS domain (or the vendor it's built on — iCIMS, Workday, Greenhouse, Lever, etc.) has a recorded quirk, apply that knowledge proactively instead of rediscovering it mid-flow (e.g. if a vendor is known to gate mid-form on a returning-candidate login, ask the user to confirm they're logged in to that ATS *before* STEP 2, not after hitting the wall).
+
 ---
 
 ## STEP 1 — DRAFT COVER LETTER
 
-Draft a cover letter tailored to this job. Structure:
+Check the job folder first — don't redo work `prep` already did:
+- If `jobs/discovered/[job-slug]/prep.md` has a "Cover letter angle" section, draft from that angle rather than starting cold.
+- If a cover letter file already exists in the job folder (from an earlier `apply` run on this job), show it as-is and ask "still good? (yes / regenerate / skip)" instead of drafting a new one first.
+
+Otherwise, draft a cover letter tailored to this job. Structure:
 - Opening: why this role + company specifically (1 sentence)
 - Body: 2–3 paragraphs linking profile skills to the job's visible requirements
 - Close: brief, no clichés
@@ -48,6 +56,8 @@ Look for an "Apply" or "Easy Apply" button. Click it.
 **External ATS redirects** (iCIMS, Workday, Greenhouse, Lever, etc.): the job may open the employer's own applicant-tracking site in a new tab/domain. Treat that ATS the same as the board itself for the rest of this flow — the same login-wall and consequential-action rules below apply there too.
 
 **Session timeouts**: ATS candidate sessions can expire from inactivity faster than you'd expect (observed on iCIMS: a several-minute gap while doing other work was enough to silently bounce the tab back to the start of the form, logged out). If you're going to pause mid-application to do unrelated work, either finish the current page first or expect to redo the login step afterward — re-screenshot before assuming a previously-filled page is still in the state you left it.
+
+The first time you hit a login wall, a session timeout, or an iframe/embedded-form limitation on a given ATS vendor (iCIMS, Workday, Greenhouse, Lever, etc.), write it to `## Known ATS platforms` in `profile.md` — one line, vendor-level, not job-specific — so STEP 0's proactive check catches it next time instead of the flow rediscovering it live.
 
 ---
 
@@ -89,7 +99,7 @@ Fill each field from `profile.md`. Use `form_input` for text fields.
 - Location → current location
 - Years of experience → experience
 - LinkedIn URL → linkedin field
-- Resume upload → if a tailored resume exists at `jobs/discovered/[job-slug]/resume.md` (from the prep skill), tell the user it's ready to upload from there; otherwise skip and note it for the user to handle manually
+- Resume upload → look for a PDF in `jobs/discovered/[job-slug]/` (from the prep skill's Overleaf path — `[Name]_Resume_[Company].pdf`). If one exists, tell the user exactly that filename and where it is so they can pick it in the file dialog. If only `resume.md` exists (markdown-only path, no PDF), say so and ask how they want to get it into upload-ready form before continuing — don't invent a PDF pipeline mid-application. If neither exists, skip and note it for the user to handle manually.
 - Cover letter → paste the drafted letter
 
 **For questions you can't answer from profile** (e.g. "Do you require visa sponsorship?", "Expected salary"):

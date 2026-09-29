@@ -75,9 +75,11 @@ Then ask:
 
 ## STEP 5 — SAVE
 
+Every job gets its own directory — `prep`, `apply`, `outreach`, and `track` all write and read files (`prep.md`, `resume.md`, `company.md`, `people.md`, tailored resume/cover-letter PDFs) alongside the job record, so a flat file per job doesn't hold them. Use the same slug everywhere: `[company-slug]-[title-slug]` (lowercase, hyphenated, no date — the date lives inside the file).
+
 For each selected job:
 
-**A.** Create `jobs/discovered/YYYY-MM-DD-company-title.md`:
+**A.** Create `jobs/discovered/[company-slug]-[title-slug]/job.md`:
 ```markdown
 # [Title] at [Company]
 

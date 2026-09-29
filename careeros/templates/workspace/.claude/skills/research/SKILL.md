@@ -6,6 +6,19 @@ Supports three research modes — run whichever the user asks for, or all three 
 
 ---
 
+## STEP -1 — CHECK FOR EXISTING RESEARCH FIRST
+
+Before opening any tab, check whether this company has already been researched for a *different* role — `jobs/discovered/*/company.md` and `jobs/discovered/*/people.md` are per-job files, but the company itself doesn't change between two roles at the same employer.
+
+Search other job folders for a `company.md` (or `people.md`) whose `# [Company]` header matches. If found and dated within the last ~30 days:
+> "Already researched [Company] on [date] for [other role] — reuse that, or refresh anyway?"
+
+On reuse: copy the file into this job's folder as-is (update nothing except adding a note of which job it was reused from), append to `activity.md`, and skip the mode(s) it covers. On refresh, or if none found / stale: proceed with the mode below as normal.
+
+This applies to Mode A and Mode C (company info and comp data don't change per-role); Mode B (people) is worth refreshing more often since headcount and hiring-manager assignments turn over faster — still check, but weight toward refreshing if it's been more than a couple of weeks.
+
+---
+
 ## MODE A — COMPANY RESEARCH
 
 ### A1 — Open company page
