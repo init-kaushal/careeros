@@ -123,6 +123,7 @@ def test_browse_checks_sponsorship_and_market_floor(tmp_workspace: Path) -> None
 
 
 def test_browse_finds_contacts_and_offers_route(tmp_workspace: Path) -> None:
+    scaffold(tmp_workspace, runtime="claude")
     text = (tmp_workspace / ".claude" / "skills" / "browse" / "SKILL.md").read_text()
     assert "people.md" in text
     assert "reach out first" in text
