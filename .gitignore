@@ -28,3 +28,8 @@ htmlcov/
 .worktrees/
 .superpowers/
 _site/
+
+# Local assistant output (may contain personal data) - never commit
+Claude outputs/
+job-search/
+*.pdf
