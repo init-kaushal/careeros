@@ -71,3 +71,29 @@ def test_claude_and_gpt_can_coexist(tmp_workspace: Path) -> None:
     scaffold(tmp_workspace, runtime="gpt")
     assert (tmp_workspace / "CLAUDE.md").exists()
     assert (tmp_workspace / "AGENTS.md").exists()
+
+
+@pytest.mark.parametrize("runtime,prefix", [("claude", ".claude/skills/"), ("gpt", ".gpt/skills/")])
+def test_boards_catalog_ships_in_onboard_skill(tmp_workspace: Path, runtime: str, prefix: str) -> None:
+    written = scaffold(tmp_workspace, runtime=runtime)
+    assert f"{prefix}onboard/boards-catalog.md" in written
+
+
+def test_boards_catalog_is_refreshed(tmp_workspace: Path) -> None:
+    scaffold(tmp_workspace, runtime="claude")
+    catalog = tmp_workspace / ".claude" / "skills" / "onboard" / "boards-catalog.md"
+    catalog.write_text("stale")
+    scaffold(tmp_workspace, refresh=True, runtime="claude")
+    assert "Singapore" in catalog.read_text()
+
+
+@pytest.mark.parametrize("path", [
+    ".claude/skills/onboard/SKILL.md",
+    ".gpt/skills/onboard/SKILL.md",
+])
+def test_onboard_skills_ask_about_markets(tmp_workspace: Path, path: str) -> None:
+    runtime = "claude" if path.startswith(".claude") else "gpt"
+    scaffold(tmp_workspace, runtime=runtime)
+    text = (tmp_workspace / path).read_text()
+    assert "## Markets" in text
+    assert "boards-catalog.md" in text

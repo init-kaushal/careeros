@@ -8,7 +8,8 @@
 
 Read these files before touching the browser:
 1. `profile.md` — above the fold only. Internalize target roles, stack, scoring rubric, and the **comp floor** (minimum compensation). You will check every shortlisted job against it in STEP 3.
-2. `boards.md` — find the entry for the requested board. Get the browse URL.
+2. `boards.md` — find the entry for the requested board. Get the browse URL and its `**Market:**` line (default `home`).
+3. If `profile.md` has a `## Markets` table, take that market's **minimum base** and sponsorship need. Use *that* floor — not the home one — in the comp check. If the market's floor is `TBD — benchmark`, say so and benchmark it from the comp data you find instead of guessing.
 
 If the board is not in boards.md, ask the user for the URL and add it before proceeding.
 

@@ -36,10 +36,21 @@ Capture: target titles.
 
 Capture: city/country, remote preference.
 
-### Q5 — Compensation floor
-> "What's your minimum acceptable compensation? (annual, in whatever currency you think in)"
+### Q4b — Working abroad
+> "Would you also consider roles outside your home country? If yes, which countries or regions (e.g. Singapore, Thailand, Vietnam, Germany, the Netherlands), and would you need the employer to sponsor your visa?"
 
-Capture: number + currency.
+If no: skip Q5b and leave `## Markets` as the home market only.
+If yes: for each country or region, capture the country/city and whether sponsorship is **required**, **preferred**, or **not needed** (e.g. remote from home, or already eligible). Ask which one is the top priority.
+
+### Q5 — Compensation floor
+> "What's your minimum acceptable compensation? (annual **base**, in whatever currency you think in — this is for your home market; I'll ask about other markets next if you listed any)"
+
+Capture: number + currency. Store it as a **base** figure — stock and bonuses are upside, not part of the floor.
+
+### Q5b — Floors for other markets (only if Q4b listed markets)
+> "For each market you named, what's the minimum annual base you'd accept, in that country's currency? If you don't know what's realistic, say 'help me benchmark' — I'll leave it blank and fill it in after the market research."
+
+Capture one floor per market, or `TBD — benchmark`. Never guess or convert a floor silently from the home number; salaries, taxes and living costs differ too much.
 
 ### Q6 — Target companies
 > "Any specific companies or types of companies you're targeting? (e.g. MNCs, Series B startups, product companies)"
@@ -57,6 +68,8 @@ Capture: company preferences.
 > Which ones? (say 'all' or pick numbers)"
 
 Capture: selected boards.
+
+**If Q4b listed other markets**, also read `boards-catalog.md` (in this skill's directory) and offer the boards for each market: *"For [market] I'd suggest [boards from the catalog]. Add them? (yes / pick / skip)"*. Instahyre and Naukri are India boards — don't offer them for other markets. Note each board's status in the catalog: prefer `checked` ones, and tell the user when a board is `unchecked` or `browser-only`.
 
 ### Q8 — LinkedIn search URL (only if LinkedIn selected)
 > "For LinkedIn, I'll use a default search for Senior Software Engineer in your city. Should I use that, or do you have a specific search URL you prefer?"
@@ -111,9 +124,17 @@ Then write all files in one go:
 **Other:** [from Q2]
 
 ## Preferences
-- **Minimum compensation:** [from Q5]
+- **Minimum compensation (base, home market):** [from Q5]
 - **Remote preference:** [from Q4]
 - **Target companies:** [from Q6]
+
+## Markets
+*(where you'd work and the terms for each; written from Q4b/Q5b. Home market first. The `browse` comp check uses the matching market's floor. Visa and salary rules are not stored here — they change, so the market research looks them up and dates them.)*
+
+| Market | Min base (per year) | Sponsorship | Priority |
+|--------|---------------------|-------------|----------|
+| [home country/city] (home) | [from Q5] | not needed | [1/2/3] |
+| [other market, e.g. Singapore] | [from Q5b, or TBD — benchmark] | [required / preferred / not needed] | [1/2/3] |
 
 ## Platform preferences
 *(filled in as they come up — one-time consent choices on job boards/ATS platforms that would otherwise be asked on every application, e.g. LinkedIn's profile-sharing toggle)*
@@ -146,7 +167,9 @@ Then write all files in one go:
 | Location match or remote-friendly | Medium |
 | Seniority level matches target | High |
 | Company type matches preference | Medium |
-| Compensation signals above minimum | Medium |
+| Compensation signals above the minimum for that listing's market | Medium |
+| Listing is in a market from `## Markets` and its sponsorship need is met (offered, or not needed) | Medium |
+| Sponsorship is required but the listing says none, or demands existing right to work | Negative — deprioritize |
 
 ## ── HISTORY (on demand; do not read past this line) ──
 ```
@@ -160,26 +183,35 @@ Only include boards the user selected. For each:
 
 ## Browser-based (use Claude-in-Chrome with your real session)
 
+Every board entry has a `**Market:**` line — the market from `## Markets` that board serves (use `home` for the home market). `browse` uses it to pick the right comp floor.
+
 ### linkedin  ← only if selected
 - **Browse URL:** [URL from Q8, or constructed default]
+- **Market:** home
 - **Session:** Log in via your regular Chrome before browsing
 - **Notes:** Adjust keywords in the URL to change what you see
 
 ### instahyre  ← only if selected
 - **Browse URL:** `https://www.instahyre.com/candidate/opportunities/?matching=true`
+- **Market:** home
 - **Session:** Log in via your regular Chrome before browsing
 - **Notes:** Shows personalized matched opportunities
 
 ### wellfound  ← only if selected
 - **Browse URL:** `https://wellfound.com/jobs?role=software-engineer&location=[city]`
+- **Market:** home
 - **Session:** Log in if prompted
 
 ### naukri  ← only if selected
 - **Browse URL:** `https://www.naukri.com/[role-slug]-jobs-in-[city]`
+- **Market:** home
 - **Session:** Log in if prompted
 
+### Regional boards  ← only for markets from Q4b, copied from `boards-catalog.md`
+For each, use the same fields (`Browse URL`, `Market`, `Session`, `Notes`) and set `**Market:**` to that market's name.
+
 ## Adding a new board
-Add an entry here with the browse URL. Say "browse [board]" to use it.
+Add an entry here with the browse URL and a `**Market:**` line. Say "browse [board]" to use it.
 ```
 
 ### 3. `jobs/pipeline.md`
@@ -230,6 +262,7 @@ After writing all files, say:
 >
 > - **Profile:** `profile.md` — edit anytime to adjust your scoring rubric or preferences
 > - **Boards configured:** [list the boards they chose]
+> - **Markets:** [home market, plus any others from Q4b — edit `## Markets` in `profile.md` to change floors or sponsorship needs]
 > - **Resume:** [`resume.md` saved — I'll use it for tailored resumes and applications. / not on file yet — say "add my resume" anytime.]
 > - **Pipeline:** `jobs/pipeline.md` — tracks everything you save
 >
