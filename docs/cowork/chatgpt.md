@@ -24,9 +24,10 @@ Creates:
 ├── AGENTS.md
 └── .gpt/skills/
     ├── onboard/   browse/   track/
+    ├── market/
 ```
 
-> **Note:** GPT Work ships the core three skills (onboard, browse, track). The full skill set — apply, research, outreach, follow-up, prep, interview, offer — requires Claude Code, which has direct file access and real browser control via Claude-in-Chrome. See the [capability comparison](index.md#choose-your-runtime) for details.
+> **Note:** GPT Work ships four skills (onboard, browse, track, market). The full skill set — apply, research, outreach, follow-up, prep, interview, offer — requires Claude Code, which has direct file access and real browser control via Claude-in-Chrome. See the [capability comparison](index.md#choose-your-runtime) for details.
 
 ---
 
@@ -52,6 +53,8 @@ In the project, click **Add files** and upload:
 - `.gpt/skills/onboard/SKILL.md`
 - `.gpt/skills/browse/SKILL.md`
 - `.gpt/skills/track/SKILL.md`
+- `.gpt/skills/market/SKILL.md`
+- `.gpt/skills/onboard/boards-catalog.md`
 
 ---
 

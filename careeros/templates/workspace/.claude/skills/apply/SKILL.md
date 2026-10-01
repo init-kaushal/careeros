@@ -104,7 +104,11 @@ Fill each field from `profile.md`. Use `form_input` for text fields.
 - Resume upload → look for a PDF in `jobs/discovered/[job-slug]/` (from the prep skill's Overleaf path — `[Name]_Resume_[Company].pdf`). If one exists, tell the user exactly that filename and where it is so they can pick it in the file dialog. If only `resume.md` exists (markdown-only path, no PDF), say so and ask how they want to get it into upload-ready form before continuing — don't invent a PDF pipeline mid-application. If neither exists, skip and note it for the user to handle manually.
 - Cover letter → paste the drafted letter
 
-**For questions you can't answer from profile** (e.g. "Do you require visa sponsorship?", "Expected salary"):
+**Work authorization and visa questions** ("Are you legally authorized to work in…?", "Will you now or in the future require sponsorship?"): answer from the `## Markets` row for this job's country (sponsorship need) and `markets/[country].md` if it exists. Say plainly what is true — if the user needs sponsorship, the answer is yes. Never claim a right to work or a status the user hasn't stated. If the form's options don't fit the real situation (for example only "authorized / not authorized" when the user would need a visa), stop and ask — don't pick the closest option.
+
+**Expected salary / notice period:** give a figure in the job's currency drawn from the market file's range and the user's floor for that market, and confirm it with the user before entering it. Don't convert the home number.
+
+**For other questions you can't answer from profile**:
 Stop and ask the user for each one individually before proceeding.
 
 ---

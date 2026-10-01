@@ -31,6 +31,7 @@ Draft a note that:
 - References one concrete thing about their work or the company (from `company.md` or their profile)
 - Is human, not salesy
 - Does NOT ask for a job in the first message
+- For a non-home market, check `markets/[country].md` for local norms (formality, dominant platform, language) and mention time zones if a call is suggested
 
 Run it through the `humanize` skill first — a 300-character note has no room for a stock phrase, and "is human, not salesy" above is exactly what that skill checks for.
 

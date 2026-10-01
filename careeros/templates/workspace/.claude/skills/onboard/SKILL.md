@@ -266,7 +266,9 @@ After writing all files, say:
 > - **Resume:** [`resume.md` saved — I'll use it for tailored resumes and applications. / not on file yet — say "add my resume" anytime.]
 > - **Pipeline:** `jobs/pipeline.md` — tracks everything you save
 >
-> To start: say **'browse [board]'** and I'll open it in Chrome, pull listings, score them against your profile, and save what you want to keep."
+> To start: say **'browse [board]'** and I'll open it in Chrome, pull listings, score them against your profile, and save what you want to keep.
+>
+> [If Q4b listed other markets:] To check visa options and typical pay first, say **'research [country] market'** — I'll save what I find in `markets/`."
 
 ---
 

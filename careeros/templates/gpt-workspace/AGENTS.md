@@ -32,12 +32,14 @@ The user applies these to their local workspace. Always output complete file con
 |---------|-----------|
 | "browse [board]" / "find jobs on [board]" | `.gpt/skills/browse/SKILL.md` |
 | "show pipeline" / "track" / "status" | `.gpt/skills/track/SKILL.md` |
+| "research [country] market" / "can I work in [country]?" / "visa options for [country]" | `.gpt/skills/market/SKILL.md` |
 
 ## Workspace layout
 
 ```
 profile.md          — career profile + scoring rubric (fold file)
-boards.md           — configured boards and search queries
+boards.md           — configured boards, search queries and the market each serves
+markets/            — one .md per country: visa routes, eligibility, typical pay, local norms
 jobs/
   pipeline.md       — active pipeline (fold file)
   discovered/       — one .md per saved job

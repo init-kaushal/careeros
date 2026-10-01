@@ -66,6 +66,12 @@ Drop listings scoring < 6.
 
 For the top 10 listings, search for compensation for that role, level and city (Levels.fyi, AmbitionBox, Glassdoor, LeetCode Discuss compensation posts) and compare it with the comp floor in `profile.md`. Never present comp as "unchecked" — if there is no data, write "unknown" and say what you searched. Self-reported sites skew low and often show fixed pay only; say so. A role clearly below the floor caps at 6; borderline stays but is flagged.
 
+For a board that serves a non-home market, use that market's floor from the `## Markets` table in `profile.md` (its `Market:` line in `boards.md` says which), keep the currency local, and compare base to base.
+
+### Sponsorship check (listings outside the home market, or when `## Markets` says sponsorship is required)
+
+Classify each listing as **offered** ("visa sponsorship", "relocation package/support"), **not offered** ("must have the right to work", "no sponsorship", "citizens only") or **unknown** (says nothing — the common case; don't treat silence as yes or no), with a short phrase as evidence. If sponsorship is required and the listing is not offered, cap the score at 3. Unknown stays but is flagged: "ask the recruiter early". If `markets/[country].md` exists, compare any stated pay with its route thresholds and flag a likely mismatch. If it doesn't exist, suggest "research [country] market" first.
+
 ---
 
 ## STEP 3 — Present results
@@ -73,9 +79,9 @@ For the top 10 listings, search for compensation for that role, level and city (
 Show a markdown table sorted by score descending:
 
 ```
-| # | Score | Title | Company | Location | Comp (source, confidence) | URL |
-|---|-------|-------|---------|----------|---------------------------|-----|
-| 1 | 8.5   | Senior Backend Engineer | Stripe | Remote | ₹55–70L (Levels.fyi, medium) | [link] |
+| # | Score | Title | Company | Location | Comp (source, confidence) | Sponsor | URL |
+|---|-------|-------|---------|----------|---------------------------|---------|-----|
+| 1 | 8.5   | Senior Backend Engineer | Stripe | Remote | ₹55–70L (Levels.fyi, medium) | n/a | [link] |
 ...
 ```
 
@@ -97,6 +103,8 @@ For each job the user selects, output two code blocks:
 
 - **URL:** [url]
 - **Location:** [location]
+- **Market:** [home / market name]
+- **Sponsorship:** [offered / not offered / unknown]
 - **Score:** [score]/10
 - **Added:** [date]
 

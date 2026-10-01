@@ -144,6 +144,7 @@ After outputting all files, say:
 >
 > - **Find jobs:** say 'browse linkedin' (or any board) — I'll use web search and show you scored listings.
 > - **Track pipeline:** say 'show pipeline' to see your job status table.
+> - **Other countries:** if you named any, say 'research [country] market' for visa routes, eligibility and typical pay.
 > - **Update status:** say 'mark [job] as applied' and I'll output the updated pipeline.md.
 >
 > Note: since I can't write files directly, you'll need to save each output I give you. I'll always show complete file contents so you can copy-paste them."

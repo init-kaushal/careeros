@@ -25,6 +25,7 @@
 | Trigger | Skill |
 |---------|-------|
 | "research [company]" / "find people at [company]" / "comp research for [role]" | `.claude/skills/research/SKILL.md` |
+| "research [country] market" / "can I work in [country]?" / "visa options for [country]" | `.claude/skills/market/SKILL.md` |
 
 ### Application
 | Trigger | Skill |
@@ -49,7 +50,9 @@
 ```
 profile.md              — career profile + scoring rubric (fold file)
 resume.md                — your source-of-truth resume (added at onboarding, or via "add my resume")
-boards.md               — configured boards and browse URLs
+boards.md               — configured boards, browse URLs and the market each serves
+markets/
+  [country].md          — visa routes, your eligibility, typical pay, local application norms (dated, cited)
 jobs/
   pipeline.md           — active pipeline (fold file)
   discovered/

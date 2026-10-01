@@ -97,3 +97,26 @@ def test_onboard_skills_ask_about_markets(tmp_workspace: Path, path: str) -> Non
     text = (tmp_workspace / path).read_text()
     assert "## Markets" in text
     assert "boards-catalog.md" in text
+
+
+@pytest.mark.parametrize("runtime,prefix", [("claude", ".claude/skills/"), ("gpt", ".gpt/skills/")])
+def test_market_skill_ships_and_is_cautious(tmp_workspace: Path, runtime: str, prefix: str) -> None:
+    written = scaffold(tmp_workspace, runtime=runtime)
+    assert f"{prefix}market/SKILL.md" in written
+    text = (tmp_workspace / prefix / "market" / "SKILL.md").read_text()
+    assert "not legal or immigration advice" in text
+    assert "unverified" in text
+    assert "Refresh after" in text
+
+
+@pytest.mark.parametrize("runtime,sentinel", [("claude", "CLAUDE.md"), ("gpt", "AGENTS.md")])
+def test_entrypoint_routes_to_market_skill(tmp_workspace: Path, runtime: str, sentinel: str) -> None:
+    scaffold(tmp_workspace, runtime=runtime)
+    assert "market/SKILL.md" in (tmp_workspace / sentinel).read_text()
+
+
+def test_browse_checks_sponsorship_and_market_floor(tmp_workspace: Path) -> None:
+    scaffold(tmp_workspace, runtime="claude")
+    text = (tmp_workspace / ".claude" / "skills" / "browse" / "SKILL.md").read_text()
+    assert "Sponsorship check" in text
+    assert "**Market:**" in text

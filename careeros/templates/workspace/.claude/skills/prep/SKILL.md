@@ -12,6 +12,7 @@ Read:
 1. `profile.md` — full file (above and below the fold if needed — you need skills detail)
 2. `resume.md` — if it doesn't exist, ask: "You don't have a resume on file yet — paste it or a file path and I'll save it, or say 'skip' for a tailoring brief without a full tailored resume." Proceed without it only if they say skip — in that case, skip STEP 4B below.
 3. The job file from `jobs/discovered/` matching the user's mention
+4. If the job's `Market:` is not home and `markets/[country].md` exists, read its **Local application conventions**. Adapt the brief and resume to them — for example trim to a one- or two-page norm, or note the expected language — reordering and trimming only what is true. If a photo, date of birth or similar is customary, that's the user's decision: ask, don't add it.
 
 If the job file exists but has no JD text, navigate to the job URL and extract the full description:
 1. `tabs_create_mcp` — new tab

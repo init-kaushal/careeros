@@ -31,6 +31,7 @@ Creates:
 └── .claude/skills/
     ├── onboard/   browse/   track/
     ├── research/  prep/     apply/
+    ├── market/
     ├── outreach/  follow-up/
     ├── interview/ offer/
 ```

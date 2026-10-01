@@ -23,12 +23,14 @@ pass over drafted cover letters, outreach, and follow-ups.
 floor and sponsorship need, instead of one home-country setup.
 - *Phase 1 (done):* `## Markets` in `profile.md`, a regional boards catalog, onboarding
   questions (Claude and GPT), and the per-market floor in the browse comp check.
-- *Phase 2:* a `market` skill that researches current visa routes and salary thresholds,
-  checks eligibility against the profile, and saves a dated, cited file per country
-  (nothing hardcoded — rules change); sponsorship detection and a Sponsor column in browse.
-- *Phase 3:* apply and outreach handle work-authorization questions and local conventions;
-  GPT parity.
-- *Phase 4:* live-test on Singapore, Thailand, Vietnam and the EU, and fix what breaks.
+- *Phase 2 (done):* a `market` skill that researches current visa routes and salary
+  thresholds, checks eligibility against the profile, and saves a dated, cited file per
+  country (nothing hardcoded — rules change); sponsorship detection and a Sponsor column
+  in browse.
+- *Phase 3 (done):* apply, prep, outreach and offer handle work-authorization questions,
+  local conventions and cross-market comparisons; GPT parity for `market` and browse.
+- *Phase 4 (next):* live-test end to end on Singapore, Thailand, Vietnam and the EU, and
+  fix what breaks. Nothing in phases 1–3 has run against a real market yet.
 
 **1. Live-test what's unproven.** Browse, apply, prep and research have run against real
 jobs. Outreach, follow-up, track, the humanize pass, and the resume-variant flow end to end

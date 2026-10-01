@@ -53,9 +53,11 @@ Cross-reference against `company.md` comp research (if exists). If not:
 > "I don't have comp data for this role yet. Want me to run comp research now to benchmark this offer?"
 
 Compare:
-- Against the profile.md comp floor: is it above/below/at?
+- Against the profile.md comp floor — for an offer outside the home market, the floor in the `## Markets` row for that country: is it above/below/at?
 - Against market data from comp research
 - Against any other offers on file
+
+**Cross-market offers:** if the offer is in another country, also read `markets/[country].md`. Compare **net**, not nominal — convert only to illustrate (state rate and date), and estimate after-tax pay and cost of living for each city; say clearly that it's an estimate. Then raise the questions that don't exist at home: Who sponsors the visa, and what happens to it if the job ends or changes? Is the status tied to this employer? Relocation package, visa fees, dependants' visas, start-date timing and notice. Don't accept or sign anything until the user has confirmed the visa position with an official source.
 
 ---
 
@@ -122,6 +124,9 @@ If the user has more than one offer, build a comparison table:
 | Location | | |
 | Level | | |
 | Remote | | |
+| Net take-home (your estimate) | | |
+| Visa / status — who sponsors? | | |
+| Relocation support | | |
 | Offer expires | | |
 
 Then surface non-comp factors:

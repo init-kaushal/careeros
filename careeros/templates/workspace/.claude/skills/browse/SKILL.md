@@ -10,6 +10,7 @@ Read these files before touching the browser:
 1. `profile.md` — above the fold only. Internalize target roles, stack, scoring rubric, and the **comp floor** (minimum compensation). You will check every shortlisted job against it in STEP 3.
 2. `boards.md` — find the entry for the requested board. Get the browse URL and its `**Market:**` line (default `home`).
 3. If `profile.md` has a `## Markets` table, take that market's **minimum base** and sponsorship need. Use *that* floor — not the home one — in the comp check. If the market's floor is `TBD — benchmark`, say so and benchmark it from the comp data you find instead of guessing.
+4. If the board's market is **not home**, look for `markets/[country-slug].md`. Missing, or past its `Refresh after` date → say: "I haven't researched [country]'s visa routes yet (or it's stale). Run 'research [country] market' first (recommended), or continue and treat sponsorship as unverified?" If it exists, note the route salary thresholds — you will compare listings against them in STEP 3.
 
 If the board is not in boards.md, ask the user for the URL and add it before proceeding.
 
@@ -81,7 +82,19 @@ Sources, in order:
 3. **LeetCode Discuss "compensation" posts** and **Blind** — individual offers; note the year (they go stale).
 4. The listing's own page (Instahyre/Wellfound/LinkedIn job page often shows a band).
 
+**Non-home markets:** use that country's sources (Levels.fyi filtered to the country, Glassdoor's local site, the local boards' salary pages), keep the currency local, state the conversion rate and date if you convert, and compare **base to the market floor**. Nominal figures mislead across countries — taxes and living costs differ, so a lower number can be the better net; say so rather than ranking by raw conversion.
+
 Record per job: the range, whether it is fixed or total comp, the source, and a confidence (high / medium / low / unknown). Then compare with the comp floor in profile.md — like with like: if the floor is a base figure, compare base to base, and treat stock and bonuses as upside — and adjust the score: clearly below the floor → cap at 6 and say why; borderline → keep and flag; unknown → keep, flag, and note the gap. Early-stage startups usually have no public data — mark them unknown rather than guessing.
+
+### Sponsorship check (every listing outside the home market, and any listing where `## Markets` says sponsorship is required)
+
+Classify each shortlisted job as **offered**, **not offered** or **unknown**, with a short quote of the deciding phrase (under 15 words). If the listing snippet doesn't show the full description, open the listing in a new tab and read it — do this for the top 10–12 only.
+
+- **Offered:** "visa sponsorship", "we sponsor", "relocation package/assistance/support", "visa support".
+- **Not offered:** "must have the right to work in…", "no sponsorship", "unable to sponsor", "citizens / permanent residents only", "work authorization required", "local candidates only".
+- **Unknown:** the listing says nothing. This is the common case — don't treat silence as a yes or a no.
+
+Scoring: if sponsorship is **required** and the listing is **not offered**, cap the score at 3 and say why. **Unknown** keeps its score but is flagged — "ask the recruiter about sponsorship before investing time". **Offered** is a plus. If a market file exists and the listing shows pay, compare it with the route thresholds and flag a likely mismatch ("pay may be below the [route] threshold").
 
 ---
 
@@ -89,8 +102,10 @@ Record per job: the range, whether it is fixed or total comp, the source, and a 
 
 Show a markdown table sorted by score descending:
 
-| # | Score | Company | Title | Location | Comp (source, confidence) | URL |
-|---|-------|---------|-------|----------|---------------------------|-----|
+| # | Score | Company | Title | Location | Comp (source, confidence) | Sponsor | URL |
+|---|-------|---------|-------|----------|---------------------------|---------|-----|
+
+(The Sponsor column is needed whenever the board's market isn't home; for home-market boards you may leave it out.)
 
 Then ask:
 > "Pick jobs to save (e.g. 1 3 5), or 'q' to skip."
@@ -109,6 +124,8 @@ For each selected job:
 
 - **Board:** [board]
 - **Location:** [location]
+- **Market:** [home / market name]
+- **Sponsorship:** [offered / not offered / unknown] — [short quote, if any]
 - **URL:** [url]
 - **Score:** [score]
 - **Discovered:** [date]
