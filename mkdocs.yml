@@ -41,6 +41,7 @@ nav:
     - Overview: cowork/index.md
     - Claude Code: cowork/claude-code.md
     - GPT Work: cowork/chatgpt.md
+  - Lessons Learned: lessons-learned.md
 
 markdown_extensions:
   - admonition

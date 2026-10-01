@@ -12,6 +12,7 @@ Read `profile.md` above the fold and `boards.md`.
 
 Extract:
 - scoring rubric
+- comp floor (minimum compensation)
 - target roles (for search queries)
 - board config for the requested board
 
@@ -61,6 +62,10 @@ Extract per listing:
 
 Drop listings scoring < 6.
 
+### Comp check (required)
+
+For the top 10 listings, search for compensation for that role, level and city (Levels.fyi, AmbitionBox, Glassdoor, LeetCode Discuss compensation posts) and compare it with the comp floor in `profile.md`. Never present comp as "unchecked" — if there is no data, write "unknown" and say what you searched. Self-reported sites skew low and often show fixed pay only; say so. A role clearly below the floor caps at 6; borderline stays but is flagged.
+
 ---
 
 ## STEP 3 — Present results
@@ -68,9 +73,9 @@ Drop listings scoring < 6.
 Show a markdown table sorted by score descending:
 
 ```
-| # | Score | Title | Company | Location | URL |
-|---|-------|-------|---------|----------|-----|
-| 1 | 8.5   | Senior Backend Engineer | Stripe | Remote | [link] |
+| # | Score | Title | Company | Location | Comp (source, confidence) | URL |
+|---|-------|-------|---------|----------|---------------------------|-----|
+| 1 | 8.5   | Senior Backend Engineer | Stripe | Remote | ₹55–70L (Levels.fyi, medium) | [link] |
 ...
 ```
 
