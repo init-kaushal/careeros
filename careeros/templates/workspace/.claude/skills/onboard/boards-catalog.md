@@ -51,6 +51,17 @@ Replace `[role]`, `[city]`, `[country]` with the user's target role and market. 
 | Welcome to the Jungle | `https://www.welcometothejungle.com/en/jobs` | France and wider EU; startups and scale-ups. | unchecked |
 | EURES | `https://eures.europa.eu/` | Official EU job portal across member states. | unchecked |
 
+## Australia and New Zealand
+
+| Board | Browse URL | Notes | Status |
+|---|---|---|---|
+| SEEK Australia | `https://www.seek.com.au/[role-slug]-jobs` | Largest Australian board. | browser-only |
+| SEEK New Zealand | `https://www.seek.co.nz/[role-slug]-jobs` | Largest New Zealand board. | browser-only |
+| Trade Me Jobs | `https://www.trademe.co.nz/a/jobs` | Large New Zealand board. | unchecked |
+| LinkedIn | location = Australia / New Zealand (or Sydney, Melbourne, Auckland) | Multinationals and tech companies. Add "visa sponsorship" to the keywords to bias results. | checked |
+
+Both countries run their own skilled-visa systems and employer-accreditation schemes; the market skill researches the current routes. Do not assume a listing offers sponsorship from the board it appears on.
+
 ## UK and Gulf
 
 | Board | Browse URL | Notes | Status |
