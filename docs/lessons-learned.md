@@ -32,3 +32,10 @@ Things CareerOS missed or tripped over during live use, and what changed. Add a 
 
 - A restart of Chrome did not clear the extension connection problems; disabling the extension in the other browser (Arc) is what fixed it.
 - Close every tab the agent opened before finishing.
+
+### Added 2026-10-01
+
+| What went wrong | Why | Fix |
+|---|---|---|
+| A resume PDF was committed to the repo | A blanket `git add -A` picked up a local output folder | Stage files by name; `Claude outputs/` and `*.pdf` are now git-ignored. Personal data never belongs in this repo |
+| Contacts were only found when asked | Contact search was a separate step | `browse` now finds hiring contacts for every saved job and asks whether to reach out first, apply directly, or both |

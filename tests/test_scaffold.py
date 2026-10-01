@@ -120,3 +120,16 @@ def test_browse_checks_sponsorship_and_market_floor(tmp_workspace: Path) -> None
     text = (tmp_workspace / ".claude" / "skills" / "browse" / "SKILL.md").read_text()
     assert "Sponsorship check" in text
     assert "**Market:**" in text
+
+
+def test_browse_finds_contacts_and_offers_route(tmp_workspace: Path) -> None:
+    text = (tmp_workspace / ".claude" / "skills" / "browse" / "SKILL.md").read_text()
+    assert "people.md" in text
+    assert "reach out first" in text
+    assert "apply directly" in text
+
+
+def test_gitignore_blocks_assistant_output() -> None:
+    root = Path(__file__).resolve().parents[1]
+    text = (root / ".gitignore").read_text()
+    assert "Claude outputs/" in text

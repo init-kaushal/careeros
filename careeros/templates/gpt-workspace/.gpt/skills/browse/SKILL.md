@@ -140,6 +140,8 @@ After all selected jobs, output the complete updated `pipeline.md` with new rows
 ~~~
 ```
 
+**Hiring contacts and route (every time).** For each saved job, find who to reach: recruiters/talent partners whose headline says they are hiring, the engineering manager for the role, and one peer engineer (founders only as a fallback). If you can't browse LinkedIn, give the user the company's People-tab URL (`https://www.linkedin.com/company/[slug]/people/?keywords=talent`, then `manager`, `engineering`) and ask them to paste what they see. Write `people.md` in the job's folder. Then ask once: "For each saved job: **reach out first** (I draft the note, you send it), **apply directly**, or **both**?" Note the choice as `Route:` in the job record. Never send or submit anything for the user.
+
 ---
 
 ## Limitations note
