@@ -9,7 +9,7 @@
 Read these files before touching the browser:
 1. `profile.md` — above the fold only. Internalize target roles, stack, scoring rubric, and the **comp floor** (minimum compensation). You will check every shortlisted job against it in STEP 3.
 2. `boards.md` — find the entry for the requested board. Get the browse URL and its `**Market:**` line (default `home`).
-3. If `profile.md` has a `## Markets` table, take that market's **minimum base** and sponsorship need. Use *that* floor — not the home one — in the comp check. If the market's floor is `TBD — benchmark`, say so and benchmark it from the comp data you find instead of guessing.
+3. If `profile.md` has a `## Markets` table, take that market's **minimum base** and sponsorship need. Use *that* floor — not the home one — in the comp check. If the market's floor is `TBD`, run the `market` skill's floor derivation first (or tell the user the market is unresearched) instead of guessing.
 4. If the board's market is **not home**, look for `markets/[country-slug].md`. Missing, or past its `Refresh after` date → say: "I haven't researched [country]'s visa routes yet (or it's stale). Run 'research [country] market' first (recommended), or continue and treat sponsorship as unverified?" If it exists, note the route salary thresholds — you will compare listings against them in STEP 3.
 
 If the board is not in boards.md, ask the user for the URL and add it before proceeding.

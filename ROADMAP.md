@@ -29,6 +29,7 @@ floor and sponsorship need, instead of one home-country setup.
   in browse.
 - *Phase 3 (done):* apply, prep, outreach and offer handle work-authorization questions,
   local conventions and cross-market comparisons; GPT parity for `market` and browse.
+- *Market floors:* derived from the home floor (FX, tax, cost of living) by the `market` skill; user can override.
 - *Phase 4 (next):* live-test end to end on Singapore, Thailand, Vietnam and the EU, and
   fix what breaks. Nothing in phases 1–3 has run against a real market yet.
 

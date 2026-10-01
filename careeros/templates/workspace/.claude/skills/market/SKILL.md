@@ -70,7 +70,14 @@ Find typical **base** pay for the user's role and level in the target city:
 - Record the range, whether it is base or total, source, and confidence (high: 3+ sources close together; medium; low: one or sparse).
 
 Then:
-- Compare to the user's floor for this market. If the row says `TBD — benchmark`, **propose** a floor (e.g. the low end of the typical range for their level) and ask the user to confirm before editing the `## Markets` table.
+**Derive the floor (do this when the row says `TBD`; don't wait to be asked).** Base it on the home-market floor in the `## Markets` table:
+1. **FX:** current rate from at least two sources (state them and the date).
+2. **Home net and savings:** estimate take-home at the home floor (home income-tax rules, current regime), subtract a rough single-person home living cost (user's own figures if given in profile, otherwise Numbeo-style estimate) to get absolute yearly savings.
+3. **Destination living cost:** compare the same lifestyle in the target city (Numbeo cost-of-living comparison: rent and everyday basket separately). Use a city-centre vs outside-centre sensitivity if rent dominates.
+4. **Required net** = destination living cost + the same absolute savings (converted at FX).
+5. **Gross up** with the destination's progressive income tax and mandatory social contributions (check whether the visa holder pays them). Result = minimum monthly/yearly base.
+6. **Sanity-check** against the visa-route salary thresholds and typical market pay from above. Floor = max(derived figure, route threshold), rounded to a clean number; set a target about 10% above.
+7. **Record** the floor in the `## Markets` row and the full reasoning (inputs, assumptions, sensitivities) in the market file. Tell the user the number and that they can override it. Label tax figures approximate.
 - Add a short, rough note on income tax and cost of living, clearly labelled as approximate. If net pay matters to the decision, say what would be needed to compute it properly.
 - Check the route thresholds from STEP 1 against this range: is the typical pay above them?
 

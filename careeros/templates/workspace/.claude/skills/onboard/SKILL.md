@@ -48,9 +48,9 @@ If yes: for each country or region, capture the country/city and whether sponsor
 Capture: number + currency. Store it as a **base** figure — stock and bonuses are upside, not part of the floor.
 
 ### Q5b — Floors for other markets (only if Q4b listed markets)
-> "For each market you named, what's the minimum annual base you'd accept, in that country's currency? If you don't know what's realistic, say 'help me benchmark' — I'll leave it blank and fill it in after the market research."
+> "For each market you named, what's the minimum annual base you'd accept, in that country's currency? If you don't know, skip it — I'll derive a floor from your home one (FX, taxes, cost of living) when I research the market, and you can override it."
 
-Capture one floor per market, or `TBD — benchmark`. Never guess or convert a floor silently from the home number; salaries, taxes and living costs differ too much.
+Capture one floor per market, or `TBD — derive from home floor`. Never convert the home number at the exchange rate alone; the `market` skill derives it with tax and cost of living and shows its working.
 
 ### Q6 — Target companies
 > "Any specific companies or types of companies you're targeting? (e.g. MNCs, Series B startups, product companies)"
@@ -134,7 +134,7 @@ Then write all files in one go:
 | Market | Min base (per year) | Sponsorship | Priority |
 |--------|---------------------|-------------|----------|
 | [home country/city] (home) | [from Q5] | not needed | [1/2/3] |
-| [other market, e.g. Singapore] | [from Q5b, or TBD — benchmark] | [required / preferred / not needed] | [1/2/3] |
+| [other market, e.g. Singapore] | [from Q5b, or TBD — derive from home floor] | [required / preferred / not needed] | [1/2/3] |
 
 ## Platform preferences
 *(filled in as they come up — one-time consent choices on job boards/ATS platforms that would otherwise be asked on every application, e.g. LinkedIn's profile-sharing toggle)*

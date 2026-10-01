@@ -18,7 +18,7 @@ Then ask these questions **one at a time**, waiting for each answer:
 2. **Tech stack** — "What are your primary skills and technologies? (e.g. Python, React, AWS, product management)"
 3. **Target roles** — "What role titles are you targeting? (e.g. Senior Backend Engineer, Staff Engineer, Engineering Manager)"
 4. **Location** — "Where are you based, and are you open to remote / hybrid / relocation? If you'd consider other countries, which ones, and would you need visa sponsorship?"
-5. **Compensation floor** — "What's your minimum acceptable annual base salary, in your local currency? If you named other countries, give a minimum base for each in that country's currency — or say 'help me benchmark' and I'll leave it blank for now."
+5. **Compensation floor** — "What's your minimum acceptable annual base salary, in your local currency? If you named other countries, give a minimum base for each in that country's currency — or just skip it and I'll derive each one from your home floor (FX, tax and cost of living) during market research, which you can override."
 6. **Target companies** — "Any specific companies you want to target? (optional — skip if not sure yet)"
 7. **Job boards** — "Which job boards do you use? (LinkedIn, Instahyre, Wellfound, Naukri, or others)" If they named other markets in Q4, suggest the boards for those markets from `boards-catalog.md` in this skill's folder. Instahyre and Naukri are India boards; don't suggest them for other markets.
 8. **LinkedIn profile URL** — "What's your LinkedIn profile URL? (used for company research and outreach)"
@@ -62,7 +62,7 @@ Output each file as a complete fenced code block. The user saves each one to the
 | Market | Min base (per year) | Sponsorship | Priority |
 |--------|---------------------|-------------|----------|
 | [home] (home) | [from Q5] | not needed | 1 |
-| [other market from Q4, if any] | [per-market floor, or TBD — benchmark] | [required / preferred / not needed] | [2/3] |
+| [other market from Q4, if any] | [per-market floor, or TBD — derive from home floor] | [required / preferred / not needed] | [2/3] |
 
 Visa and salary rules are not stored here — they change. Look them up and date them when needed.
 

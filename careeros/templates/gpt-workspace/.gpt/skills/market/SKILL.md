@@ -33,7 +33,7 @@ For each route a software engineer could use, capture: name and purpose, **salar
 
 ## STEP 3 — Compensation and cost
 
-Find typical **base** pay for the user's role and level in the target city (Levels.fyi, Glassdoor's local site, local job boards). Keep the local currency; if you convert, state the rate and date. Give range, base vs total, source, and confidence. Compare with the user's floor for this market. If it says `TBD — benchmark`, **propose** a floor and ask the user to confirm before changing it. Add a rough, clearly approximate tax and cost-of-living note, and check typical pay against the route thresholds.
+Find typical **base** pay for the user's role and level in the target city (Levels.fyi, Glassdoor's local site, local job boards). Keep the local currency; if you convert, state the rate and date. Give range, base vs total, source, and confidence. Compare with the user's floor for this market. If it says `TBD`, **derive the floor yourself** from the home floor and record it (the user can override): (1) FX from two sources with date; (2) home take-home at the home floor after tax, minus a rough home living cost = absolute yearly savings; (3) same lifestyle's cost in the target city (Numbeo comparison, rent and basket separately); (4) required net = destination living cost + same savings in converted terms; (5) gross up with destination progressive tax and mandatory contributions; (6) floor = max(that figure, visa-route salary threshold), rounded, target about 10% higher; (7) write the floor into `## Markets` and the full reasoning into the market file, labelled approximate. Add a rough, clearly approximate tax and cost-of-living note, and check typical pay against the route thresholds.
 
 ## STEP 4 — Employer side
 
