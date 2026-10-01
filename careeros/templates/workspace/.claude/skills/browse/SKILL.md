@@ -80,7 +80,7 @@ Sources, in order:
 3. **LeetCode Discuss "compensation" posts** and **Blind** — individual offers; note the year (they go stale).
 4. The listing's own page (Instahyre/Wellfound/LinkedIn job page often shows a band).
 
-Record per job: the range, whether it is fixed or total comp, the source, and a confidence (high / medium / low / unknown). Then compare with the comp floor in profile.md and adjust the score: clearly below the floor → cap at 6 and say why; borderline → keep and flag; unknown → keep, flag, and note the gap. Early-stage startups usually have no public data — mark them unknown rather than guessing.
+Record per job: the range, whether it is fixed or total comp, the source, and a confidence (high / medium / low / unknown). Then compare with the comp floor in profile.md — like with like: if the floor is a base figure, compare base to base, and treat stock and bonuses as upside — and adjust the score: clearly below the floor → cap at 6 and say why; borderline → keep and flag; unknown → keep, flag, and note the gap. Early-stage startups usually have no public data — mark them unknown rather than guessing.
 
 ---
 
