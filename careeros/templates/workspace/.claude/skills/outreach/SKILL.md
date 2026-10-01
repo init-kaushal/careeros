@@ -32,6 +32,8 @@ Draft a note that:
 - Is human, not salesy
 - Does NOT ask for a job in the first message
 
+Run it through the `humanize` skill first — a 300-character note has no room for a stock phrase, and "is human, not salesy" above is exactly what that skill checks for.
+
 Show the draft with character count:
 > "[Note text] — [N]/300 characters"
 
@@ -83,6 +85,8 @@ Draft a short, human outreach email:
   - Why this company / role specifically (tie to company.md if available)
   - Concrete ask (30-min call / intro / referral — pick one)
 - Sign-off with name from profile.md
+
+Run it through the `humanize` skill before showing it.
 
 Show the full draft including subject line.
 

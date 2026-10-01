@@ -29,6 +29,8 @@ Otherwise, draft a cover letter tailored to this job. Structure:
 - Body: 2–3 paragraphs linking profile skills to the job's visible requirements
 - Close: brief, no clichés
 
+Run the draft through the `humanize` skill before showing it — cover letters are where AI-sounding phrasing costs the most (it's the one artifact a human reads closely and judges the whole application by).
+
 Show the draft. Ask:
 > "Cover letter looks good? (yes / regenerate / skip cover letter)"
 

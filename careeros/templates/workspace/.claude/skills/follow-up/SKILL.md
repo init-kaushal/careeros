@@ -87,6 +87,8 @@ A short note to the recruiter (if known from people.md) or via the company's app
 
 > "Hi [recruiter name] — I applied for [role] on [date] and wanted to express continued interest. Happy to answer any questions. [name]"
 
+Run whichever message got drafted through the `humanize` skill before moving to STEP 4 — these templates are a starting point, and filled-in verbatim they read as a template.
+
 ---
 
 ## STEP 4 — REVIEW AND CONFIRM
