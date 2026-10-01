@@ -13,6 +13,14 @@ Things CareerOS missed or tripped over during live use, and what changed. Add a 
 | Instahyre's own score was useless | Most jobs sit at a flat 4.5 | Ignore it; score against `profile.md` |
 | A "change your job search status" modal covered the page | Instahyre prompts on load; both buttons change an account setting | Don't click either; the API fetch works regardless |
 
+## People research
+
+| What went wrong | Why | Fix |
+|---|---|---|
+| First people list was founders and C-level only | Web search surfaces press-release names; they rarely reply to cold outreach | `research` Mode B now targets recruiters, talent partners, hiring EMs and a peer for referral, with founders as fallback |
+| Global LinkedIn keyword search returned irrelevant recruiters | Not scoped to the company; OR queries misbehave | Use the company's `/people/?keywords=` page with one keyword at a time |
+| Wrong or ambiguous company matches (Arcana, Matters, Different AI) | Generic names collide | Confirm slug, size, location and what the company does before trusting a people list |
+
 ## Browser connection
 
 | What went wrong | Why | Fix |

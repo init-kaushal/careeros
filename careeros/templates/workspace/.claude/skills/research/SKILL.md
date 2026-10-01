@@ -77,6 +77,16 @@ If not logged in:
 > "You're not logged in to LinkedIn. Log in and say 'find people at [company]' again."
 Stop.
 
+### B1b — Prefer the company's own People tab (more reliable than keyword search)
+
+A global people search like `keywords=recruiter OR "engineering manager" [company]` is not scoped to the company and returns unrelated recruiters. Instead:
+
+1. Find the company's LinkedIn slug: `https://www.linkedin.com/search/results/companies/?keywords=[company]` and read the first matching `/company/[slug]/` link. Check size and location — names collide (several "Arcana", "Matters", "Different AI").
+2. Open `https://www.linkedin.com/company/[slug]/people/?keywords=[ONE word]`. Multi-word queries often return nothing. Run `talent` (recruiters), `manager` (EMs), `engineering` (peers), and `India` or the city to see whether a local team exists.
+3. Read with `get_page_text` (retry if it returns only the header — the list loads late). Profile URLs come from the page's `/in/[slug]` links.
+
+**Who to target:** people whose headline says they are hiring ("Hiring engineering talent at…", "Talent Partner", "Technical Recruiter"), the engineering manager the role would report to, and a peer engineer for a referral. Founders and C-level are a **fallback only** — at anything above ~20 people they rarely answer cold messages.
+
 ### B2 — Identify relevant contacts
 
 From search results, look for:
