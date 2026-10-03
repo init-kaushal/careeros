@@ -29,9 +29,10 @@ def scaffold(path: Path, *, refresh: bool = False, runtime: str = "claude") -> l
     First run (refresh=False): copies all templates. Raises FileExistsError if
     the sentinel file already exists.
 
-    Refresh run (refresh=True): re-copies only framework-owned files (skill files)
-    so the user picks up updates from newer CareerOS versions without touching
-    their profile, pipeline, or activity log.
+    Refresh run (refresh=True): re-copies only framework-owned files (skill files
+    and the entry file, whose routing table lists the skills) so the user picks up
+    updates from newer CareerOS versions without touching their profile, pipeline,
+    or activity log. A stale entry file is saved as `<name>.bak` before it is replaced.
     """
     if runtime not in _RUNTIME_CONFIG:
         raise ValueError(f"Unknown runtime '{runtime}'. Choose: {', '.join(_RUNTIME_CONFIG)}")
@@ -59,9 +60,17 @@ def scaffold(path: Path, *, refresh: bool = False, runtime: str = "claude") -> l
         dst = path / rel
 
         if refresh:
-            is_framework = any(rel_str.startswith(p) for p in framework_prefixes)
+            is_framework = rel_str == sentinel or any(
+                rel_str.startswith(p) for p in framework_prefixes
+            )
             if not is_framework:
                 continue
+            if rel_str == sentinel and dst.exists():
+                if dst.read_bytes() == src.read_bytes():
+                    continue
+                backup = dst.with_name(dst.name + ".bak")
+                shutil.copy2(dst, backup)
+                written.append(f"{rel_str}.bak")
 
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)

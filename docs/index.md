@@ -36,7 +36,7 @@ Full setup: [Getting Started](getting-started.md) · [Cowork guides](cowork/inde
 |---|---|
 | `careeros init <path>` | Scaffold a Claude Cowork workspace |
 | `careeros init <path> --runtime gpt` | Scaffold a GPT Work workspace |
-| `careeros init <path> --refresh` | Update skill files without touching user data |
+| `careeros init <path> --refresh` | Update skill files and the entry file (old copy saved as `.bak`) without touching user data |
 
 ---
 

@@ -47,14 +47,14 @@ Full guide: [Cowork → GPT Work](cowork/chatgpt.md)
 
 ## Keeping skills up to date
 
-After upgrading CareerOS, refresh skill files without touching your data:
+After upgrading CareerOS, refresh skill files and the entry file (`CLAUDE.md` / `AGENTS.md`, which lists the skill triggers) without touching your data:
 
 ```bash
 careeros init ~/my-job-search --refresh                    # Claude
 careeros init ~/my-job-search --runtime gpt --refresh     # GPT
 ```
 
-Your `profile.md`, `boards.md`, `jobs/`, and `activity.md` are never touched.
+Your `profile.md`, `boards.md`, `jobs/`, and `activity.md` are never touched. If the entry file had changed, the old copy is saved as `CLAUDE.md.bak` (or `AGENTS.md.bak`) first, so any edits you made to it are recoverable.
 
 ---
 

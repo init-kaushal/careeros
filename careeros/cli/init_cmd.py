@@ -10,7 +10,7 @@ def init_cmd(
     refresh: bool = typer.Option(
         False,
         "--refresh",
-        help="Refresh skill files from the latest CareerOS version (safe on existing workspaces)",
+        help="Refresh skill files and the entry file (CLAUDE.md / AGENTS.md) from the latest CareerOS version; user data is never touched",
     ),
     runtime: str = typer.Option(
         "claude",
@@ -30,7 +30,8 @@ def init_cmd(
     if refresh:
         rprint(f"\n[bold green]Skills refreshed[/bold green] in {target}\n")
         for f in written:
-            rprint(f"  [dim]updated  {f}[/dim]")
+            label = "backup   " if f.endswith(".bak") else "updated  "
+            rprint(f"  [dim]{label}{f}[/dim]")
         rprint("\n[dim]Profile, boards, and pipeline were not touched.[/dim]")
         return
 

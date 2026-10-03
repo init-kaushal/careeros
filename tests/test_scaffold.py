@@ -58,7 +58,7 @@ def test_refresh_only_touches_skill_files(tmp_workspace: Path) -> None:
 
     assert profile.read_text() == "my profile"  # untouched
     assert skill.read_text() != "corrupted"  # restored
-    assert all(f.startswith(".claude/skills/") for f in refreshed)
+    assert all(f.startswith(".claude/skills/") or f == "CLAUDE.md" for f in refreshed)
 
 
 def test_unknown_runtime_raises(tmp_workspace: Path) -> None:
@@ -134,3 +134,28 @@ def test_gitignore_blocks_assistant_output() -> None:
     root = Path(__file__).resolve().parents[1]
     text = (root / ".gitignore").read_text()
     assert "Claude outputs/" in text
+
+
+@pytest.mark.parametrize("runtime,entry", [("claude", "CLAUDE.md"), ("gpt", "AGENTS.md")])
+def test_refresh_updates_stale_entry_file_and_backs_it_up(
+    tmp_workspace: Path, runtime: str, entry: str
+) -> None:
+    scaffold(tmp_workspace, runtime=runtime)
+    entry_file = tmp_workspace / entry
+    fresh = entry_file.read_text()
+    entry_file.write_text("old routing table")
+
+    refreshed = scaffold(tmp_workspace, refresh=True, runtime=runtime)
+
+    assert entry_file.read_text() == fresh
+    assert (tmp_workspace / f"{entry}.bak").read_text() == "old routing table"
+    assert f"{entry}.bak" in refreshed
+
+
+def test_refresh_leaves_current_entry_file_alone(tmp_workspace: Path) -> None:
+    scaffold(tmp_workspace, runtime="claude")
+
+    refreshed = scaffold(tmp_workspace, refresh=True, runtime="claude")
+
+    assert not (tmp_workspace / "CLAUDE.md.bak").exists()
+    assert "CLAUDE.md" not in refreshed
