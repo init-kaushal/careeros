@@ -202,7 +202,7 @@ Retrying must not create duplicate logical events or change state twice.
 
 `careeros approve <job>` records `application.approved` with `actor: user`, the timestamp, `approval: approved` and `source: tty`. If the user declines the prompt it records `application.approval_denied` with `approval: denied`. A later `approve` can reverse a denial; the **latest** decision for the stage wins.
 
-The terminal check is a **human-confirmation guard against accidental execution**, not a security boundary. See section 13 for the explicit limitation. To make the guard meaningful, `ledger append` refuses the reserved event types (`application.approved`, `application.approval_denied`, `job.status_changed`, `job.status_corrected`, `job.archived`, `job.unarchived`, `job.imported`, `workspace.*`); only the dedicated commands write them.
+The terminal check is a **human-confirmation guard against accidental execution**, not a security boundary. See section 13 for the explicit limitation. To make the guard meaningful, `ledger append` refuses the reserved event types (`application.approved`, `application.approval_denied`, `job.status_changed`, `job.status_corrected`, `job.transition_rejected`, `job.archived`, `job.unarchived`, `job.imported`, `workspace.*`); only the dedicated commands write them.
 
 ## 8. Ledger
 
@@ -243,7 +243,7 @@ Failure and decline paths are logged on purpose, following the standing CareerOS
 
 **Locking and appends.** Appends run under the workspace lock. `append_events` writes a batch in a single call, `fsync`s, and on any failure truncates the file back to its original length. An append refuses to extend a file that does not end with a newline (a torn last line); `verify` reports it.
 
-`verify` re-reads the file and checks: valid JSON, required fields, contiguous `seq`, unbroken `prev` chain, and a known `type`. The validator adds entity and state checks (section 9).
+`verify` re-reads the file and checks: valid JSON, required fields, contiguous `seq`, unbroken `prev` chain, and a well-formed `type`. The validator adds entity and state checks (section 9).
 
 **Honest limit.** The chain makes tampering **detectable**, not impossible. Someone who rewrites the whole file consistently from some point onward can produce a valid chain; the ledger is an audit aid, not a security boundary.
 
@@ -275,7 +275,7 @@ Failure and decline paths are logged on purpose, following the standing CareerOS
 | `PIPE001` | warning | pipeline line whose URL matches no job |
 | `PIPE002` | warning | active job (not archived) with no pipeline line |
 | `PIPE003` | warning | pipeline icon inconsistent with the job's state |
-| `LED001` | error | ledger line unparseable, missing fields, unknown type, or a torn last line |
+| `LED001` | error | ledger line unparseable, missing fields, malformed type, or a torn last line |
 | `LED002` | error | `seq` gap or broken hash chain |
 | `LED003` | error | event references an entity ID with no file (deleted; archive instead) |
 | `LED004` | error | a ledger status change the state machine forbids and that is not a `job.status_corrected` |
