@@ -215,12 +215,8 @@ def apply_transition(
                     "the job is archived; run `careeros archive <job> --undo` first", events)
         if current == to_state:
             if recorded is not None and recorded != current.value:
-                event = ledger.append_event(
-                    root, type="job.status_changed", actor=actor, entity=job.id,
-                    prev_state=recorded, new_state=current.value,
-                    action=f"ledger repaired: the job file already shows {current.value}", source="recovery",
-                )
-                return TransitionResult("repaired", job.id, current, to_state, event)
+                return _repair(root, job, current, State(recorded), events, actor, reason, force)
+            _resync_pipeline(root, job, current)
             return TransitionResult("unchanged", job.id, current, to_state)
 
         corrected = False
@@ -238,6 +234,60 @@ def apply_transition(
             _reject(root, job, to_state, actor, "approval_required",
                     "approval required — ask the user to run `careeros approve <job>` themselves", events)
         return _write_transition(root, job, to_state, actor=actor, reason=reason, corrected=corrected)
+
+
+def _pipeline_change(root: Path, job: Job, state: State) -> tuple[Path, bytes, str] | None:
+    pipeline = root / "jobs" / "pipeline.md"
+    if not (pipeline.is_file() and job.url):
+        return None
+    original = pipeline.read_bytes()
+    text = original.decode("utf-8")
+    updated = update_pipeline_text(text, job.url, icon_for(state))
+    return None if updated == text else (pipeline, original, updated)
+
+
+def _resync_pipeline(root: Path, job: Job, state: State) -> None:
+    change = _pipeline_change(root, job, state)
+    if change is not None:
+        atomic_write_bytes(change[0], change[2].encode("utf-8"))
+
+
+def _repair(
+    root: Path, job: Job, current: State, recorded: State, events: list[dict],
+    actor: str, reason: str | None, force: bool,
+) -> TransitionResult:
+    """The job file already shows `current` but the ledger last recorded `recorded`."""
+    if recorded in TERMINAL:
+        _reject(root, job, current, actor, "terminal",
+                f"{recorded.value} is terminal and cannot be changed", events)
+    if current == State.APPLIED and approval_status(events, job.id) != "approved":
+        _reject(root, job, current, actor, "approval_required",
+                "approval required — ask the user to run `careeros approve <job>` themselves", events)
+    if is_legal(recorded, current):
+        kind, outcome, note = "job.status_changed", "repaired", None
+    elif force and (reason or "").strip():
+        kind, outcome, note = "job.status_corrected", "corrected", reason
+    else:
+        _reject(root, job, current, actor, "unrecorded_change",
+                f"the job file shows {current.value} but the ledger recorded {recorded.value}; record it with "
+                f'`careeros transition <job> --to {current.value} --force --reason "..."`', events)
+    change = _pipeline_change(root, job, current)
+    written: list[Path] = []
+    try:
+        if change is not None:
+            atomic_write_bytes(change[0], change[2].encode("utf-8"))
+            written.append(change[0])
+        event = ledger.append_event(
+            root, type=kind, actor=actor, entity=job.id,
+            prev_state=recorded.value, new_state=current.value,
+            action=f"ledger repaired: the job file already shows {current.value}",
+            reason=note, source="recovery",
+        )
+    except BaseException:
+        if change is not None:
+            _restore(root, {change[0]: change[1]}, written, job.id)
+        raise
+    return TransitionResult(outcome, job.id, current, current, event)
 
 
 def _write_transition(root: Path, job: Job, to_state: State, *, actor: str, reason: str | None, corrected: bool) -> TransitionResult:

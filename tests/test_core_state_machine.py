@@ -302,3 +302,96 @@ def test_archive_keeps_directory_and_body_in_place(workspace: Path) -> None:
     sm.archive_job(workspace, job["id"], actor="user")
     assert job["path"].exists()
     assert ws.read_job(job["path"]).body == body_before
+
+
+def _hand_edit(job: dict, status: State) -> bytes:
+    frontmatter, body = ws.split_frontmatter(job["path"].read_text(encoding="utf-8"))
+    frontmatter["status"] = status.value
+    job["path"].write_text(ws.join_frontmatter(frontmatter, body), encoding="utf-8")
+    return job["path"].read_bytes()
+
+
+def test_repair_into_applied_without_approval_is_rejected(workspace: Path) -> None:
+    job = add_job(workspace, "acme", status=State.APPROVAL_REQUIRED, bullet="approval-required")
+    _hand_edit(job, State.APPLIED)
+    count = len(_events(workspace))
+    with pytest.raises(sm.TransitionError) as exc:
+        sm.apply_transition(workspace, job["id"], State.APPLIED, actor="user")
+    assert exc.value.code == "approval_required"
+    new = _events(workspace)[count:]
+    assert [e["type"] for e in new] == ["job.transition_rejected"]
+
+
+def test_repair_into_applied_with_approval_is_repaired(workspace: Path) -> None:
+    job = add_job(workspace, "acme", status=State.APPROVAL_REQUIRED, bullet="approval-required")
+    sm.approve_job(workspace, job["id"], confirm=lambda p: True)
+    _hand_edit(job, State.APPLIED)
+    assert sm.apply_transition(workspace, job["id"], State.APPLIED, actor="user").outcome == "repaired"
+
+
+def test_repair_cannot_leave_a_terminal_state(workspace: Path) -> None:
+    job = add_job(workspace, "acme", status=State.WITHDRAWN, bullet="closed")
+    after_edit = _hand_edit(job, State.PREPARING)
+    with pytest.raises(sm.TransitionError) as exc:
+        sm.apply_transition(workspace, job["id"], State.PREPARING, actor="user")
+    assert exc.value.code == "terminal"
+    assert job["path"].read_bytes() == after_edit
+
+
+def test_repair_of_an_illegal_unrecorded_move_needs_force_and_reason(workspace: Path) -> None:
+    job = add_job(workspace, "acme", status=State.SCREEN, bullet="interview")
+    _hand_edit(job, State.DISCOVERED)
+    for kwargs in ({}, {"force": True}):
+        with pytest.raises(sm.TransitionError) as exc:
+            sm.apply_transition(workspace, job["id"], State.DISCOVERED, actor="user", **kwargs)
+        assert exc.value.code == "unrecorded_change"
+    assert "--force --reason" in str(exc.value)
+    result = sm.apply_transition(
+        workspace, job["id"], State.DISCOVERED, actor="user", force=True, reason="edited by hand"
+    )
+    assert result.outcome == "corrected"
+    event = _events(workspace)[-1]
+    assert (event["type"], event["source"], event["reason"], event["prev_state"], event["new_state"]) == (
+        "job.status_corrected", "recovery", "edited by hand", "SCREEN", "DISCOVERED",
+    )
+
+
+def _crash_before_pipeline_write(workspace: Path):
+    job = add_job(workspace, "acme", status=State.APPLIED, bullet="applied")
+    _hand_edit(job, State.SCREEN)  # job file written, pipeline icon and ledger left behind
+    return job, workspace / "jobs" / "pipeline.md"
+
+
+def test_retry_after_crash_before_pipeline_write_fixes_ledger_and_icon(workspace: Path) -> None:
+    job, pipeline = _crash_before_pipeline_write(workspace)
+    assert sm.apply_transition(workspace, job["id"], State.SCREEN, actor="user").outcome == "repaired"
+    assert pipeline.read_text(encoding="utf-8").count("- [?] **Acme**") == 1
+    count = len(_events(workspace))
+    assert sm.apply_transition(workspace, job["id"], State.SCREEN, actor="user").outcome == "unchanged"
+    assert len(_events(workspace)) == count
+
+
+def test_stale_pipeline_with_consistent_ledger_is_resynced_without_an_event(workspace: Path) -> None:
+    job = add_job(workspace, "acme", status=State.APPLIED, bullet="applied")
+    sm.apply_transition(workspace, job["id"], State.SCREEN, actor="user")
+    pipeline = workspace / "jobs" / "pipeline.md"
+    pipeline.write_text(pipeline.read_text(encoding="utf-8").replace("- [?]", "- [ ]"), encoding="utf-8")
+    count = len(_events(workspace))
+    assert sm.apply_transition(workspace, job["id"], State.SCREEN, actor="user").outcome == "unchanged"
+    assert pipeline.read_text(encoding="utf-8").count("- [?] **Acme**") == 1
+    assert len(_events(workspace)) == count
+
+
+def test_failed_ledger_append_on_repair_restores_the_pipeline(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job, pipeline = _crash_before_pipeline_write(workspace)
+    before = (job["path"].read_bytes(), pipeline.read_bytes())
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise OSError("ledger disk full")
+
+    monkeypatch.setattr(ledger, "append_event", boom)
+    with pytest.raises(OSError, match="ledger disk full"):
+        sm.apply_transition(workspace, job["id"], State.SCREEN, actor="user")
+    assert (job["path"].read_bytes(), pipeline.read_bytes()) == before
