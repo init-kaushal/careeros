@@ -87,7 +87,7 @@ def legacy_job_text(title: str, company: str, url: str, status: str, discovered:
 def make_legacy_workspace(root: Path) -> None:
     """A schema-0 workspace shaped like the real one: no metadata, no frontmatter, no ledger."""
     root.mkdir(parents=True, exist_ok=True)
-    (root / "profile.md").write_text("# Kaushal's Career Profile\n\n## Markets\n| Market | Min base |\n", encoding="utf-8")
+    (root / "profile.md").write_text("# Example Career Profile\n\n## Markets\n| Market | Min base |\n", encoding="utf-8")
     (root / "boards.md").write_text("# Job Boards\n\n### linkedin\n- **Market:** home\n", encoding="utf-8")
     (root / "resume.md").write_text("# Resume\n\n## Education\n", encoding="utf-8")
     (root / "activity.md").write_text(

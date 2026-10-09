@@ -121,11 +121,12 @@ def test_doctor_reports_a_pending_manifest(root: Path) -> None:
 # --- ledger ------------------------------------------------------------------------------
 
 def test_ledger_append_list_and_verify(root: Path) -> None:
+    job_id = add_job(root, "led")["id"]
     result = run(root, "ledger", "append", "--type", "note.added", "--action", "called the recruiter",
-                 "--actor", "user", "--entity", "job_aaaaaaaaaa", "--artifact", "notes.md")
-    assert result.exit_code == 0 and "appended event 1" in result.output
+                 "--actor", "user", "--entity", job_id, "--artifact", "notes.md")
+    assert result.exit_code == 0 and "appended event 2" in result.output
     listed = json.loads(run(root, "ledger", "list", "--json").stdout)
-    assert listed[0]["type"] == "note.added" and listed[0]["artifacts"] == ["notes.md"]
+    assert listed[-1]["type"] == "note.added" and listed[-1]["artifacts"] == ["notes.md"]
     assert json.loads(run(root, "ledger", "list", "--entity", "job_zzzzzzzzzz", "--json").stdout) == []
     assert run(root, "ledger", "verify").exit_code == 0
 
@@ -351,3 +352,52 @@ def test_init_refresh_refuses_a_workspace_from_the_future(tmp_path: Path) -> Non
     result = runner.invoke(app, ["init", str(target), "--refresh"])
     assert result.exit_code == 1 and "newer than the installed" in result.output
     assert skill.read_text() == "corrupted"
+
+
+# --- review fixes --------------------------------------------------------------------------
+
+def test_transition_refuses_a_job_path_from_another_workspace(tmp_path: Path) -> None:
+    mine = make_workspace(tmp_path / "mine")
+    other = make_workspace(tmp_path / "other")
+    foreign = add_job(other, "theirs")
+    before = foreign["path"].read_bytes()
+    events_before = len(_events(mine))
+    result = run(mine, "transition", str(foreign["path"]), "--to", "EVALUATED", "--actor", "user")
+    assert result.exit_code == 1 and "not a job in this workspace" in result.output
+    assert foreign["path"].read_bytes() == before
+    assert len(_events(mine)) == events_before
+
+
+def _append(root: Path, entity: str):
+    return run(root, "ledger", "append", "--type", "note.added", "--action", "x", "--actor", "user", "--entity", entity)
+
+
+def test_ledger_append_unknown_job_id_is_refused_and_writes_nothing(root: Path) -> None:
+    result = _append(root, "job_0000000000")
+    assert result.exit_code == 2
+    assert not (root / ws.LEDGER_REL).exists()
+
+
+def test_ledger_append_accepts_existing_and_archived_job_ids(root: Path) -> None:
+    live = add_job(root, "live", baseline=False)
+    gone = add_job(root, "gone", baseline=False)
+    assert run(root, "archive", gone["id"], "--reason", "r", "--actor", "user").exit_code == 0
+    assert _append(root, live["id"]).exit_code == 0
+    assert _append(root, gone["id"]).exit_code == 0
+
+
+def test_ledger_append_rejects_malformed_entity(root: Path) -> None:
+    assert _append(root, "banana").exit_code == 2
+    assert _append(root, "job_short").exit_code == 2
+    assert _append(root, "prf_short").exit_code == 2
+    assert not (root / ws.LEDGER_REL).exists()
+
+
+def test_init_second_runtime_refuses_a_workspace_from_the_future(tmp_path: Path) -> None:
+    target = tmp_path / "ws"
+    runner.invoke(app, ["init", str(target)])
+    meta = ws.load_meta(target)
+    ws.save_meta(target, WorkspaceMeta(meta.schema_version, "9.0.0", meta.created_at, meta.updated_at, meta.runtimes))
+    result = runner.invoke(app, ["init", str(target), "--runtime", "gpt"])
+    assert result.exit_code == 1 and "newer than the installed" in result.output
+    assert not (target / "AGENTS.md").exists()

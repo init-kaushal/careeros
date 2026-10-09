@@ -8,10 +8,27 @@ from typing import Optional
 import typer
 
 from careeros.cli import _util
+from careeros.core import ids
 from careeros.core import ledger as core_ledger
-from careeros.core.workspace import WorkspaceError, ensure_writable
+from careeros.core.workspace import WorkspaceError, ensure_writable, job_files, read_job
 
 ledger_app = typer.Typer(help="Read and extend the append-only audit ledger (ledger.jsonl).", no_args_is_help=True)
+
+
+def _entity_problem(root: Path, entity: str) -> str | None:
+    """Why this entity ID cannot go in the ledger, or None when it can."""
+    if entity.startswith("job_"):
+        for path in job_files(root):
+            try:
+                if read_job(path).id == entity:
+                    return None
+            except WorkspaceError:
+                continue
+        return f"no job in this workspace has the id {entity}"
+    for kind, prefix in ids.PREFIXES.items():
+        if entity.startswith(f"{prefix}_"):
+            return None if ids.is_valid_id(kind, entity) else f"{entity!r} is not a valid {kind} id"
+    return f"{entity!r} is not a recognised entity id"
 
 
 @ledger_app.command("append")
@@ -35,6 +52,10 @@ def append_cmd(
             f"{event_type} is reserved: only its own command writes it (transition, approve, archive, migrate, upgrade)",
             _util.EXIT_USAGE,
         )
+    if entity is not None:
+        problem = _entity_problem(root, entity)
+        if problem:
+            _util.fail(f"--entity: {problem}", _util.EXIT_USAGE)
     try:
         ensure_writable(root)
         event = core_ledger.append_event(

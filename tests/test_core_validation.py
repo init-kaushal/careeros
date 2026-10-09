@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from helpers import add_job, make_workspace
 
-from careeros.core import ledger, versions
+from careeros.core import ledger, state_machine, versions
 from careeros.core import workspace as ws
 from careeros.core.models import Issue, State, WorkspaceMeta
 from careeros.core.validation import validate_workspace
@@ -204,3 +204,19 @@ def test_every_issue_serialises(root: Path) -> None:
     issue = validate_workspace(root)[0]
     assert set(issue.to_dict()) == {"severity", "code", "path", "message", "fix"}
     json.dumps(issue.to_dict())
+
+
+@pytest.mark.parametrize("value", [12345, ["a", "b"]])
+def test_non_string_url_does_not_crash_the_validator(root: Path, value) -> None:
+    job = add_job(root, "one")
+    fm, body = ws.split_frontmatter(job["path"].read_text())
+    fm["url"] = value
+    job["path"].write_text(ws.join_frontmatter(fm, body))
+    validate_workspace(root)
+
+
+def test_job005_fix_names_the_display_spelling_and_the_transition_command(root: Path) -> None:
+    add_job(root, "one", status=State.DISCOVERED, bullet="applied")
+    issue = _find(validate_workspace(root), "JOB005")
+    assert "source of truth" in issue.fix and "careeros transition" in issue.fix
+    assert state_machine.display_for(State.DISCOVERED) in issue.fix

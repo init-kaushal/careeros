@@ -82,7 +82,7 @@ careeros migrate     # add versions and ids to an existing workspace (backs up f
 careeros upgrade     # refresh skill files (backs up first)
 ```
 
-Every change made through these commands is recorded in an append-only, hash-chained `ledger.jsonl`; your markdown stays the source of truth. See `docs/foundation.md` for the job lifecycle, the guarantees and their limits.
+Every state change made through these commands is recorded in an append-only, hash-chained `ledger.jsonl`; your markdown stays the source of truth. See `docs/foundation.md` for the job lifecycle, the guarantees and their limits.
 
 ## Requirements
 

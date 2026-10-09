@@ -11,6 +11,7 @@ from careeros.core.state_machine import (
     PIPE_ENTRY,
     STATUS_BULLET,
     bullet_matches,
+    display_for,
     icon_for,
     is_legal,
     recorded_state,
@@ -141,12 +142,12 @@ def validate_workspace(root: Path) -> list[Issue]:
         if state is not None and bullet and not bullet_matches(bullet.group(2), state):
             add("warning", "JOB005", rel,
                 f"the Status line says {bullet.group(2).strip()!r} but the frontmatter status is {state.value}",
-                f"edit the Status line, or run `careeros transition {job_id} --to <STATE>` (add --force --reason \"...\" for a correction) so file, pipeline and ledger agree")
+                f"the frontmatter is the source of truth: edit the Status line to read {display_for(state)!r}, or change the state with `careeros transition {job_id} --to <STATE>` (add --force --reason \"...\" for a correction) so file, pipeline and ledger agree")
         if valid_id:
             jobs[str(job_id)] = {
                 "path": rel,
                 "state": state,
-                "url": (fm.get("url") or "").rstrip("/"),
+                "url": str(fm.get("url") or "").rstrip("/"),
                 "archived": bool(fm.get("archived", False)),
             }
 

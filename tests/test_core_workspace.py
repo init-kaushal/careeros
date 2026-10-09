@@ -227,3 +227,29 @@ def test_lock_serialises_threads_so_no_update_is_lost(tmp_path: Path) -> None:
     for t in threads:
         t.join()
     assert counter.read_text() == "80"
+
+
+# --- resolve_job stays inside the workspace -----------------------------------------------
+
+def test_resolve_job_rejects_a_path_into_another_workspace(tmp_path: Path) -> None:
+    mine, other = tmp_path / "mine", tmp_path / "other"
+    _write_job(mine, "a", "job_aaaaaaaaaa")
+    foreign = _write_job(other, "b", "job_bbbbbbbbbb")
+    for ref in (str(foreign), str(foreign.parent)):
+        with pytest.raises(ws.WorkspaceError, match="not a job in this workspace"):
+            ws.resolve_job(mine, ref)
+
+
+def test_resolve_job_rejects_a_dotdot_escape(tmp_path: Path) -> None:
+    mine = tmp_path / "mine"
+    _write_job(mine, "a", "job_aaaaaaaaaa")
+    _write_job(tmp_path / "other", "b", "job_bbbbbbbbbb")
+    with pytest.raises(ws.WorkspaceError, match="not a job in this workspace"):
+        ws.resolve_job(mine, "../other/jobs/discovered/b")
+
+
+def test_resolve_job_accepts_a_path_inside_the_workspace(tmp_path: Path) -> None:
+    mine = tmp_path / "mine"
+    path = _write_job(mine, "a", "job_aaaaaaaaaa")
+    assert ws.resolve_job(mine, str(path)).id == "job_aaaaaaaaaa"
+    assert ws.resolve_job(mine, "jobs/discovered/a").id == "job_aaaaaaaaaa"

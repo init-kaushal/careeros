@@ -35,7 +35,7 @@ Using the first job directory in alphabetical order ("job-1"):
 | `careeros transition job-1 --to EVALUATED` (repeat) | 0 | "nothing to do"; no new event |
 | `careeros transition job-1 --to APPLIED` | 1 | `illegal_transition` (`APPLIED` is reachable only from `APPROVAL_REQUIRED`) |
 | `careeros ledger list` | 0 | 37 events: the 34 above (1 `workspace.migrated`, 33 `job.imported`), one `job.status_changed`, and two `job.transition_rejected` |
-| edit one word on line 2 of `ledger.jsonl`, then `careeros ledger verify` | 1 | reported `LED001` and `LED002` (the edited line no longer matches its hash, and the chain after it no longer links) |
+| edit one word on line 2 of `ledger.jsonl`, then `careeros ledger verify` | 1 | reported `LED001` and `LED002` (`LED001` means the edited line's structure or type was invalid; `LED002` means the hash chain or sequence broke) |
 | restore the saved `ledger.jsonl`, then `careeros ledger verify` | 0 | "ledger OK (37 events)" |
 
 ## What this run did not cover
@@ -43,3 +43,4 @@ Using the first job directory in alphabetical order ("job-1"):
 - The browser-driven skills (browse, apply, outreach): this suite cannot exercise them.
 - The real workspace itself: it was **not** migrated. Only a copy was.
 - `approve` was not run on the copy, because it needs an interactive terminal; it is covered by `tests/test_foundation_e2e.py` with a synthetic workspace.
+- These spec acceptance steps are covered by the automated tests only, not by the run on the copy: the approval-guard refusal and repeated-transition check (step 3), the failed-ledger-append byte-identical check (step 4), and doctor/status on a fresh workspace (step 6, partly).

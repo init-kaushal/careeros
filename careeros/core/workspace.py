@@ -331,10 +331,16 @@ def resolve_job(root: Path, ref: str) -> Job:
         candidate = Path(ref)
         if not candidate.is_absolute():
             candidate = root / candidate
+        candidate = candidate.resolve()
+        found = None
         if candidate.is_dir() and (candidate / "job.md").is_file():
-            matches.append(candidate / "job.md")
+            found = candidate / "job.md"
         elif candidate.is_file() and candidate.name == "job.md":
-            matches.append(candidate)
+            found = candidate
+        if found is not None:
+            if not found.is_relative_to((root / "jobs" / "discovered").resolve()):
+                raise WorkspaceError(f"{ref!r} is not a job in this workspace")
+            matches.append(found)
     unique = list(dict.fromkeys(matches))
     if not unique:
         raise WorkspaceError(f"no job matches {ref!r}")

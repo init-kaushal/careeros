@@ -51,12 +51,11 @@ def init_cmd(
     target = Path(path).expanduser().resolve()
     was_empty = not target.exists() or not any(target.iterdir())
 
-    if refresh:
-        try:
-            ensure_writable(target)  # refuse before touching any file
-        except WorkspaceError as exc:
-            rprint(f"[red]{exc}[/red]")
-            raise typer.Exit(1)
+    try:
+        ensure_writable(target)  # refuse before touching any file; a no-op without metadata
+    except WorkspaceError as exc:
+        rprint(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
 
     try:
         written = scaffold(target, refresh=refresh, runtime=runtime)

@@ -346,3 +346,13 @@ def test_upgrade_target_appearing_after_planning_aborts_before_anything_is_writt
         mig.run_upgrade(root, plan)
     assert track.read_text() == "appeared meanwhile"
     assert not (root / ".careeros" / "backups").exists()
+
+
+def test_crlf_legacy_job_is_a_plan_error_and_nothing_is_written(legacy: Path) -> None:
+    path = _add_legacy_job(legacy, "crlf-job", "x")
+    path.write_bytes(legacy_job_text("Role", "Co", "https://example.com/crlf", "discovered").replace("\n", "\r\n").encode())
+    before = path.read_bytes()
+    plan = mig.plan_migration(legacy)
+    assert any("jobs/discovered/crlf-job/job.md: uses CRLF line endings; convert it to LF line endings first" == e for e in plan.errors)
+    assert all(c.rel != "jobs/discovered/crlf-job/job.md" for c in plan.job_changes)
+    assert path.read_bytes() == before

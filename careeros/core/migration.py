@@ -196,6 +196,9 @@ def plan_migration(root: Path) -> MigrationPlan:
     for path in legacy:
         rel = path.relative_to(root).as_posix()
         original = path.read_bytes()
+        if b"\r\n" in original:
+            plan.errors.append(f"{rel}: uses CRLF line endings; convert it to LF line endings first")
+            continue
         text = original.decode("utf-8")
         try:
             title, company, url, discovered, legacy_status = _parse_legacy(text)

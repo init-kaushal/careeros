@@ -41,8 +41,8 @@ Early stages may skip forward but never move back. `APPLIED` is reachable only f
 
 ## Safety guarantees
 
-- Changes to a job file, the pipeline and the ledger happen together or not at all. If the ledger cannot be written, the files are put back byte for byte.
-- Files are written through a temporary file and an atomic rename, under a workspace lock, so two commands cannot interleave.
+- Changes to a job file, the pipeline and the ledger happen together or not at all. If the ledger cannot be written, the files are put back byte for byte. This holds for errors, not for a process killed mid-operation: then `careeros validate` shows LED005 (and PIPE003 if the pipeline was missed), and retrying the same `transition` repairs it.
+- Files are written through a temporary file and an atomic rename, Commands that change workspace files take a workspace lock, so two of them cannot interleave; `init --refresh` does not take the lock.
 - Migration and upgrade back up every file they change, verify each copy, write a manifest, and roll back if anything fails.
 - Retrying a transition, an approval or an archive does not create a second event.
 - A workspace last updated by a newer CareerOS is read-only until you upgrade CareerOS.
@@ -61,7 +61,7 @@ careeros migrate                # review the plan, confirm; a verified backup is
 careeros validate               # should report no errors
 ```
 
-Migration only adds: frontmatter is placed above each job file, and nothing else in your workspace is modified. Jobs that the old format cannot describe (no `URL`, no `Discovered` date, an unknown `Status`) are listed by file and **nothing is written** until you fix them.
+Migration only adds: it prepends frontmatter to each job file and also creates `.careeros/workspace.yaml`, `ledger.jsonl` and a backup folder, and changes nothing else. Jobs that the old format cannot describe (no `URL`, no `Discovered` date, an unknown `Status`) are listed by file and **nothing is written** until you fix them.
 
 Jobs saved by skills after a migration have no ID yet. Run `careeros migrate` again to adopt them.
 

@@ -18,6 +18,7 @@
 - Skills are unchanged and still edit `Status:` lines and append to `activity.md`. `careeros validate` reports the resulting drift as warnings and says how to fix each; `careeros migrate` adopts jobs saved since the last migration.
 - `activity.md` stays the human-readable log. `ledger.jsonl` is the machine and audit log.
 - `careeros approve` is a human-confirmation guard, not a security boundary.
+- Known limitations: a lock timeout exits 1; a process killed during `archive` can leave an unrecorded archive; `migrate` records the installed framework version without refreshing skill files, so run `careeros upgrade` after migrating.
 
 ## 0.2.0
 
