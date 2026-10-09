@@ -117,3 +117,14 @@ def snapshot(root: Path) -> dict[str, bytes]:
         for p in sorted(root.rglob("*"))
         if p.is_file() and p.relative_to(root).parts[0] not in skip
     }
+
+
+def make_claude_workspace(root: Path, framework: str = "0.1.0") -> Path:
+    """A scaffolded Claude workspace with metadata at an older framework version and a ledger."""
+    from careeros.workspace.scaffold import scaffold
+
+    scaffold(root, runtime="claude")
+    (root / "profile.md").write_text("# my profile\n", encoding="utf-8")
+    save_meta(root, WorkspaceMeta(versions.SCHEMA_VERSION, framework, TS, TS, ("claude",)))
+    ledger.append_event(root, type="workspace.created", actor="system", action="created")
+    return root
