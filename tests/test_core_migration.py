@@ -319,3 +319,30 @@ def test_upgrade_failure_rolls_back_files_and_metadata(tmp_path: Path, clock, mo
     assert snapshot(root) == before
     assert (root / ".careeros" / "workspace.yaml").read_bytes() == meta_before
     assert mig.find_incomplete_operations(root) == []
+
+
+def test_metadata_appearing_after_planning_aborts_before_anything_is_written(legacy: Path) -> None:
+    plan = mig.plan_migration(legacy)
+    assert plan.meta_to_write is not None
+    ws.save_meta(legacy, WorkspaceMeta(1, versions.installed_version(), TS, TS, ()))
+    meta_path = legacy / ".careeros" / "workspace.yaml"
+    meta_bytes = meta_path.read_bytes()
+    before = snapshot(legacy)
+    with pytest.raises(mig.MigrationError, match="appeared since the plan"):
+        mig.run_migration(legacy, plan)
+    assert meta_path.read_bytes() == meta_bytes
+    assert not (legacy / ".careeros" / "backups").exists()
+    assert snapshot(legacy) == before
+
+
+def test_upgrade_target_appearing_after_planning_aborts_before_anything_is_written(tmp_path: Path, clock) -> None:
+    root = _claude_workspace(tmp_path)
+    track = root / ".claude" / "skills" / "track" / "SKILL.md"
+    track.unlink()
+    plan = mig.plan_upgrade(root)
+    assert any(i.rel == ".claude/skills/track/SKILL.md" and i.status == "new" for i in plan.items)
+    track.write_text("appeared meanwhile")
+    with pytest.raises(mig.MigrationError, match="appeared since the plan"):
+        mig.run_upgrade(root, plan)
+    assert track.read_text() == "appeared meanwhile"
+    assert not (root / ".careeros" / "backups").exists()

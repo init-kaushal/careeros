@@ -257,6 +257,8 @@ def run_migration(root: Path, plan: MigrationPlan) -> OperationResult:
     with WorkspaceLock(root):
         ensure_writable(root)
         _verify_unchanged(plan.job_changes)
+        if plan.meta_to_write is not None and (root / META_REL).exists():
+            raise MigrationError("workspace metadata appeared since the plan was made; run the command again")
         ledger_path = root / LEDGER_REL
         ledger_before = ledger_path.read_bytes() if ledger_path.exists() else None
         backup = _new_backup_dir(root, "migrate")
@@ -393,6 +395,8 @@ def run_upgrade(root: Path, plan: UpgradePlan) -> OperationResult:
         for item in plan.pending:
             if item.status == "changed" and item.dst.read_bytes() != item.before:
                 raise MigrationError(f"{item.rel} changed since the plan was made; run the command again")
+            if item.status == "new" and item.dst.exists():
+                raise MigrationError(f"{item.rel} appeared since the plan was made; run the command again")
         meta_path = root / META_REL
         meta_before = meta_path.read_bytes() if meta is not None else None
         backup = _new_backup_dir(root, "upgrade")
