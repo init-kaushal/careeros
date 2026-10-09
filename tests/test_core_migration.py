@@ -3,7 +3,9 @@ import json
 from pathlib import Path
 
 import pytest
-from helpers import LEGACY_JOBS, legacy_job_text, make_legacy_workspace, snapshot
+from helpers import (
+    LEGACY_JOBS, add_job, legacy_job_text, make_legacy_workspace, make_workspace, snapshot,
+)
 
 from careeros.core import ids, ledger, versions
 from careeros.core import migration as mig
@@ -356,3 +358,162 @@ def test_crlf_legacy_job_is_a_plan_error_and_nothing_is_written(legacy: Path) ->
     assert any("jobs/discovered/crlf-job/job.md: uses CRLF line endings; convert it to LF line endings first" == e for e in plan.errors)
     assert all(c.rel != "jobs/discovered/crlf-job/job.md" for c in plan.job_changes)
     assert path.read_bytes() == before
+
+
+# --- workspaces that already have metadata, but at an older schema -------------------------
+
+OLD_TS = "2026-09-01T00:00:00Z"
+
+
+def _set_old_schema(root: Path) -> bytes:
+    """Give the workspace a metadata file that says schema 0, and return its exact bytes."""
+    ws.save_meta(root, WorkspaceMeta(0, "0.2.0", OLD_TS, OLD_TS, ("claude",)))
+    return (root / ".careeros" / "workspace.yaml").read_bytes()
+
+
+def _job_schemas(root: Path) -> set:
+    return {ws.split_frontmatter(p.read_text(encoding="utf-8"))[0]["schema"] for p in ws.job_files(root)}
+
+
+def test_schema_0_metadata_with_legacy_jobs_is_updated_and_stays_consistent(legacy: Path) -> None:
+    original_meta = _set_old_schema(legacy)
+    plan = mig.plan_migration(legacy)
+    assert plan.errors == [] and plan.source_schema == 0 and len(plan.job_changes) == 8
+    assert plan.meta_to_write is not None and plan.meta_to_write.schema_version == versions.SCHEMA_VERSION
+    assert plan.meta_original == original_meta
+
+    result = mig.run_migration(legacy, plan)
+    assert result.status == "complete"
+    meta = ws.load_meta(legacy)
+    assert meta.schema_version == versions.SCHEMA_VERSION
+    assert _job_schemas(legacy) == {meta.schema_version}  # metadata and job frontmatter agree
+    assert meta.created_at == OLD_TS and meta.runtimes == ("claude",)
+    assert meta.framework_version == "0.2.0"  # migrating data does not claim to have applied a newer framework
+    assert meta.updated_at != OLD_TS
+
+    manifest = json.loads((result.backup / "manifest.json").read_text())
+    record = next(f for f in manifest["files"] if f["path"] == ".careeros/workspace.yaml")
+    assert record["existed"] is True
+    assert record["before_sha256"] == _sha(original_meta)
+    assert record["after_sha256"] == _sha((legacy / ".careeros" / "workspace.yaml").read_bytes())
+    assert (result.backup / ".careeros" / "workspace.yaml").read_bytes() == original_meta
+    assert ledger.verify_chain(legacy) == []
+    assert [i for i in validate_workspace(legacy) if i.severity == "error"] == []
+
+
+def test_schema_0_metadata_only_migration_is_not_a_no_op(tmp_path: Path, clock) -> None:
+    root = make_workspace(tmp_path / "ws")
+    add_job(root, "one")
+    original_meta = _set_old_schema(root)
+    jobs_before = {p: p.read_bytes() for p in ws.job_files(root)}
+
+    plan = mig.plan_migration(root)
+    assert plan.errors == [] and plan.job_changes == [] and not plan.empty
+    assert plan.meta_to_write is not None and plan.meta_to_write.schema_version == versions.SCHEMA_VERSION
+
+    result = mig.run_migration(root, plan)
+    assert result.status == "complete" and result.jobs == 0
+    assert ws.load_meta(root).schema_version == versions.SCHEMA_VERSION
+    assert {p: p.read_bytes() for p in ws.job_files(root)} == jobs_before  # job files untouched
+    assert (result.backup / ".careeros" / "workspace.yaml").read_bytes() == original_meta
+    types = [e["type"] for e in ledger.read_events(root)]
+    assert types[-1] == "workspace.migrated" and types.count("job.imported") == 1  # only add_job's baseline
+    assert ledger.verify_chain(root) == []
+
+
+@pytest.mark.parametrize("scenario", ["legacy_jobs", "metadata_only"])
+def test_rerunning_after_a_schema_0_migration_is_a_no_op(tmp_path: Path, clock, scenario: str) -> None:
+    root = tmp_path / "ws"
+    if scenario == "legacy_jobs":
+        make_legacy_workspace(root)
+    else:
+        make_workspace(root)
+        add_job(root, "one")
+    _set_old_schema(root)
+    mig.run_migration(root, mig.plan_migration(root))
+    after_first = (snapshot(root), (root / ".careeros" / "workspace.yaml").read_bytes(), (root / "ledger.jsonl").read_bytes())
+
+    plan = mig.plan_migration(root)
+    assert plan.empty and plan.meta_to_write is None and plan.job_changes == []
+    assert mig.run_migration(root, plan).status == "noop"
+    assert (snapshot(root), (root / ".careeros" / "workspace.yaml").read_bytes(), (root / "ledger.jsonl").read_bytes()) == after_first
+    assert len(list((root / ".careeros" / "backups").iterdir())) == 1
+
+
+def test_failure_restores_schema_0_metadata_and_job_files_and_leaves_no_ledger(
+    legacy: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_meta = _set_old_schema(legacy)
+    before = snapshot(legacy)
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise OSError("ledger disk full")
+
+    monkeypatch.setattr(mig.ledger, "append_events", boom)
+    with pytest.raises(OSError, match="ledger disk full"):
+        mig.run_migration(legacy, mig.plan_migration(legacy))
+    monkeypatch.undo()
+    assert snapshot(legacy) == before
+    assert (legacy / ".careeros" / "workspace.yaml").read_bytes() == original_meta
+    assert not (legacy / "ledger.jsonl").exists()
+    manifests = list((legacy / ".careeros" / "backups").glob("*/manifest.json"))
+    assert len(manifests) == 1 and json.loads(manifests[0].read_text())["status"] == "rolled_back"
+    assert mig.find_incomplete_operations(legacy) == []
+
+
+def test_failure_in_a_metadata_only_migration_keeps_metadata_and_the_existing_ledger_valid(
+    tmp_path: Path, clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = make_workspace(tmp_path / "ws")
+    add_job(root, "one")
+    original_meta = _set_old_schema(root)
+    ledger_before = (root / "ledger.jsonl").read_bytes()
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise OSError("ledger disk full")
+
+    monkeypatch.setattr(mig.ledger, "append_events", boom)
+    with pytest.raises(OSError, match="ledger disk full"):
+        mig.run_migration(root, mig.plan_migration(root))
+    monkeypatch.undo()
+    assert (root / ".careeros" / "workspace.yaml").read_bytes() == original_meta
+    assert (root / "ledger.jsonl").read_bytes() == ledger_before
+    assert ledger.verify_chain(root) == []
+
+
+def test_failure_part_way_through_the_job_writes_restores_metadata_and_earlier_jobs(
+    legacy: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_meta = _set_old_schema(legacy)
+    before = snapshot(legacy)
+    real = mig.atomic_write_bytes
+    state = {"job_writes": 0, "failed": False}
+
+    def flaky(path: Path, data: bytes) -> None:
+        if Path(path).name == "job.md" and ".careeros" not in Path(path).parts and not state["failed"]:
+            state["job_writes"] += 1
+            if state["job_writes"] == 3:
+                state["failed"] = True
+                raise OSError("disk full")
+        real(path, data)
+
+    monkeypatch.setattr(mig, "atomic_write_bytes", flaky)
+    with pytest.raises(OSError, match="disk full"):
+        mig.run_migration(legacy, mig.plan_migration(legacy))
+    monkeypatch.undo()
+    assert snapshot(legacy) == before
+    assert (legacy / ".careeros" / "workspace.yaml").read_bytes() == original_meta
+    assert not (legacy / "ledger.jsonl").exists()
+
+
+def test_metadata_changed_after_planning_aborts_before_anything_is_written(legacy: Path) -> None:
+    _set_old_schema(legacy)
+    plan = mig.plan_migration(legacy)
+    ws.save_meta(legacy, WorkspaceMeta(0, "0.2.0", OLD_TS, "2026-09-02T00:00:00Z", ("claude", "gpt")))
+    edited_meta = (legacy / ".careeros" / "workspace.yaml").read_bytes()
+    before = snapshot(legacy)
+    with pytest.raises(mig.MigrationError, match="changed since the plan"):
+        mig.run_migration(legacy, plan)
+    assert snapshot(legacy) == before
+    assert (legacy / ".careeros" / "workspace.yaml").read_bytes() == edited_meta
+    assert not (legacy / ".careeros" / "backups").exists()

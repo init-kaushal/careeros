@@ -15,7 +15,10 @@ from careeros.core.workspace import WorkspaceError
 def _print_plan(plan: migration.MigrationPlan) -> None:
     typer.echo(f"Migration plan: schema {plan.source_schema} → {plan.target_schema}")
     if plan.meta_to_write is not None:
-        typer.echo("  - create .careeros/workspace.yaml")
+        if plan.meta_original is None:
+            typer.echo("  - create .careeros/workspace.yaml")
+        else:
+            typer.echo(f"  - update .careeros/workspace.yaml to schema {plan.target_schema}")
     if plan.job_changes:
         typer.echo(f"  - add frontmatter and a stable id to {len(plan.job_changes)} job file(s):")
         for change in plan.job_changes:

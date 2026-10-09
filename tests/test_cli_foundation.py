@@ -172,6 +172,17 @@ def test_illegal_transition_exits_1_and_is_logged(root: Path) -> None:
     assert _events(root)[-1]["type"] == "job.transition_rejected"
 
 
+def test_transition_after_a_hand_edit_points_to_the_recovery_step(root: Path) -> None:
+    job = add_job(root, "one")
+    frontmatter, body = ws.split_frontmatter(job["path"].read_text(encoding="utf-8"))
+    frontmatter["status"] = "EVALUATED"
+    job["path"].write_text(ws.join_frontmatter(frontmatter, body), encoding="utf-8")
+    result = run(root, "transition", job["id"], "--to", "SHORTLISTED", "--actor", "agent:claude")
+    assert result.exit_code == 1 and "history_mismatch" in result.output and "--to EVALUATED" in result.output
+    assert run(root, "transition", job["id"], "--to", "EVALUATED", "--actor", "user").exit_code == 0
+    assert run(root, "transition", job["id"], "--to", "SHORTLISTED", "--actor", "user").exit_code == 0
+
+
 def test_unknown_state_is_a_usage_error(root: Path) -> None:
     job = add_job(root, "one")
     assert run(root, "transition", job["id"], "--to", "BANANA").exit_code == 2
@@ -226,6 +237,18 @@ def test_migrate_dry_run_writes_nothing(tmp_path: Path) -> None:
     result = run(legacy, "migrate", "--dry-run")
     assert result.exit_code == 0 and "Dry run" in result.output and "8 job file(s)" in result.output
     assert snapshot(legacy) == before and not (legacy / ".careeros").exists()
+
+
+def test_migrate_of_schema_0_metadata_only_reports_an_update_and_applies_it(tmp_path: Path) -> None:
+    root = make_workspace(tmp_path / "ws")
+    add_job(root, "one")
+    ws.save_meta(root, WorkspaceMeta(0, "0.2.0", TS, TS, ("claude",)))
+    dry = run(root, "migrate", "--dry-run")
+    assert dry.exit_code == 0 and "Nothing to migrate" not in dry.output
+    assert "schema 0 → 1" in dry.output and "update .careeros/workspace.yaml" in dry.output
+    assert run(root, "migrate", "--yes").exit_code == 0
+    assert ws.load_meta(root).schema_version == versions.SCHEMA_VERSION
+    assert "already current" in run(root, "migrate", "--yes").output
 
 
 def test_migrate_without_a_terminal_or_yes_exits_2_and_changes_nothing(tmp_path: Path) -> None:

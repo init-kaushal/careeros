@@ -14,6 +14,10 @@
 - `careeros init` writes workspace metadata and a `workspace.created` ledger event for new workspaces; `init --refresh` records the framework version it applied.
 - New dependency: PyYAML (`safe_load` only).
 
+### Fixed (after review)
+- `transition` refuses to move on from a job file whose status disagrees with the ledger (`history_mismatch`) instead of recording a move that skips the difference; the existing repair/correction path reconciles it first, with its legality, terminal and approval rules intact.
+- `migrate` now updates existing metadata whose schema is older than the current one (it previously only created missing metadata), keeps job frontmatter and metadata on the same schema, no longer treats a metadata-only migration as a no-op, and restores the old metadata on rollback.
+
 ### Notes
 - Skills are unchanged and still edit `Status:` lines and append to `activity.md`. `careeros validate` reports the resulting drift as warnings and says how to fix each; `careeros migrate` adopts jobs saved since the last migration.
 - `activity.md` stays the human-readable log. `ledger.jsonl` is the machine and audit log.

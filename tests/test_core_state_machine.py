@@ -8,6 +8,7 @@ from careeros.core import ledger, versions
 from careeros.core import state_machine as sm
 from careeros.core import workspace as ws
 from careeros.core.models import State
+from careeros.core.validation import validate_workspace
 
 PRE = [State.DISCOVERED, State.EVALUATED, State.SHORTLISTED, State.RESEARCHED, State.PREPARING, State.READY_TO_APPLY]
 POST = [State.APPLIED, State.RECRUITER_REPLIED, State.SCREEN, State.TECHNICAL, State.HM, State.FINAL, State.OFFER]
@@ -395,3 +396,114 @@ def test_failed_ledger_append_on_repair_restores_the_pipeline(
     with pytest.raises(OSError, match="ledger disk full"):
         sm.apply_transition(workspace, job["id"], State.SCREEN, actor="user")
     assert (job["path"].read_bytes(), pipeline.read_bytes()) == before
+
+
+# --- a transition must not extend history the ledger does not agree with ------------------
+
+def _hand_edit_status(job: dict, status: State) -> None:
+    """Change the job file's status without going through careeros, as a person (or an agent) might."""
+    frontmatter, body = ws.split_frontmatter(job["path"].read_text(encoding="utf-8"))
+    frontmatter["status"] = status.value
+    job["path"].write_text(ws.join_frontmatter(frontmatter, body), encoding="utf-8")
+
+
+def _status_events(root: Path) -> list[dict]:
+    return [e for e in _events(root) if e["type"] in ("job.status_changed", "job.status_corrected")]
+
+
+def test_a_transition_does_not_silently_extend_history_after_a_hand_edit(workspace: Path) -> None:
+    job = add_job(workspace, "acme")  # ledger: DISCOVERED
+    _hand_edit_status(job, State.EVALUATED)  # file: EVALUATED, ledger still DISCOVERED
+    before = job["path"].read_bytes()
+    with pytest.raises(sm.TransitionError, match="--to EVALUATED") as exc:
+        sm.apply_transition(workspace, job["id"], State.SHORTLISTED, actor="agent:claude")
+    assert exc.value.code == "history_mismatch"
+    assert job["path"].read_bytes() == before
+    assert _events(workspace)[-1]["type"] == "job.transition_rejected"
+    assert _status_events(workspace) == []  # nothing was added to the history
+
+    # the supported recovery: record what the file shows, then carry on
+    assert sm.apply_transition(workspace, job["id"], State.EVALUATED, actor="user").outcome == "repaired"
+    assert sm.apply_transition(workspace, job["id"], State.SHORTLISTED, actor="user").outcome == "changed"
+    assert [(e["prev_state"], e["new_state"]) for e in _status_events(workspace)] == [
+        ("DISCOVERED", "EVALUATED"), ("EVALUATED", "SHORTLISTED"),
+    ]
+    assert validate_workspace(workspace) == []
+
+
+def test_the_mismatch_rejection_is_logged_once_per_identical_attempt(workspace: Path) -> None:
+    job = add_job(workspace, "acme")
+    _hand_edit_status(job, State.EVALUATED)
+    for _ in range(2):
+        with pytest.raises(sm.TransitionError):
+            sm.apply_transition(workspace, job["id"], State.SHORTLISTED, actor="agent:claude")
+    assert [e["type"] for e in _events(workspace)].count("job.transition_rejected") == 1
+
+
+def test_force_does_not_skip_reconciling_a_mismatched_history(workspace: Path) -> None:
+    job = add_job(workspace, "acme")
+    _hand_edit_status(job, State.EVALUATED)
+    with pytest.raises(sm.TransitionError) as exc:
+        sm.apply_transition(workspace, job["id"], State.OFFER, actor="user", force=True, reason="skip ahead")
+    assert exc.value.code == "history_mismatch"
+    assert _status_events(workspace) == []
+
+
+def test_a_hand_edited_applied_cannot_be_extended_to_bypass_approval(workspace: Path) -> None:
+    job = add_job(workspace, "acme", status=State.APPROVAL_REQUIRED, bullet="approval-required")
+    _hand_edit_status(job, State.APPLIED)  # no approval was ever recorded
+    with pytest.raises(sm.TransitionError) as exc:
+        sm.apply_transition(workspace, job["id"], State.SCREEN, actor="agent:claude")
+    assert exc.value.code == "history_mismatch"
+    for force in (False, True):  # the recovery step itself keeps the approval rule
+        with pytest.raises(sm.TransitionError) as exc:
+            sm.apply_transition(
+                workspace, job["id"], State.APPLIED, actor="agent:claude", force=force, reason="x" if force else None
+            )
+        assert exc.value.code == "approval_required"
+    assert _status_events(workspace) == []  # neither APPLIED nor SCREEN ever reached the history
+
+    # supported path: put the file back, get a real approval, then move
+    _hand_edit_status(job, State.APPROVAL_REQUIRED)
+    sm.approve_job(workspace, job["id"], confirm=lambda prompt: True)
+    assert sm.apply_transition(workspace, job["id"], State.APPLIED, actor="user").outcome == "changed"
+
+
+def test_a_hand_edit_out_of_a_terminal_state_cannot_be_extended(workspace: Path) -> None:
+    job = add_job(workspace, "acme", status=State.WITHDRAWN, bullet="closed")
+    _hand_edit_status(job, State.PREPARING)
+    with pytest.raises(sm.TransitionError) as exc:
+        sm.apply_transition(workspace, job["id"], State.READY_TO_APPLY, actor="agent:claude")
+    assert exc.value.code == "history_mismatch"
+    for force in (False, True):
+        with pytest.raises(sm.TransitionError) as exc:
+            sm.apply_transition(
+                workspace, job["id"], State.PREPARING, actor="user", force=force, reason="x" if force else None
+            )
+        assert exc.value.code == "terminal"
+    assert _status_events(workspace) == []
+
+
+def test_an_illegal_hand_edit_needs_a_forced_correction_before_the_next_move(workspace: Path) -> None:
+    job = add_job(workspace, "acme", status=State.SCREEN, bullet="interview")
+    _hand_edit_status(job, State.DISCOVERED)  # SCREEN -> DISCOVERED is not a legal move
+    with pytest.raises(sm.TransitionError) as exc:
+        sm.apply_transition(workspace, job["id"], State.EVALUATED, actor="user")
+    assert exc.value.code == "history_mismatch"
+    with pytest.raises(sm.TransitionError) as exc:
+        sm.apply_transition(workspace, job["id"], State.DISCOVERED, actor="user")
+    assert exc.value.code == "unrecorded_change"
+    corrected = sm.apply_transition(
+        workspace, job["id"], State.DISCOVERED, actor="user", force=True, reason="status was edited by hand"
+    )
+    assert corrected.outcome == "corrected"
+    event = _events(workspace)[-1]
+    assert (event["type"], event["prev_state"], event["new_state"], event["reason"]) == (
+        "job.status_corrected", "SCREEN", "DISCOVERED", "status was edited by hand",
+    )
+    assert sm.apply_transition(workspace, job["id"], State.EVALUATED, actor="user").outcome == "changed"
+
+
+def test_a_job_without_any_recorded_state_still_transitions(workspace: Path) -> None:
+    job = add_job(workspace, "acme", baseline=False)  # no ledger event to compare with
+    assert sm.apply_transition(workspace, job["id"], State.EVALUATED, actor="user").outcome == "changed"

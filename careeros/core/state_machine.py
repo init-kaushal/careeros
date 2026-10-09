@@ -219,6 +219,15 @@ def apply_transition(
             _resync_pipeline(root, job, current)
             return TransitionResult("unchanged", job.id, current, to_state)
 
+        if recorded is not None and recorded != current.value:
+            # The file and the ledger disagree (hand edit, or a crash). Moving on from the file's state would
+            # write a ledger entry that skips whatever happened in between, so reconcile first. The repair
+            # path above keeps the legality, terminal and approval rules.
+            _reject(root, job, to_state, actor, "history_mismatch",
+                    f"the job file shows {current.value} but the ledger last recorded {recorded}; reconcile first "
+                    f"with `careeros transition {job.id} --to {current.value}` (add --force --reason \"...\" if "
+                    f"that move is not allowed), then retry", events)
+
         corrected = False
         if not is_legal(current, to_state):
             if not force:

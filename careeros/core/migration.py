@@ -59,6 +59,7 @@ class MigrationPlan:
     source_schema: int
     target_schema: int
     meta_to_write: WorkspaceMeta | None
+    meta_original: bytes | None = None  # exact bytes of an existing metadata file that will be updated
     job_changes: list[JobChange] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
@@ -179,6 +180,13 @@ def plan_migration(root: Path) -> MigrationPlan:
         plan.meta_to_write = WorkspaceMeta(
             versions.SCHEMA_VERSION, versions.installed_version(), now, now, _detect_runtimes(root)
         )
+    elif meta.schema_version < versions.SCHEMA_VERSION:
+        # Existing metadata at an older schema: bring it to the current one so it agrees with the job
+        # frontmatter written below. The framework version is kept: migrating data applies no framework.
+        plan.meta_to_write = WorkspaceMeta(
+            versions.SCHEMA_VERSION, meta.framework_version, meta.created_at, now, meta.runtimes
+        )
+        plan.meta_original = (root / META_REL).read_bytes()
     existing_ids: set[str] = set()
     legacy: list[Path] = []
     for path in job_files(root):
@@ -260,12 +268,19 @@ def run_migration(root: Path, plan: MigrationPlan) -> OperationResult:
     with WorkspaceLock(root):
         ensure_writable(root)
         _verify_unchanged(plan.job_changes)
-        if plan.meta_to_write is not None and (root / META_REL).exists():
-            raise MigrationError("workspace metadata appeared since the plan was made; run the command again")
+        meta_path = root / META_REL
+        if plan.meta_to_write is not None:
+            if plan.meta_original is None:
+                if meta_path.exists():
+                    raise MigrationError("workspace metadata appeared since the plan was made; run the command again")
+            elif not meta_path.exists() or _sha(meta_path.read_bytes()) != _sha(plan.meta_original):
+                raise MigrationError("workspace metadata changed since the plan was made; run the command again")
         ledger_path = root / LEDGER_REL
         ledger_before = ledger_path.read_bytes() if ledger_path.exists() else None
         backup = _new_backup_dir(root, "migrate")
         backup_items = [(c.rel, c.original) for c in plan.job_changes]
+        if plan.meta_original is not None:
+            backup_items.append((META_REL.as_posix(), plan.meta_original))
         if ledger_before is not None:
             backup_items.append((LEDGER_REL.as_posix(), ledger_before))
         _backup_files(backup, backup_items)
@@ -274,7 +289,12 @@ def run_migration(root: Path, plan: MigrationPlan) -> OperationResult:
             for c in plan.job_changes
         ]
         if plan.meta_to_write is not None:
-            files.append({"path": META_REL.as_posix(), "existed": False, "before_sha256": None, "after_sha256": None})
+            files.append({
+                "path": META_REL.as_posix(),
+                "existed": plan.meta_original is not None,
+                "before_sha256": _sha(plan.meta_original) if plan.meta_original is not None else None,
+                "after_sha256": None,
+            })
         files.append({
             "path": LEDGER_REL.as_posix(),
             "existed": ledger_before is not None,
@@ -293,11 +313,11 @@ def run_migration(root: Path, plan: MigrationPlan) -> OperationResult:
         }
         _write_manifest(backup, manifest)
         written: list[JobChange] = []
-        meta_created = False
+        meta_written = False
         try:
             if plan.meta_to_write is not None:
                 save_meta(root, plan.meta_to_write)
-                meta_created = True
+                meta_written = True
             for change in plan.job_changes:
                 atomic_write_bytes(change.path, change.new_text.encode("utf-8"))
                 written.append(change)
@@ -319,8 +339,11 @@ def run_migration(root: Path, plan: MigrationPlan) -> OperationResult:
         except BaseException:
             for change in written:
                 atomic_write_bytes(change.path, change.original)
-            if meta_created:
-                (root / META_REL).unlink(missing_ok=True)
+            if meta_written:
+                if plan.meta_original is None:
+                    meta_path.unlink(missing_ok=True)
+                else:
+                    atomic_write_bytes(meta_path, plan.meta_original)
             manifest["status"] = "rolled_back"
             _write_manifest(backup, manifest)
             raise
