@@ -155,3 +155,7 @@ This is too large for one specification. The brief's own seven phases are the ri
 ## 11. What the test suite can and cannot prove
 
 The brief's final acceptance asks for a full lifecycle run, including discovery, outreach and application. The parts that drive a real browser against LinkedIn, ATS sites or Overleaf cannot be verified by an automated suite and will not be claimed as verified by one. They need a supervised run in a real workspace, recorded in `docs/END_TO_END_TEST.md` with what ran and what did not. Runtime adapters for tools not installed here (Gemini, OpenCode, Cursor) can be specified and unit-tested for their file output, but their live behaviour cannot be confirmed from this repository.
+
+## Update after Foundation (0.3.0)
+
+Resolved from section 5: CI now runs the tests (item 2); the activity log's ordering ambiguity is addressed by a separate machine ledger while `activity.md` stays free text (item 3, partly); workspace, framework and schema versions exist (item 4); a `CHANGELOG.md` exists (item 7); `careeros.__version__` matches `pyproject.toml`. Still open: skills do not use the new commands, there is no evidence model, no prompt-injection handling, GPT parity and runtime adapters, and the stale `tests/integration/__init__.py` docstring.
