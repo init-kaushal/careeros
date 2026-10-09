@@ -58,3 +58,62 @@ def add_job(
             action=f"imported {company}", source="migration",
         )
     return {"id": job_id, "path": path, "url": url, "slug": slug}
+
+
+# --- legacy (schema 0) workspaces ---------------------------------------------------
+
+LEGACY_JOBS = [
+    # slug, title, company, legacy status, pipeline icon the legacy skills would show
+    ("acme-backend-engineer", "Backend Engineer", "Acme", "discovered", " "),
+    ("globex-senior-engineer-at-scale", "Senior Engineer at Scale", "Globex", "discovered", " "),
+    ("initech-platform-engineer", "Platform Engineer", "Initech", "applied", "~"),
+    ("hooli-staff-engineer", "Staff Engineer", "Hooli", "interview", "?"),
+    ("umbrella-sde-3", "SDE-3", "Umbrella", "offer", "✓"),
+    ("wayne-principal-engineer", "Principal Engineer", "Wayne", "accepted", "✓"),
+    ("stark-engineer", "Engineer", "Stark", "declined", "x"),
+    ("oscorp-engineer", "Engineer", "Oscorp", "closed", "x"),
+]
+
+
+def legacy_job_text(title: str, company: str, url: str, status: str, discovered: str = "2026-10-01") -> str:
+    return (
+        f"# {title} at {company}\n\n"
+        f"- **Board:** LinkedIn\n- **Location:** Bengaluru\n- **Market:** home\n"
+        f"- **URL:** {url}\n- **Score:** 8\n- **Discovered:** {discovered}\n- **Status:** {status}\n\n"
+        f"## Notes\nSnippet text — with unicode ✓\n"
+    )
+
+
+def make_legacy_workspace(root: Path) -> None:
+    """A schema-0 workspace shaped like the real one: no metadata, no frontmatter, no ledger."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "profile.md").write_text("# Kaushal's Career Profile\n\n## Markets\n| Market | Min base |\n", encoding="utf-8")
+    (root / "boards.md").write_text("# Job Boards\n\n### linkedin\n- **Market:** home\n", encoding="utf-8")
+    (root / "resume.md").write_text("# Resume\n\n## Education\n", encoding="utf-8")
+    (root / "activity.md").write_text(
+        "# Activity Log\n\n<!-- append-only; newest entries at top -->\n2026-09-29 careeros update: variants\n",
+        encoding="utf-8",
+    )
+    (root / "resume-variants").mkdir()
+    (root / "resume-variants" / "Resume.pdf").write_bytes(b"%PDF-1.4\n%fixture \x00\xff\n")
+    (root / "markets").mkdir()
+    (root / "markets" / "singapore.md").write_text("# Singapore — Market Notes\n", encoding="utf-8")
+    pipeline = ["# Job Pipeline", "", "## Active", ""]
+    for slug, title, company, status, icon in LEGACY_JOBS:
+        url = f"https://example.com/jobs/{slug}"
+        job_dir = root / "jobs" / "discovered" / slug
+        job_dir.mkdir(parents=True)
+        (job_dir / "job.md").write_text(legacy_job_text(title, company, url, status), encoding="utf-8")
+        pipeline.append(f"- [{icon}] **{company}** — {title} · Bengaluru · Score 8 · 2026-10-01 · {url}")
+    (root / "jobs" / "discovered" / "acme-backend-engineer" / "people.md").write_text("# Hiring contacts\n", encoding="utf-8")
+    (root / "jobs" / "pipeline.md").write_text("\n".join(pipeline) + "\n", encoding="utf-8")
+
+
+def snapshot(root: Path) -> dict[str, bytes]:
+    """Every file in the workspace except CareerOS's own bookkeeping, keyed by relative path."""
+    skip = {".careeros", "ledger.jsonl"}
+    return {
+        p.relative_to(root).as_posix(): p.read_bytes()
+        for p in sorted(root.rglob("*"))
+        if p.is_file() and p.relative_to(root).parts[0] not in skip
+    }
