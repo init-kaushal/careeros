@@ -116,7 +116,7 @@ Exit codes: **0** every detected claim is supported and nothing needs review; **
 | `CHK010` | claims that are each supported but not by one fact together, or an allowed term combined with other claims |
 | `CHK020` | supported only by `claimed` facts (a failure with `--require-confirmed`) |
 | `CHK030` | the memory has no usable facts (a failure) |
-| `CHK031` | a source file changed since it was imported (an informational note; it never changes the exit code) |
+| `CHK031` | an informational note that never changes the exit code: a source file changed since it was imported, or a supporting fact is stale (its source line is gone from the resume) |
 
 ### `--allow` and `--against`
 
@@ -130,7 +130,11 @@ The checker prefers a false alarm to a missed fabrication. A person's name or a 
 
 ## Memory validation
 
-`careeros validate` reports problems in `career/`: `MEM001` unreadable file, `MEM002` missing key or bad or duplicate id, `MEM003` dangling reference, `MEM004` invalid status, origin, source or date, `MEM005` confirmed without a decision or verified without evidence, `MEM006` source changed since import, `MEM007` source file missing, `MEM008` stale fact, and `LED003` when a fact the ledger mentions has no file.
+`careeros validate` reports problems in `career/`: `MEM001` unreadable file (including a `career/sources.yaml` or `career/lexicon.yaml` that cannot be read or has the wrong shape), `MEM002` missing key or bad or duplicate id, `MEM003` dangling reference, `MEM004` invalid status, origin or source, or a date the check cannot read (an experience `start` must be `YYYY-MM`, an experience `end` `YYYY-MM` or `present`, an education `end` `YYYY-MM`, a certification `year` a four-digit year), `MEM005` confirmed without a decision or verified without evidence, `MEM006` source changed since import, `MEM007` source file missing, `MEM008` stale fact, and `LED003` when a fact the ledger mentions has no file.
+
+A broken `career/lexicon.yaml` (your own technology, certification or vocabulary additions) is reported by `validate` as `MEM001`, and `careeros check` and every memory command then refuse with exit 2 until it is fixed.
+
+Evidence cannot be retired or disputed while it is the only active evidence for a `verified` fact; dispute or re-verify that fact first.
 
 ## GPT Work
 

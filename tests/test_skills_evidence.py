@@ -19,6 +19,11 @@ GATE_PHRASES = (
     "Never call a draft \"verified\" or \"true\"",
     "still only claimed, not confirmed",
     "Exit 2",
+    "technologies, employers, schools, titles, certifications) is supported by your career memory. Prose was not evaluated",
+    "durations",
+    "does not mean every claim in the draft was detected",
+    "CHK030",
+    "a usage error (for example an unknown job id or an unreadable file) or a career memory that cannot be trusted",
 )
 TEMPLATES = Path(__file__).parent.parent / "careeros" / "templates"
 
