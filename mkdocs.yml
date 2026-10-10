@@ -38,6 +38,7 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Workspace health and audit: foundation.md
+  - Career memory and evidence: career-memory.md
   - Cowork:
     - Overview: cowork/index.md
     - Claude Code: cowork/claude-code.md
