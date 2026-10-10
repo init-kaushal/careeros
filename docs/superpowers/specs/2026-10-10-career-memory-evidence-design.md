@@ -403,3 +403,4 @@ These came from reading the real `resume.md` layout and from building the code. 
 8. **§8.4 `--against`.** It makes the target company and title known names but never excuses a self-description ("I am a Staff Engineer") or a claim of employment.
 9. **§8.2 durations.** A duration next to an employer is compared with that employer's own dated experience, not the career total.
 10. **§8.3 relationships and lists.** An achievement lends its parent's employer, titles and dates only while the parent is active. Technology enumerations are exempt only for technologies that follow one of the listed cues.
+11. **§8.1 soft-wrap joining is conservative.** The join applies only when the previous line is unterminated (no final `. ! ? : ;`) and the next begins with a lowercase letter or a digit. A capitalised continuation starts a new unit (a known limit). Greeting, list-prefix, header, bullet and bold-label lines are never joined.

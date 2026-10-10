@@ -365,3 +365,40 @@ def test_soft_wrapped_paragraph_lines_are_joined_but_bullets_stay_separate(caree
     assert run(root, "Reduced AWS costs by 35%\nusing Kafka-based pipelines.").ok
     assert run(root, "- Reduced AWS costs by 35% using Kafka.\n- Built it in Go for 120 engineers.").ok
     assert "CHK010" not in codes(run(root, "- Reduced costs by 35%\n- with PostgreSQL on Grafana"))
+
+
+# --- review fix round 2 -------------------------------------------------------------------------
+
+@pytest.mark.parametrize("draft", [
+    "## Skills\n\n**Languages:** Go, Python\n**Infra:** Kubernetes, AWS",
+    "Acme Corp | Senior Software Engineer\n2025 - Present\nReduced AWS costs by 35% using Kafka.",
+    "Led a Kubernetes migration for 40+ services\nDesigned a multi-region PostgreSQL setup with 99.95% availability",
+    "Dear Hiring Manager,\nI admire the work.",
+])
+def test_conservative_joining_keeps_faithful_layouts_passing(career, draft: str) -> None:
+    root, _ = career
+    assert run(root, draft).ok, [(f.code, f.atom) for f in run(root, draft).review_required]
+
+
+@pytest.mark.parametrize("draft", [
+    "Dear Hiring Manager,\nI partnered with Zorbix Labs on Kafka.",
+    "Hello,\nI earned my MS at Stanford University in 2020.",
+    "Thanks for your time\nZorbix Labs referred me.",
+    "Tech: Go, Python\nand Kafka with PostgreSQL",
+])
+def test_conservative_joining_does_not_hide_fabrications(career, draft: str) -> None:
+    root, _ = career
+    assert not run(root, draft).ok
+
+
+def test_against_join_as_the_target_title_is_not_a_claim(career) -> None:
+    root, _ = career
+    against = ("Initech", "Staff Engineer")
+    assert run(root, "I would love to join Initech as a Staff Engineer.", against=against).ok
+    assert "CHK006" in codes(run(root, "As the Staff Engineer, I led teams.", against=against))
+
+
+def test_each_duration_is_compared_with_the_nearest_employer(career) -> None:
+    root, _ = career
+    assert "CHK008" not in codes(run(root, "I spent 2 years at Globex Systems and 1 year at Acme Corp."))
+    assert "CHK008" in codes(run(root, "I spent 4 years at Acme Corp."))

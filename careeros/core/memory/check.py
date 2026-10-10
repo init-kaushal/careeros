@@ -62,6 +62,7 @@ _PIPE = re.compile(r"^\s*(?:#{1,6}\s*)?(?P<e>[^|]+?)\s*\|\s*(?P<t>[^|]+?)\s*$")
 _FILLER = re.compile(
     r"^(?:\s+(?:of|professional|hands-on|industry|commercial|practical|experience|in|with|using|working|work|"
     r"building|writing|developing))*\s+$|^\s*$", re.I)
+_APPLYING = re.compile(r"\b(?:join|apply|applying|interested in|excited|seeking|would love|hope to|keen)\b", re.I)
 _TOKEN = re.compile(r"(?-i:[A-Z][\w&'’-]*)")
 _WORDS = re.compile(r"[\w'’&-]+")
 
@@ -383,7 +384,7 @@ class Checker:
             if free(pipe.start("t"), pipe.end("t")):
                 self._title_atom(pipe.group("t"), pipe.start("t"), pipe.end("t"), add)
             return
-        claims = [m.span("t") for m in self._cue_role.finditer(text)]
+        claims = [m.span("t") for m in self._cue_role.finditer(text) if not _APPLYING.search(text[:m.start()])]
 
         def claimed(start: int, end: int) -> bool:
             return any(start < e and s < end for s, e in claims)
@@ -529,12 +530,13 @@ class Checker:
         employers = [a for a in atoms if a.kind == "employer" and a.status == "supported"]
         for atom in atoms:
             if atom.kind == "duration" and atom.status == "supported":
-                for emp in employers:
-                    covered = self.m.employer_months.get(emp.key, 0) // 12
-                    if atom.key[0] > covered:
-                        atom.status, atom.code = "unsupported", "CHK008"
-                        atom.reason = f"{atom.raw}: your dated experience at that employer covers {covered} year(s)"
-                        break
+                if not employers:
+                    continue
+                emp = min(employers, key=lambda e: abs(e.start - atom.start))
+                covered = self.m.employer_months.get(emp.key, 0) // 12
+                if atom.key[0] > covered:
+                    atom.status, atom.code = "unsupported", "CHK008"
+                    atom.reason = f"{atom.raw}: your dated experience at that employer covers {covered} year(s)"
         findings = [Finding(a.code, sentence, a.raw, a.reason, FIX[a.code]) for a in atoms if a.status in ("unsupported", "review")]
         if not findings:
             findings = self._relationship(sentence, atoms, list_line)
@@ -585,13 +587,15 @@ class Checker:
 def _prepare_lines(draft: str) -> list[tuple[str, bool]]:
     """Each content unit of the draft with markdown stripped, and whether it sits in a skills-style section.
 
-    Consecutive plain-text lines of one paragraph are joined, so a hard-wrapped line cannot split a combination of claims.
+    A plain line is joined onto the unit above only when that unit is unterminated and the line begins lowercase or with a
+    digit (a wrapped continuation). A capitalised continuation starts a new unit: a known limit.
     """
     draft = re.sub(r"<!--.*?-->", "", draft, flags=re.S)
     out: list[tuple[str, bool]] = []
     section, in_fence = "", False
     pending: list[str] = []
     pending_list = False
+    pending_locked = False
 
     def flush() -> None:
         nonlocal pending
@@ -628,8 +632,16 @@ def _prepare_lines(draft: str) -> list[tuple[str, bool]]:
         if not text:
             flush()
             continue
-        if stripped != line:  # a bullet or numbered item starts a new unit
+        is_item = stripped != line
+        locked = bool(_GREETING.match(text) or _LIST_PREFIX.match(text) or line.lstrip().startswith("**"))
+        joinable = (
+            bool(pending) and not is_item and not locked and not pending_locked
+            and not pending[-1].rstrip().endswith((".", "!", "?", ":", ";"))
+            and (text[0].islower() or text[0].isdigit())
+        )
+        if not joinable:
             flush()
+            pending_locked = locked
         pending.append(text)
         pending_list = section in LIST_SECTIONS
     flush()
