@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from careeros.core import backup as backup_helpers
 from careeros.core import ids, ledger, models, versions
 from careeros.core.models import State, WorkspaceMeta
 from careeros.core.workspace import (
@@ -80,31 +80,22 @@ class OperationResult:
 # --- helpers ----------------------------------------------------------------------------
 
 def _sha(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+    return backup_helpers.sha256(data)
 
 
 def _new_backup_dir(root: Path, kind: str) -> Path:
-    stamp = models.utc_now().replace("-", "").replace(":", "")
-    base = root / BACKUPS_REL
-    candidate = base / f"{stamp}-{kind}"
-    n = 2
-    while candidate.exists():
-        candidate = base / f"{stamp}-{kind}-{n}"
-        n += 1
-    candidate.mkdir(parents=True)
-    return candidate
+    return backup_helpers.new_backup_dir(root, kind)
 
 
 def _write_manifest(backup: Path, manifest: dict) -> None:
-    atomic_write_bytes(backup / "manifest.json", (json.dumps(manifest, indent=2) + "\n").encode("utf-8"))
+    backup_helpers.write_manifest(backup, manifest, write=atomic_write_bytes)
 
 
 def _backup_files(backup: Path, items: list[tuple[str, bytes]]) -> None:
-    for rel, data in items:
-        destination = backup / rel
-        atomic_write_bytes(destination, data)
-        if _sha(destination.read_bytes()) != _sha(data):
-            raise MigrationError(f"backup verification failed for {rel}; nothing was changed")
+    try:
+        backup_helpers.backup_files(backup, items, write=atomic_write_bytes)
+    except backup_helpers.BackupError as exc:
+        raise MigrationError(str(exc)) from exc
 
 
 def _detect_runtimes(root: Path) -> tuple[str, ...]:

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0 — Career memory and the evidence check
+
+### Added
+- `careeros memory` (`import`, `add`, `update`, `confirm`, `verify`, `dispute`, `retire`, `list`, `show`, `status`) and a `career/` folder of provenance-tracked facts. Facts have a status (`claimed`, `confirmed`, `verified`, `disputed`, `retired`) that is separate from their source, and imports only ever create `claimed` facts.
+- `careeros memory import`: a deterministic parse of `resume.md` with a reviewable diff. It never overwrites a confirmed fact, never touches facts you added or edited, marks facts whose line left the resume as stale instead of deleting them, backs up every file it changes, and rolls back if the ledger append fails.
+- `careeros check`: compares the numbers, years, durations, technologies, employers, schools, titles and certifications in a draft with your facts, requires the claims in one sentence to come from a single fact, and reports what it did not evaluate. Exit 0 means every detected claim is supported, not that the draft is true.
+- A mandatory EVIDENCE GATE in the `prep`, `apply`, `outreach`, `follow-up`, `humanize` and `interview` skills, and a `memory` skill. GPT Work is unchanged.
+- `validate` reports `MEM001`-`MEM008` for the memory and `LED003` for memory ids the ledger mentions but no file has. The ledger type prefix `memory.*` is now reserved. `check --record` writes `draft.checked`, which is not reserved.
+
+### Changed
+- The verified-backup helpers moved to `careeros/core/backup.py`; migration behaviour is unchanged.
+
+### Notes
+- Run `careeros upgrade` in existing workspaces to receive the new skills, then `careeros memory import` to build your career memory (until then every gated draft fails with CHK030).
+- Known limits: the checker cannot see claims outside its detection rules (see `docs/career-memory.md`), a person's name raises `CHK009` unless allowed or added as an identity, and the importer understands the `resume.md` layout documented there.
+
 ## 0.3.0 — Foundation
 
 ### Added

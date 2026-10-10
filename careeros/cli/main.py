@@ -2,9 +2,11 @@ import typer
 
 from careeros.cli.approve import approve_cmd
 from careeros.cli.archive import archive_cmd
+from careeros.cli.check import check_cmd
 from careeros.cli.doctor import doctor_cmd
 from careeros.cli.init_cmd import init_cmd
 from careeros.cli.ledger import ledger_app
+from careeros.cli.memory import memory_app
 from careeros.cli.migrate import migrate_cmd
 from careeros.cli.status import status_cmd
 from careeros.cli.transition import transition_cmd
@@ -29,7 +31,9 @@ app.command("approve")(approve_cmd)
 app.command("archive")(archive_cmd)
 app.command("migrate")(migrate_cmd)
 app.command("upgrade")(upgrade_cmd)
+app.command("check")(check_cmd)
 app.add_typer(ledger_app, name="ledger")
+app.add_typer(memory_app, name="memory")
 
 if __name__ == "__main__":
     app()

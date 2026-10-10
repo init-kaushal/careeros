@@ -128,3 +128,34 @@ def make_claude_workspace(root: Path, framework: str = "0.1.0") -> Path:
     save_meta(root, WorkspaceMeta(versions.SCHEMA_VERSION, framework, TS, TS, ("claude",)))
     ledger.append_event(root, type="workspace.created", actor="system", action="created")
     return root
+
+# --- career memory ---------------------------------------------------------------------
+
+def make_career(root: Path) -> dict[str, str]:
+    """A small, invented career memory (every fact `claimed`). Returns the ids by short name."""
+    from careeros.core.memory import ops
+
+    quote = "stated by the user in the test"
+
+    def add(kind: str, **fields: object) -> str:
+        return ops.add_fact(root, kind, fields, quote=quote).id
+
+    made: dict[str, str] = {}
+    made["identity"] = add("identity", name="Jordan Example", headlines=["Backend Engineer", "Platform Engineer"])
+    made["acme"] = add("experience", employer="Acme Corp", title="Senior Software Engineer", start="2025-01", end="present",
+                       technologies=["Go", "Python", "Kubernetes", "AWS", "Kafka", "Terraform"])
+    made["globex"] = add("experience", employer="Globex Systems Pvt Ltd", title="Software Engineer 2", start="2022-03",
+                         end="2024-12", technologies=["PostgreSQL", "Prometheus", "Grafana"])
+    made["k8s"] = add("achievement", parent=made["acme"], text="Led a Kubernetes migration for 40+ services, cutting deploy time by 60%.")
+    made["costs"] = add("achievement", parent=made["acme"], text="Reduced AWS costs by 35% by moving batch jobs to Kafka-based pipelines.")
+    made["platform"] = add("achievement", parent=made["acme"], text="Built an internal developer platform in Go used by 120 engineers.")
+    made["pg"] = add("achievement", parent=made["globex"], text="Designed a multi-region PostgreSQL setup with 99.95% availability.")
+    made["incident"] = add("achievement", parent=made["globex"],
+                           text="Cut incident response time from 45 minutes to 12 minutes with Prometheus and Grafana alerts.")
+    for name in ("Go", "Python", "SQL", "Terraform", "Kubernetes"):
+        made[f"skill_{name.lower()}"] = add("skill", name=name)
+    made["edu"] = add("education", school="Example Institute of Technology, Jabalpur", degree="B.Tech. in Computer Science",
+                      end="2020-06", text="CGPA 8.1/10")
+    made["cka"] = add("certification", name="Certified Kubernetes Administrator", year="2023")
+    made["kubewatch"] = add("project", name="kubewatch", text="Open-source tool that streams Kubernetes events, used by 300+ teams.")
+    return made

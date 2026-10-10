@@ -250,6 +250,8 @@ Write their resume verbatim, as given:
 
 If they skipped Q9, don't create this file — `prep` and `apply` will ask for it when needed.
 
+If you created `resume.md`, import it into the career memory: run `careeros memory import`, show the plan, and after the user agrees run `careeros memory import --apply --yes`. Explain that the facts start as *claimed* and that every draft will be checked against them. (If the `careeros` command is not available, tell the user to run it later; do not skip the explanation.)
+
 ### 6. Create directory `jobs/discovered/` (empty, just the directory)
 
 ---

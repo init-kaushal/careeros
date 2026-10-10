@@ -62,6 +62,7 @@ jobs/
       interview-prep.md — question bank + STAR stories
       offer.md          — offer details + negotiation notes
 activity.md             — append-only action log
+career/                 — your career memory: one file per fact, with its source and status
 CLAUDE.md / AGENTS.md   — agent entry point (framework-owned)
 .claude/skills/         — skill files (framework-owned)
 ```
@@ -83,6 +84,17 @@ careeros upgrade     # refresh skill files (backs up first)
 ```
 
 Every state change made through these commands is recorded in an append-only, hash-chained `ledger.jsonl`; your markdown stays the source of truth. See `docs/foundation.md` for the job lifecycle, the guarantees and their limits.
+
+## Career memory and the evidence check
+
+```bash
+careeros memory import           # turn resume.md into career facts (shows a plan first)
+careeros memory import --apply   # make the changes
+careeros memory confirm <id>     # you affirm a fact (needs a terminal)
+careeros check draft.md          # does every checkable claim trace to your facts?
+```
+
+Facts imported from your resume start as *claimed*; only you can confirm them. Each Claude Code drafting skill runs `careeros check` on its final text and fixes or asks about anything unsupported. A pass means the claims the checker could detect are supported, never that the whole draft is true. See `docs/career-memory.md`.
 
 ## Requirements
 

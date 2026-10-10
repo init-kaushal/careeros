@@ -8,6 +8,22 @@ Credit: the checklist below is adapted from the publicly documented voice rules 
 
 ---
 
+## EVIDENCE GATE (mandatory)
+
+**Applies to:** the rewritten text (STEP 2). Humanizing may change wording, never facts: do not add a number, name, technology or claim that the original did not contain. The skill that called you runs its own gate after you finish; a direct "humanize this" request about the user's career text gets the gate here. When another skill invoked you, return the rewritten text to that skill WITHOUT showing it to the user; that skill's own gate runs before anything is shown. Only a direct request from the user gets the gate and the display inside humanize.
+
+Every claim in text you write for the user must trace to their career memory (`career/`). Before you show, send, paste or save any draft as final:
+
+1. Save the final text after your last edit (after `humanize`, if you used it) to a file, or pass it on standard input with `-`.
+2. Run `careeros check <file> --against <job-id> --record`. Leave out `--against` when the text is not for one job.
+3. **Exit 0:** tell the user the result in these words, with the real count: "Evidence check passed: every checkable claim the checker could detect (numbers, years, durations, technologies, employers, schools, titles, certifications) is supported by your career memory. Prose was not evaluated, N supporting fact(s) are still only claimed, not confirmed, and a pass does not mean every claim in the draft was detected." Never call a draft "verified" or "true".
+4. **Exit 1:** do not show the draft. For every finding, remove or rewrite the claim, or ask the user whether it is true. If they say it is, add it with `careeros memory add ... --quote "<their exact words>"` and run the check again. `CHK010` means the claims in one sentence do not come from a single fact: rewrite the sentence so it says only what one fact says, or ask. Never use `--allow` to get past a claim about the user's own history; it is only for names or terms that come from the job or from other people. If the only finding is CHK030 (the memory has no usable facts), tell the user to import their resume (see the memory skill) and stop.
+5. **Exit 2:** a usage error (for example an unknown job id or an unreadable file) or a career memory that cannot be trusted. Tell the user, run `careeros validate`, and stop. If the `careeros` command is not found, treat it as exit 2: tell the user and do not show or send the draft.
+
+Re-run the check after every edit. Never skip it and never ignore a failure.
+
+---
+
 ## STEP 1 — RUN THE CHECKLIST
 
 Before showing any drafted cover letter, connection note, outreach email, or follow-up message, scan it against these:
@@ -44,6 +60,6 @@ Do not fabricate a specific detail, number, or claim that isn't already grounded
 
 ## STEP 3 — SHOW THE RESULT
 
-Show the cleaned draft the same way the calling skill normally would (its existing "looks good? yes / regenerate / skip" prompt, character count, etc.) — this isn't a separate review stage, just a pass the draft goes through before that prompt appears. Only call out specific changes if the user asks what was changed or invoked this skill directly on pasted text.
+When another skill invoked you, hand the cleaned draft back to the caller instead of showing it; the caller runs its own gate and then shows it. Only for a direct request, show the cleaned draft (after the gate passes) the same way the calling skill normally would (its existing "looks good? yes / regenerate / skip" prompt, character count, etc.) — this isn't a separate review stage, just a pass the draft goes through before that prompt appears. Only call out specific changes if the user asks what was changed or invoked this skill directly on pasted text.
 
 For a direct "humanize this" request on pasted text, show the before and after so the user can see what moved.

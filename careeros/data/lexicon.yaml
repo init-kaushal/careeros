@@ -1,0 +1,325 @@
+# Bundled vocabulary for `careeros check` and `careeros memory import`.
+# Add your own terms in career/lexicon.yaml (additions only).
+
+# name: canonical spelling. aliases: other spellings. case_sensitive: aliases that must match exactly
+# (short or ordinary-looking words such as Go, R, Rust, Spark).
+technologies:
+  - {name: Python}
+  - {name: Go, aliases: [golang], case_sensitive: [Go]}
+  - {name: Java}
+  - {name: JavaScript, aliases: [Javascript]}
+  - {name: TypeScript, aliases: [Typescript]}
+  - {name: C++, aliases: [cpp]}
+  - {name: C#, aliases: [csharp]}
+  - {name: C, case_sensitive: [C]}
+  - {name: R, case_sensitive: [R]}
+  - {name: Rust, case_sensitive: [Rust]}
+  - {name: Swift, case_sensitive: [Swift]}
+  - {name: Kotlin}
+  - {name: Scala}
+  - {name: Ruby}
+  - {name: PHP}
+  - {name: Perl}
+  - {name: Elixir}
+  - {name: Erlang}
+  - {name: Bash, aliases: [shell scripting]}
+  - {name: SQL}
+  - {name: Node.js, aliases: [Node, NodeJS, Nodejs]}
+  - {name: React, aliases: [ReactJS, React.js]}
+  - {name: Angular}
+  - {name: Vue, aliases: [Vue.js, VueJS]}
+  - {name: Next.js, aliases: [NextJS]}
+  - {name: Django}
+  - {name: Flask, case_sensitive: [Flask]}
+  - {name: FastAPI}
+  - {name: Spring Boot, aliases: [Spring]}
+  - {name: Rails, aliases: [Ruby on Rails]}
+  - {name: .NET, aliases: [dotnet]}
+  - {name: gRPC}
+  - {name: GraphQL}
+  - {name: Protobuf, aliases: [Protocol Buffers, protobufs]}
+  - {name: Kubernetes, aliases: [k8s, kube]}
+  - {name: Docker}
+  - {name: Helm}
+  - {name: Istio}
+  - {name: Envoy, case_sensitive: [Envoy]}
+  - {name: Cilium}
+  - {name: Calico, case_sensitive: [Calico]}
+  - {name: OpenShift}
+  - {name: Rancher}
+  - {name: Nomad, case_sensitive: [Nomad]}
+  - {name: Terraform}
+  - {name: Pulumi}
+  - {name: Ansible}
+  - {name: Chef, case_sensitive: [Chef]}
+  - {name: Puppet, case_sensitive: [Puppet]}
+  - {name: Packer, case_sensitive: [Packer]}
+  - {name: Crossplane}
+  - {name: ArgoCD, aliases: [Argo CD, Argo]}
+  - {name: Flux, case_sensitive: [Flux]}
+  - {name: Jenkins}
+  - {name: GitHub Actions}
+  - {name: GitLab CI}
+  - {name: CircleCI}
+  - {name: TeamCity}
+  - {name: Git, case_sensitive: [Git]}
+  - {name: GitHub}
+  - {name: GitLab}
+  - {name: Bitbucket}
+  - {name: Linux}
+  - {name: Nginx, aliases: [NGINX]}
+  - {name: HAProxy}
+  - {name: AWS, aliases: [Amazon Web Services]}
+  - {name: GCP, aliases: [Google Cloud, Google Cloud Platform]}
+  - {name: Azure}
+  - {name: EC2}
+  - {name: S3, aliases: [Amazon S3]}
+  - {name: EKS}
+  - {name: ECS}
+  - {name: RDS}
+  - {name: SQS}
+  - {name: SNS}
+  - {name: Lambda, aliases: [AWS Lambda], case_sensitive: [Lambda]}
+  - {name: DynamoDB}
+  - {name: CloudFormation}
+  - {name: CloudWatch}
+  - {name: BigQuery}
+  - {name: PostgreSQL, aliases: [Postgres, psql]}
+  - {name: MySQL}
+  - {name: MariaDB}
+  - {name: SQLite}
+  - {name: MongoDB, aliases: [Mongo]}
+  - {name: Redis}
+  - {name: Memcached}
+  - {name: Cassandra}
+  - {name: Elasticsearch, aliases: [Elastic Search, OpenSearch]}
+  - {name: Kibana}
+  - {name: Logstash}
+  - {name: Snowflake}
+  - {name: Kafka, aliases: [Apache Kafka]}
+  - {name: RabbitMQ}
+  - {name: NATS, case_sensitive: [NATS]}
+  - {name: IBM MQ, aliases: [MQ], case_sensitive: [MQ]}
+  - {name: Flink, aliases: [Apache Flink]}
+  - {name: Spark, aliases: [Apache Spark, PySpark], case_sensitive: [Spark]}
+  - {name: Hadoop}
+  - {name: Airflow, aliases: [Apache Airflow]}
+  - {name: Prometheus}
+  - {name: Grafana}
+  - {name: Loki, case_sensitive: [Loki]}
+  - {name: Thanos}
+  - {name: Jaeger}
+  - {name: OpenTelemetry, aliases: [otel, OTel]}
+  - {name: Datadog}
+  - {name: Splunk}
+  - {name: New Relic}
+  - {name: PagerDuty}
+  - {name: Sentry, case_sensitive: [Sentry]}
+  - {name: Fluentd}
+  - {name: Vault, aliases: [HashiCorp Vault], case_sensitive: [Vault]}
+  - {name: Consul, case_sensitive: [Consul]}
+  - {name: PyTorch}
+  - {name: TensorFlow}
+  - {name: NumPy}
+  - {name: Jira}
+  - {name: Confluence}
+
+role_nouns: [engineer, developer, programmer, architect, manager, director, consultant, analyst, scientist, administrator, specialist, officer, designer, lead, intern, founder, cofounder, president, owner, partner]
+# A capitalized run containing one of these words (plus a role noun) is treated as a job title even without a cue.
+seniority: [senior, sr, staff, principal, lead, head, director, vp, vice, chief, junior, jr, associate, distinguished, fellow, intern, cto, ceo, cio, coo, cfo]
+# Words that make a run a title on their own, even with no role noun (Head of Platform, VP Engineering).
+title_words: [head, vp, vice, chief, cto, ceo, cio, coo, cfo]
+org_suffixes: [inc, incorporated, ltd, limited, llc, llp, lp, corp, corporation, co, company, gmbh, ag, plc, pvt, private, pte, sa, bv, nv, oy, ab, srl]
+
+certifications:
+  - {name: AWS Certified Solutions Architect, aliases: [AWS CSA, AWS Solutions Architect]}
+  - {name: AWS Certified Developer}
+  - {name: AWS Certified SysOps Administrator}
+  - {name: AWS Certified DevOps Engineer}
+  - {name: Certified Kubernetes Administrator, aliases: [CKA]}
+  - {name: Certified Kubernetes Application Developer, aliases: [CKAD]}
+  - {name: Certified Kubernetes Security Specialist, aliases: [CKS]}
+  - {name: CISSP}
+  - {name: PMP}
+  - {name: OSCP}
+  - {name: CCNA}
+  - {name: ITIL}
+  - {name: HashiCorp Certified Terraform Associate, aliases: [Terraform Associate]}
+  - {name: Google Professional Cloud Architect}
+  - {name: Azure Administrator Associate, aliases: [AZ-104]}
+  - {name: CompTIA Security+}
+  - {name: Certified Scrum Master, aliases: [CSM]}
+
+# Capitalized words that are not names of employers, schools or titles. Compared case-insensitively.
+stoplist:
+  - I
+  - Dear
+  - Hi
+  - Hello
+  - Hey
+  - Thanks
+  - Thank
+  - Regards
+  - Best
+  - Sincerely
+  - Cheers
+  - Yours
+  - Kind
+  - Warm
+  - Monday
+  - Tuesday
+  - Wednesday
+  - Thursday
+  - Friday
+  - Saturday
+  - Sunday
+  - January
+  - February
+  - March
+  - April
+  - May
+  - June
+  - July
+  - August
+  - September
+  - October
+  - November
+  - December
+  - Jan
+  - Feb
+  - Mar
+  - Apr
+  - Jun
+  - Jul
+  - Aug
+  - Sep
+  - Sept
+  - Oct
+  - Nov
+  - Dec
+  - Present
+  - Summary
+  - Profile
+  - Experience
+  - Education
+  - Projects
+  - Project
+  - Skills
+  - Certifications
+  - Contact
+  - Resume
+  - Objective
+  - Awards
+  - Publications
+  - Languages
+  - Interests
+  - References
+  - Technologies
+  - Achievements
+  - Responsibilities
+  - English
+  - Hindi
+  - French
+  - German
+  - Spanish
+  - Mandarin
+  - Japanese
+  - India
+  - Singapore
+  - Germany
+  - Canada
+  - Australia
+  - Netherlands
+  - Ireland
+  - Sweden
+  - Switzerland
+  - Japan
+  - China
+  - France
+  - Spain
+  - UAE
+  - UK
+  - USA
+  - US
+  - EU
+  - London
+  - Berlin
+  - Bengaluru
+  - Bangalore
+  - Mumbai
+  - Delhi
+  - Hyderabad
+  - Pune
+  - Chennai
+  - Dubai
+  - Toronto
+  - Sydney
+  - Amsterdam
+  - Dublin
+  - Stockholm
+  - Zurich
+  - Paris
+  - Tokyo
+  - Remote
+  - API
+  - APIs
+  - CI
+  - CD
+  - SLA
+  - SLO
+  - SLI
+  - SLAs
+  - SLOs
+  - SRE
+  - SaaS
+  - PaaS
+  - IaaS
+  - SDK
+  - UI
+  - UX
+  - AI
+  - ML
+  - LLM
+  - LLMs
+  - QA
+  - KPI
+  - KPIs
+  - OKR
+  - OKRs
+  - ETL
+  - CLI
+  - REST
+  - HTTP
+  - HTTPS
+  - JSON
+  - YAML
+  - TCP
+  - UDP
+  - DNS
+  - TLS
+  - SSL
+  - VPC
+  - IAM
+  - RBAC
+  - GitOps
+  - DevOps
+  - DevSecOps
+  - MLOps
+  - FinOps
+  - IaC
+  - TDD
+  - CPU
+  - GPU
+  - RAM
+  - OS
+  - IT
+  - HR
+  - PR
+  - PRs
+  - MVP
+  - POC
+  - B2B
+  - B2C
+  - CTO
+  - CEO
+  - VP

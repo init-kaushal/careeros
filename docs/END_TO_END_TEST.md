@@ -44,3 +44,31 @@ Using the first job directory in alphabetical order ("job-1"):
 - The real workspace itself: it was **not** migrated. Only a copy was.
 - `approve` was not run on the copy, because it needs an interactive terminal; it is covered by `tests/test_foundation_e2e.py` with a synthetic workspace.
 - These spec acceptance steps are covered by the automated tests only, not by the run on the copy: the approval-guard refusal and repeated-transition check (step 3), the failed-ledger-append byte-identical check (step 4), and doctor/status on a fresh workspace (step 6, partly).
+
+## Career memory (0.4.0)
+
+- Date: 2026-10-10
+- Commit under test: 272040d (the Task 8 documentation commit follows it)
+- Method: the real workspace was copied (`cp -R`); SHA-256 checksums of all 94 files of the real workspace (excluding `.git`) were taken before and after; the copy was migrated first (the real workspace is schema 0), and every command below ran with `-w` on the copy. The faithful draft is the verbatim text of one imported achievement; the four tampered drafts are generated from the copy's own memory by a throwaway script that is not committed.
+
+| Command | Exit | Observed |
+|---|---|---|
+| `migrate --yes` (copy) | 0 | migrated |
+| `memory import` (dry run) | 0 | 55 added, 0 changed, 0 removed, 0 unchanged, 0 need review; one "not imported" note (preamble) |
+| `memory import --apply --yes` | 0 | same summary |
+| `memory import --apply --yes` (second) | 0 | "Nothing to import" |
+| `resume.md` copy vs original | n/a | identical |
+| `memory status` | 0 | 55 facts, all claimed: 13 achievement, 1 education, 3 experience, 1 project, 37 skill |
+| `validate` | 0 | 0 errors, 0 warnings |
+| `ledger verify` | 0 | 90 events OK |
+| `check` faithful draft | 0 | no findings |
+| `check` first 5 imported achievements, verbatim | 0 each | 5 of 5 pass |
+| `check` invented metric | 1 | CHK001 |
+| `check` invented employer | 1 | CHK004 |
+| `check` invented technology | 1 | CHK003 |
+| `check` unrepresented relationship | 1 | CHK010 |
+| Real workspace checksums before/after | n/a | identical (94 files) |
+
+An earlier run of this acceptance on the same workspace failed the faithful draft with two CHK009 findings (capitalised words that appear verbatim in the fact's own text were treated as unknown names); that was fixed in 272040d and the run above is after the fix.
+
+Not covered: the skills cannot be run live here; they are covered by the wording tests only. `memory confirm` and `retire` need an interactive terminal and were not run on the copy; they are covered by `tests/test_memory_e2e.py` with a synthetic workspace. The real workspace itself was not migrated or imported; only a copy was.

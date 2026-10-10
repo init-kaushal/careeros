@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from careeros.core import ids, ledger, models, versions
+from careeros.core.memory import store
 from careeros.core.models import Issue, State
 from careeros.core.state_machine import (
     PIPE_ENTRY,
@@ -172,17 +173,28 @@ def validate_workspace(root: Path) -> list[Issue]:
                 add("warning", "PIPE002", info["path"], "the job has no line in jobs/pipeline.md",
                     "add a pipeline line for it, or archive the job with `careeros archive`")
 
+    # --- career memory ---
+    issues.extend(store.load_career(root).issues)
+
     # --- ledger ---
     issues.extend(ledger.verify_chain(root))
     events = _lenient_events(root)
     reported: set[str] = set()
+    memory_ids = store.known_ids(root)
     for event in events:
         entity = event.get("entity")
-        if isinstance(entity, str) and entity.startswith("job_") and entity not in all_ids and entity not in reported:
+        if not isinstance(entity, str) or entity in reported:
+            continue
+        if entity.startswith("job_") and entity not in all_ids:
             reported.add(entity)
             add("error", "LED003", "ledger.jsonl",
                 f"event {event.get('seq')} refers to {entity}, but no job file has that id",
                 "restore the job directory from .careeros/backups or version control; archive jobs with `careeros archive` instead of deleting them")
+        elif entity.startswith(store.MEMORY_ID_PREFIXES) and entity not in memory_ids:
+            reported.add(entity)
+            add("error", "LED003", "ledger.jsonl",
+                f"event {event.get('seq')} refers to {entity}, but no career file has that id",
+                "restore the file from .careeros/backups or version control; retire facts with `careeros memory retire` instead of deleting them")
     for event in events:
         if event.get("type") != "job.status_changed":
             continue
