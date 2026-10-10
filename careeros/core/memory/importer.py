@@ -56,10 +56,13 @@ class ParseResult:
     errors: list[str] = field(default_factory=list)
 
 
-def _point_ym(match: re.Match, prefix: str, edge: str) -> str:
+def _point_ym(match: re.Match, prefix: str, edge: str) -> str | None:
+    """YYYY-MM for a date point, or None when its month is not 1-12 (never emit a date validation would reject)."""
     if match.group(prefix + "mon"):
         return f"{int(match.group(prefix + 'y')):04d}-{_MONTHS[match.group(prefix + 'mon').lower()[:3]]:02d}"
     if match.group(prefix + "m"):
+        if not 1 <= int(match.group(prefix + "m")) <= 12:
+            return None
         return f"{int(match.group(prefix + 'yy')):04d}-{int(match.group(prefix + 'm')):02d}"
     year = match.group(prefix + "yr")
     return f"{year}-01" if edge == "start" else f"{year}-12"
@@ -69,8 +72,9 @@ def _date_range(line: str) -> tuple[str, str] | None:
     match = _RANGE.search(line)
     if not match:
         return None
+    start = _point_ym(match, "a", "start")
     end = "present" if match.group("present") else _point_ym(match, "b", "end")
-    return _point_ym(match, "a", "start"), end
+    return (start, end) if start and end else None
 
 
 def _last_point(text: str) -> str | None:

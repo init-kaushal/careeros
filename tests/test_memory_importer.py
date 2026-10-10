@@ -367,3 +367,29 @@ def test_a_true_duplicate_degree_is_reported_and_dropped() -> None:
     result = parse(text)
     assert [c.kind for c in result.candidates].count("education") == 1
     assert any("duplicate" in s for s in result.skipped)
+
+
+# --- follow-up: an invalid month is never normalised into a YYYY-MM date -----------------------
+
+@pytest.mark.parametrize("line", ["13/2019 - 06/2022", "03/2020 - 13/2022", "00/2019 - Present", "13/2019 - Present"])
+def test_an_invalid_month_in_an_experience_range_is_the_no_date_range_error(line: str) -> None:
+    text = f"## Experience\n\n### Acme | Engineer\n{line}\n\n- Did a thing.\n"
+    result = parse(text)
+    assert any("no date range" in e for e in result.errors)
+    assert not any(c.fields.get("start") or c.fields.get("end") for c in result.candidates if c.kind == "experience")
+
+
+@pytest.mark.parametrize("tail", ["13/2019", "00/2019", "Jun 2018 - 13/2019"])
+def test_an_invalid_month_in_an_education_date_is_the_needs_a_date_error(tail: str) -> None:
+    result = parse(f"## Education\n\n**Some School** - {tail}\nB.Sc.\n")
+    assert any("needs a date" in e for e in result.errors)
+    assert not any(c.kind == "education" for c in result.candidates)
+
+
+@pytest.mark.parametrize("tail,expected", [
+    ("12/2019", "2019-12"), ("01/2019", "2019-01"), ("1/2019", "2019-01"), ("Jun 2020", "2020-06"),
+    ("June 2020", "2020-06"), ("2020", "2020-12"),
+])
+def test_valid_education_dates_still_normalise(tail: str, expected: str) -> None:
+    edu = next(c for c in parse(f"## Education\n\n**Some School** - {tail}\nB.Sc.\n").candidates if c.kind == "education")
+    assert edu.fields["end"] == expected
