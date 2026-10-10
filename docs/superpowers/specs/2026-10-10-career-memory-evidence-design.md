@@ -388,3 +388,14 @@ On a temporary copy of the real workspace (the real one is never modified; commi
 4. Checker core, relationships and output.
 5. CLI: `memory …` and `check`; ledger prefix and validation rules.
 6. Skill integration: the evidence gate in six skills, the `memory` skill, routing, docs, acceptance.
+
+## 18. Clarifications made while writing the plan (2026-10-10)
+
+These came from reading the real `resume.md` layout and from building the code. They narrow or complete the approved text; none weakens a guarantee.
+
+1. **§6.1 importer grammar follows the real layout.** Under an experience, a line starting `Tech:`, `Technologies:`, `Tech stack:` or `Stack:` fills that experience's `technologies` and is not an achievement. A project starts at a `### Name` heading or a `**Name**` line; its first prose line is its text and later bullets are achievements. A school is `**School, City** - Month YYYY` followed by a degree line `Degree | detail`. Skills accept `**Category:** a, b` and a parenthesised group (`AWS (Lambda, EC2)` makes three skills). Lines before the first `##` are reported as `preamble`, never dropped silently. A repeated line is imported once and reported.
+2. **§4.1 optional keys.** Imported facts carry `import_key` (the importer's match key); a fact whose source line has left the resume carries `stale: true`; achievements carry `section`.
+3. **§6.4 no-op rule.** An import is a no-op only when the source hash is unchanged **and** the number of facts awaiting review is unchanged, so a pending review is never hidden.
+4. **§7 events.** Declining a confirmation prompt is logged as `memory.declined`. Every event type starting `memory.` is reserved. In the CLI, `memory add --kind evidence` infers the evidence kind (`document` from `--set path=...`, otherwise `link`).
+5. **§8.1 detection details.** Certification aliases from the lexicon and the certifications in memory are matched anywhere. A known employer or school followed by another capitalised word is a different name ("Acme Systems" is not "Acme Corp"). Greeting and sign-off lines are not scanned for unknown names. The employer cues use "at" and "for", not "with" ("worked with Zorbix" is a collaboration, so it raises `CHK009`, not `CHK004`). A resume-style header `Name | Role` is checked as employer and title.
+6. **§8.5 empty draft.** An empty draft is a usage error (exit 2), not a pass.
