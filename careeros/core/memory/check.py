@@ -213,6 +213,9 @@ class Memory:
             value = fact.get(key)
             if isinstance(value, str):
                 self.known_words.update(w.lower() for w in _WORDS.findall(value))
+        text = fact.get("text")
+        if fact.kind in ("achievement", "project", "education", "experience") and isinstance(text, str):
+            self.known_words.update(w.lower() for w in _WORDS.findall(text))
         for headline in fact.get("headlines") or ():
             self.known_words.update(w.lower() for w in _WORDS.findall(str(headline)))
 

@@ -402,3 +402,23 @@ def test_each_duration_is_compared_with_the_nearest_employer(career) -> None:
     root, _ = career
     assert "CHK008" not in codes(run(root, "I spent 2 years at Globex Systems and 1 year at Acme Corp."))
     assert "CHK008" in codes(run(root, "I spent 4 years at Acme Corp."))
+
+
+# --- review fix round 3 -------------------------------------------------------------------------
+
+QUOKKA = "Introduced Quokka dashboards for the Borealis team, cutting alert noise by 40%."
+
+
+def test_words_in_an_achievements_own_text_are_known_to_the_name_scan(career) -> None:
+    root, ids = career
+    ops.add_fact(root, "achievement", {"parent": ids["acme"], "text": QUOKKA}, quote="invented")
+    result = run(root, QUOKKA)
+    assert result.ok, [(f.code, f.atom, f.reason) for f in result.review_required]
+    assert "CHK004" in codes(run(root, "I worked at Borealis Holdings."))
+    assert "CHK009" in codes(run(root, "Zorbix Labs shaped how I work."))
+
+
+def test_a_preference_text_does_not_make_a_name_known(career) -> None:
+    root, _ = career
+    ops.add_fact(root, "preference", {"text": "avoid Zephyrworks"}, quote="I avoid Zephyrworks")
+    assert "CHK009" in codes(run(root, "I really admired working with Zephyrworks."))
