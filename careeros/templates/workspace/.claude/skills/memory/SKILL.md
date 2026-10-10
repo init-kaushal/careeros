@@ -18,7 +18,7 @@ Your career memory is the set of facts in `career/` that every draft is checked 
 1. Run `careeros memory import` (a dry run). Show the user the plan: what would be added, changed or marked stale, anything it could not place, and anything that needs their review.
 2. If the plan reports an error (for example a heading it cannot read), show the message and the line, and help the user fix `resume.md`. Nothing is written until the plan has no errors.
 3. Ask: "Import these N facts?" Only after the user says yes, run `careeros memory import --apply --yes`.
-4. Tell the user: the facts start as **claimed**, `resume.md` was not changed, and a backup of every file the import touched is in `.careeros/backups/`. Offer to walk through confirming the important ones (step "CONFIRM" below).
+4. Tell the user: the facts start as **claimed**, `resume.md` was not changed, and a backup of every file the import touched is in `.careeros/backups/`. Offer to walk through confirming the important ones (the section "CONFIRM, VERIFY, DISPUTE, RETIRE" below).
 5. Re-run the same flow whenever `resume.md` changes (`careeros memory status` shows when it is out of date). The import never overwrites a confirmed fact and never deletes anything: a removed line marks its fact stale.
 
 ## ADD A FACT
@@ -33,8 +33,9 @@ When the user tells you something about their career that is not in the memory (
 ## CONFIRM, VERIFY, DISPUTE, RETIRE
 
 - **Confirm / verify** record the user's own decision. You cannot run them: they need an interactive terminal. Tell the user: "Run `! careeros memory confirm <id>` to affirm this one." Never try to pipe an answer into them.
-- **Dispute** (the fact is wrong) and **retire** (no longer applies) need a `--reason` in the user's words: `careeros memory dispute <id> --reason "..."`.
-- To change a fact: `careeros memory update <id> --text "..."`. Changing a confirmed fact resets it to `claimed`.
+- **Verify** is human only: `careeros memory verify <id> --evidence <evidence id>`. Create the evidence first with `careeros memory add --kind evidence --set url=... --set note=... --supports <fact id>`.
+- **Dispute** (the fact is wrong) and **retire** (no longer applies) need a `--reason` in the user's words: `careeros memory dispute <id> --reason "..."` and `careeros memory retire <id> --reason "..."`.
+- To change a fact: `careeros memory update <id> --text "..."`. Changing a confirmed fact resets it to `claimed`. For a confirmed or verified fact, ask the user to run `! careeros memory update <id> --text "..."` themselves (it needs a terminal).
 
 ## SHOW WHAT YOU KNOW
 

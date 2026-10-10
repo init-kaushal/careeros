@@ -80,3 +80,32 @@ def test_refresh_delivers_the_gate_to_an_existing_workspace(tmp_path: Path) -> N
 def test_the_gpt_skills_do_not_claim_a_check_they_cannot_run() -> None:
     for path in (TEMPLATES / "gpt-workspace").rglob("*.md"):
         assert "careeros check" not in path.read_text(encoding="utf-8")
+
+
+def _gate_block(text: str) -> str:
+    start = text.index("## EVIDENCE GATE (mandatory)")
+    block = text[start:text.index("\n---\n", start)]
+    return re.sub(r"\*\*Applies to:\*\*[^\n]*\n", "", block)
+
+
+def test_missing_binary_rule_and_identical_gate_blocks() -> None:
+    blocks = set()
+    for skill in SKILLS:
+        text = skill_text(skill)
+        assert "If the `careeros` command is not found, treat it as exit 2: tell the user and do not show or send the draft." in text, skill
+        blocks.add(_gate_block(text))
+    assert len(blocks) == 1
+
+
+def test_humanize_hands_back_to_its_caller() -> None:
+    text = skill_text("humanize")
+    assert "WITHOUT showing it to the user" in text
+    step3 = text[text.index("## STEP 3"):]
+    assert "hand" in step3 and "caller" in step3
+
+
+def test_memory_skill_covers_verify_and_evidence() -> None:
+    text = skill_text("memory")
+    assert "verify <id> --evidence" in text and "--supports" in text
+    assert "retire <id> --reason" in text and "! careeros memory update <id>" in text
+    assert 'step "CONFIRM"' not in text
