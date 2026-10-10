@@ -132,7 +132,7 @@ The checker prefers a false alarm to a missed fabrication. A person's name or a 
 
 `careeros validate` reports problems in `career/`: `MEM001` unreadable file (including a `career/sources.yaml` or `career/lexicon.yaml` that cannot be read or has the wrong shape), `MEM002` missing key or bad or duplicate id, `MEM003` dangling reference, `MEM004` invalid status, origin or source, or a date the check cannot read (an experience `start` must be `YYYY-MM`, an experience `end` `YYYY-MM` or `present`, an education `end` `YYYY-MM`, a certification `year` a four-digit year), `MEM005` confirmed without a decision or verified without evidence, `MEM006` source changed since import, `MEM007` source file missing, `MEM008` stale fact, and `LED003` when a fact the ledger mentions has no file.
 
-A broken `career/lexicon.yaml` (your own technology, certification or vocabulary additions) is reported by `validate` as `MEM001`, and `careeros check` and every memory command then refuse with exit 2 until it is fixed.
+A broken `career/lexicon.yaml` (your own technology, certification or vocabulary additions; `aliases` and `case_sensitive` must each be a list of strings) is reported by `validate` as `MEM001` (exit 1). Until it is fixed, `careeros check`, `memory list` and `memory show` refuse with exit 2; the commands that change memory (`add`, `import`, `update`, `confirm`, `verify`, `dispute`, `retire`) refuse with exit 1 and change nothing (`confirm` and `verify` still exit 2 first when there is no interactive terminal); and `memory status` exits 0 and reports the error.
 
 Evidence cannot be retired or disputed while it is the only active evidence for a `verified` fact; dispute or re-verify that fact first.
 
