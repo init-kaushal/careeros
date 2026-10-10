@@ -17,6 +17,12 @@ shared by every skill, company/people research caching, ATS quirk memory (iframe
 login walls, session timeouts, file-picker hand-off), saved consent defaults, and a humanize
 pass over drafted cover letters, outreach, and follow-ups.
 
+## Foundation (v0.3.0, done)
+
+A tested core underneath the workspace: stable IDs, workspace and framework versions, an application state machine, an append-only hash-chained ledger, deterministic validation, and `migrate` / `upgrade` with verified backups. Design: `docs/superpowers/specs/2026-10-05-foundation-design.md`. What it deliberately does not do yet: skills still edit `Status:` lines and `activity.md` directly (so `validate` reports drift warnings), and approval is a confirmation prompt, not a security boundary.
+
+The wider plan is in `docs/IMPLEMENTATION_AUDIT.md` section 10: evidence and career memory next, then evaluation and the full approval system, workflow completion, learning, runtime adapters, and the dashboard.
+
 ## Next
 
 **0. Work abroad (in progress).** Treat location as a set of *markets*, each with its own
@@ -42,8 +48,9 @@ produced the best fixes so far.
 can show what changed. Today every skill change reaches existing workspaces only through a
 blind refresh, and that gets worse as the skill set grows.
 
-**3. `careeros upgrade`.** Detect stale skill files across multiple workspaces and offer a
-batch refresh. Depends on versioning.
+**3. Batch upgrade.** `careeros upgrade` now handles one workspace (diff preview, verified backup,
+manifest). Detecting stale workspaces across several directories and refreshing them in one go is
+still open.
 
 **4. GPT Work parity.** Port research, prep, apply, outreach, follow-up, interview, offer,
 and humanize to `.gpt/skills/`, adapted to what ChatGPT Projects can actually do (no

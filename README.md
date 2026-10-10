@@ -72,6 +72,18 @@ Framework files are always refreshable — user data is never touched:
 careeros init ~/my-job-search --refresh
 ```
 
+## Workspace health, versions and audit
+
+```bash
+careeros doctor      # environment and workspace health
+careeros status      # versions, jobs by state, recent activity
+careeros validate    # structure, ids, pipeline and ledger checks, each with a fix
+careeros migrate     # add versions and ids to an existing workspace (backs up first)
+careeros upgrade     # refresh skill files (backs up first)
+```
+
+Every state change made through these commands is recorded in an append-only, hash-chained `ledger.jsonl`; your markdown stays the source of truth. See `docs/foundation.md` for the job lifecycle, the guarantees and their limits.
+
 ## Requirements
 
 - Python 3.11+

@@ -2,7 +2,36 @@ import typer
 from pathlib import Path
 from rich import print as rprint
 
+from careeros.core import ledger, models, versions
+from careeros.core.models import WorkspaceMeta
+from careeros.core.workspace import LEDGER_REL, WorkspaceError, ensure_writable, load_meta, save_meta
 from careeros.workspace.scaffold import scaffold
+
+
+def _record_init(target: Path, runtime: str, *, refresh: bool, was_empty: bool) -> None:
+    """Keep .careeros/workspace.yaml and the ledger in step with what init just did."""
+    meta = load_meta(target)
+    now = models.utc_now()
+    installed = versions.installed_version()
+    if meta is None:
+        if refresh or not was_empty:
+            return  # a legacy workspace: `careeros migrate` adopts it, init must not pretend it is current
+        save_meta(target, WorkspaceMeta(versions.SCHEMA_VERSION, installed, now, now, (runtime,)))
+        ledger.append_event(
+            target, type="workspace.created", actor="system", source="cli",
+            action=f"workspace created for runtime {runtime}",
+        )
+        return
+    runtimes = tuple(dict.fromkeys((*meta.runtimes, runtime)))
+    if refresh:
+        save_meta(target, WorkspaceMeta(meta.schema_version, installed, meta.created_at, now, runtimes))
+        if (target / LEDGER_REL).exists():
+            ledger.append_event(
+                target, type="workspace.upgraded", actor="system", source="init --refresh",
+                action=f"refreshed framework files to CareerOS {installed}",
+            )
+    elif runtime not in meta.runtimes:
+        save_meta(target, WorkspaceMeta(meta.schema_version, meta.framework_version, meta.created_at, now, runtimes))
 
 
 def init_cmd(
@@ -20,12 +49,24 @@ def init_cmd(
 ) -> None:
     """Scaffold a new CareerOS Cowork workspace."""
     target = Path(path).expanduser().resolve()
+    was_empty = not target.exists() or not any(target.iterdir())
+
+    try:
+        ensure_writable(target)  # refuse before touching any file; a no-op without metadata
+    except WorkspaceError as exc:
+        rprint(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
 
     try:
         written = scaffold(target, refresh=refresh, runtime=runtime)
     except (FileExistsError, ValueError) as exc:
         rprint(f"[red]{exc}[/red]")
         raise typer.Exit(1)
+
+    try:
+        _record_init(target, runtime, refresh=refresh, was_empty=was_empty)
+    except (WorkspaceError, OSError) as exc:
+        rprint(f"[yellow]Workspace files were written, but the metadata could not be updated: {exc}[/yellow]")
 
     if refresh:
         rprint(f"\n[bold green]Skills refreshed[/bold green] in {target}\n")

@@ -37,6 +37,10 @@ Full setup: [Getting Started](getting-started.md) · [Cowork guides](cowork/inde
 | `careeros init <path>` | Scaffold a Claude Cowork workspace |
 | `careeros init <path> --runtime gpt` | Scaffold a GPT Work workspace |
 | `careeros init <path> --refresh` | Update skill files and the entry file (old copy saved as `.bak`) without touching user data |
+| `careeros doctor` / `status` / `validate` | check environment and workspace health, summarise the workspace, validate it |
+| `careeros transition` / `approve` / `archive` | move a job along its lifecycle, record your approval, archive instead of deleting |
+| `careeros migrate` / `upgrade` | add versions and IDs to an existing workspace; refresh skill files, both with verified backups |
+| `careeros ledger append / list / verify` | read and extend the audit ledger |
 
 ---
 
