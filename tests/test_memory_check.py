@@ -302,3 +302,66 @@ def test_a_very_long_draft_is_checked_in_reasonable_time(career) -> None:
     start = time.monotonic()
     result = run(root, "\n".join(["Reduced AWS costs by 35% using Kafka-based pipelines."] * 400))
     assert result.ok and time.monotonic() - start < 20
+
+
+# --- review fix round 1 -------------------------------------------------------------------------
+
+def test_a_disputed_parent_experience_lends_nothing_to_its_achievements(career) -> None:
+    root, ids = career
+    ops.dispute_fact(root, ids["globex"], "never worked there", confirm=lambda p: True)
+    assert "CHK004" in codes(run(root, "I worked at Globex Systems."))
+    assert "CHK002" in codes(run(root, "In 2022 I designed a PostgreSQL setup with 99.95% availability."))
+
+
+@pytest.mark.parametrize("draft", [
+    "Built internal tools with Kafka and PostgreSQL.",
+    "Led tech work moving Kafka onto PostgreSQL.",
+    "Ran Kafka on PostgreSQL, including on-call.",
+])
+def test_loose_list_words_do_not_exempt_technology_pairs(career, draft: str) -> None:
+    root, _ = career
+    assert "CHK010" in codes(run(root, draft))
+
+
+def test_an_allowed_name_cannot_stand_in_for_a_fact(career) -> None:
+    root, _ = career
+    assert "CHK010" in codes(run(root, "Reduced AWS costs by 35% at Initech.", allow=["Initech"]))
+    assert run(root, "I spoke with Zorbix Labs.", allow=["Zorbix Labs"]).ok
+
+
+def test_against_never_excuses_a_self_description_of_the_target_title(career) -> None:
+    root, _ = career
+    against = ("Initech", "Staff Engineer")
+    assert "CHK006" in codes(run(root, "I am a Staff Engineer.", against=against))
+    assert "CHK006" in codes(run(root, "I was hired as a Staff Engineer.", against=against))
+    assert run(root, "I am excited about the Staff Engineer role.", against=against).ok
+
+
+@pytest.mark.parametrize("draft,ok", [
+    ("I spent 4 years at Acme Corp.", False),
+    ("My 4 years at Globex Systems taught me PostgreSQL.", False),
+    ("I spent 1 year at Acme Corp.", True),
+    ("My 2 years at Globex Systems taught me a lot.", True),
+    ("I have 4 years of experience.", True),
+])
+def test_a_duration_beside_an_employer_is_compared_with_that_employer(career, draft: str, ok: bool) -> None:
+    root, _ = career
+    result = run(root, draft)
+    assert result.ok is ok, [(f.code, f.atom, f.reason) for f in result.review_required]
+    if not ok:
+        assert "CHK008" in codes(result)
+
+
+def test_a_known_title_with_a_level_is_not_split_by_the_role_cue(career) -> None:
+    root, _ = career
+    assert run(root, "I was a Software Engineer 2 at Globex Systems.").ok
+    assert "CHK006" in codes(run(root, "I am a Staff Engineer."))
+    assert not run(root, "I was a Software Engineer 3 at Globex Systems.").ok
+
+
+def test_soft_wrapped_paragraph_lines_are_joined_but_bullets_stay_separate(career) -> None:
+    root, _ = career
+    assert "CHK010" in codes(run(root, "Reduced AWS costs by 35%\nwith PostgreSQL on Grafana."))
+    assert run(root, "Reduced AWS costs by 35%\nusing Kafka-based pipelines.").ok
+    assert run(root, "- Reduced AWS costs by 35% using Kafka.\n- Built it in Go for 120 engineers.").ok
+    assert "CHK010" not in codes(run(root, "- Reduced costs by 35%\n- with PostgreSQL on Grafana"))

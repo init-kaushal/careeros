@@ -43,8 +43,8 @@ NOT_EVALUATED_CATEGORIES = [
 ]
 LIST_SECTIONS = {"skills", "technologies", "tech stack", "technical skills", "tools", "stack", "technical"}
 _LIST_CUE = re.compile(
-    r"\b(?:experience (?:with|in)|proficient (?:in|with)|skilled (?:in|with)|familiar (?:with|in)|such as|including|"
-    r"stack|technologies|tech|tools)\s*:?\s", re.I)
+    r"\b(?:experience (?:with|in)|proficient (?:in|with)|skilled (?:in|with)|familiar (?:with|in)|such as|including)\s|"
+    r"\b(?:stack|technologies)\s*:\s", re.I)
 _LIST_PREFIX = re.compile(r"^(?:skills|technologies|tech stack|technical skills|tools|stack|tech)\s*:", re.I)
 _GREETING = re.compile(r"^(?:dear|hi|hello|hey|greetings|thanks|thank you|regards|best|sincerely|cheers|yours)\b", re.I)
 _NAME = r"(?-i:[A-Z][\w&'’-]*)(?:\s+(?:(?-i:[A-Z][\w&'’-]*)|of|&))*"
@@ -178,6 +178,7 @@ class Memory:
         by_id = career.by_id()
         active = career.active()
         intervals: list[tuple[int, int]] = []
+        by_employer: dict[str, list[tuple[int, int]]] = {}
         for fact in active:
             self._collect_words(fact)
             record = self._record(fact, by_id)
@@ -185,9 +186,12 @@ class Memory:
                 continue
             self.records.append(record)
             if fact.kind == "experience":
-                intervals.append((_year_month(str(fact.get("start")), self.now_year, self.now_month),
-                                  _year_month(str(fact.get("end")), self.now_year, self.now_month)))
+                interval = (_year_month(str(fact.get("start")), self.now_year, self.now_month),
+                            _year_month(str(fact.get("end")), self.now_year, self.now_month))
+                intervals.append(interval)
+                by_employer.setdefault(record.employer or "", []).append(interval)
         self.months = self._union(intervals)
+        self.employer_months = {k: self._union(v) for k, v in by_employer.items()}
         self.has_content = any(
             f.kind in ("experience", "achievement", "project", "skill", "education", "certification") for f in active)
 
@@ -233,6 +237,8 @@ class Memory:
         elif kind in ("experience", "achievement"):
             source = fact if kind == "experience" else by_id.get(str(fact.get("parent")))
             if source is None or source.kind != "experience":
+                return rec if kind == "achievement" else None
+            if source.status not in store.ACTIVE:
                 return rec if kind == "achievement" else None
             employer, title = str(source.get("employer")), str(source.get("title"))
             end = str(source.get("end"))
@@ -377,22 +383,27 @@ class Checker:
             if free(pipe.start("t"), pipe.end("t")):
                 self._title_atom(pipe.group("t"), pipe.start("t"), pipe.end("t"), add)
             return
+        claims = [m.span("t") for m in self._cue_role.finditer(text)]
+
+        def claimed(start: int, end: int) -> bool:
+            return any(start < e and s < end for s, e in claims)
+
         for pattern in (self._sen_run, self._head_of, self._acronym):
             for match in pattern.finditer(text):
                 if free(match.start(), match.end()):
-                    self._title_atom(match.group(0), match.start(), match.end(), add)
-        for match in self._cue_role.finditer(text):
-            if free(match.start("t"), match.end("t")):
-                self._title_atom(match.group("t"), match.start("t"), match.end("t"), add)
+                    self._title_atom(match.group(0), match.start(), match.end(), add, claim=claimed(match.start(), match.end()))
         for display in self._known_titles:
             for match in _word_re(display).finditer(text):
                 if free(match.start(), match.end()):
-                    self._title_atom(match.group(0), match.start(), match.end(), add)
+                    self._title_atom(match.group(0), match.start(), match.end(), add, claim=claimed(match.start(), match.end()))
+        for match in self._cue_role.finditer(text):
+            if free(match.start("t"), match.end("t")):
+                self._title_atom(match.group("t"), match.start("t"), match.end("t"), add, claim=True)
 
-    def _title_atom(self, raw: str, start: int, end: int, add) -> None:
+    def _title_atom(self, raw: str, start: int, end: int, add, claim: bool = False) -> None:
         raw = raw.strip().rstrip(".,;:")
         key = norm_text(raw)
-        kind = "context" if key in self.against_title_keys else "title"
+        kind = "context" if key in self.against_title_keys and not claim else "title"
         add(Atom(kind, raw, key, start, start + len(raw)))
 
     def _employer_atom(self, raw: str, start: int, end: int, add) -> None:
@@ -449,7 +460,7 @@ class Checker:
                 runs.append([])
                 continue
             word = token.group(0).lower()
-            if word in self.lx.stoplist or word in self.m.known_words or word in self.allow_words:
+            if word in self.lx.stoplist or word in self.m.known_words:
                 runs.append([])
             elif runs and runs[-1] and text[runs[-1][-1].end():token.start()] == " ":
                 runs[-1].append(token)
@@ -503,7 +514,10 @@ class Checker:
     def _list_exempt(self, sentence: str, atoms: list[Atom], list_line: bool) -> bool:
         if any(a.kind != "technology" for a in atoms):
             return False
-        return list_line or bool(_LIST_CUE.search(sentence))
+        if list_line:
+            return True
+        cue = _LIST_CUE.search(sentence)
+        return bool(cue) and all(a.start >= cue.end() for a in atoms)
 
     def judge(self, sentence: str, list_line: bool, result: CheckResult, require_confirmed: bool) -> None:
         atoms = [a for a in self.detect(sentence) if a.kind != "context"]
@@ -512,6 +526,15 @@ class Checker:
             return
         for atom in atoms:
             self._support(atom)
+        employers = [a for a in atoms if a.kind == "employer" and a.status == "supported"]
+        for atom in atoms:
+            if atom.kind == "duration" and atom.status == "supported":
+                for emp in employers:
+                    covered = self.m.employer_months.get(emp.key, 0) // 12
+                    if atom.key[0] > covered:
+                        atom.status, atom.code = "unsupported", "CHK008"
+                        atom.reason = f"{atom.raw}: your dated experience at that employer covers {covered} year(s)"
+                        break
         findings = [Finding(a.code, sentence, a.raw, a.reason, FIX[a.code]) for a in atoms if a.status in ("unsupported", "review")]
         if not findings:
             findings = self._relationship(sentence, atoms, list_line)
@@ -535,7 +558,7 @@ class Checker:
 
     def _relationship(self, sentence: str, atoms: list[Atom], list_line: bool) -> list[Finding]:
         """Claims in one sentence must come from one fact; an allowed term can never supply that fact."""
-        related = [a for a in atoms if a.kind not in ("duration", "name") and a.status in ("supported", "allowed")]
+        related = [a for a in atoms if a.kind != "duration" and a.status in ("supported", "allowed")]
         if len(related) < 2 or self._list_exempt(sentence, related, list_line):
             return []
         supported = [a for a in related if a.status == "supported"]
@@ -560,29 +583,56 @@ class Checker:
 
 
 def _prepare_lines(draft: str) -> list[tuple[str, bool]]:
-    """Each content line of the draft with markdown stripped, and whether it sits in a skills-style section."""
+    """Each content unit of the draft with markdown stripped, and whether it sits in a skills-style section.
+
+    Consecutive plain-text lines of one paragraph are joined, so a hard-wrapped line cannot split a combination of claims.
+    """
     draft = re.sub(r"<!--.*?-->", "", draft, flags=re.S)
     out: list[tuple[str, bool]] = []
     section, in_fence = "", False
+    pending: list[str] = []
+    pending_list = False
+
+    def flush() -> None:
+        nonlocal pending
+        if pending:
+            out.append((" ".join(pending), pending_list))
+            pending = []
+
+    def clean(text: str) -> str:
+        return re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text).replace("**", "").replace("`", "").strip()
+
     for raw in draft.splitlines():
         line = raw.rstrip()
         if line.strip().startswith("```"):
             in_fence = not in_fence
+            flush()
             continue
         if in_fence or not line.strip() or re.fullmatch(r"\s*([-=_*]\s*){3,}", line):
+            flush()
             continue
         heading = re.match(r"^\s*#{1,6}\s+(.*)$", line)
         bold_only = re.match(r"^\s*\*\*([^*]+?)\*\*:?\s*$", line)
         if bold_only or (heading and not _PIPE.match(line)):
+            flush()
             section = norm_text((heading or bold_only).group(1))
             continue
         if _PIPE.match(line):
-            text = line.strip()
-        else:
-            text = re.sub(r"^\s*(?:#{1,6}\s+|[-*+•]\s+|\d+[.)]\s+)", "", line)
-        text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text).replace("**", "").replace("`", "").strip()
-        if text:
-            out.append((text, section in LIST_SECTIONS))
+            flush()
+            text = clean(line.strip())
+            if text:
+                out.append((text, section in LIST_SECTIONS))
+            continue
+        stripped = re.sub(r"^\s*(?:#{1,6}\s+|[-*+•]\s+|\d+[.)]\s+)", "", line)
+        text = clean(stripped)
+        if not text:
+            flush()
+            continue
+        if stripped != line:  # a bullet or numbered item starts a new unit
+            flush()
+        pending.append(text)
+        pending_list = section in LIST_SECTIONS
+    flush()
     return out
 
 
