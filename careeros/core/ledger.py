@@ -43,7 +43,7 @@ class LedgerError(WorkspaceError):
 
 
 def is_reserved(event_type: str) -> bool:
-    return event_type in RESERVED_TYPES or event_type.startswith("workspace.")
+    return event_type in RESERVED_TYPES or event_type.startswith(("workspace.", "memory."))
 
 
 def _line_hash(line: bytes) -> str:
