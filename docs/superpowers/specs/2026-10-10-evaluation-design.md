@@ -292,3 +292,48 @@ On a copy of the real workspace (never the original): evaluate one saved job end
 3. Record parsing and validation (`EVL001`-`EVL008`).
 4. The `evaluate` command, `--init`, ledger events, `validate` integration.
 5. Skills (`evaluate`, `prep`, `browse` closing line), docs, acceptance.
+
+## 16. Decisions approved after plan review (2026-10-10)
+
+These amend sections 4, 6, 8 and 9. Where they differ from earlier text, **this section wins**.
+
+### 16.1 Floor and sponsorship are sourced from the `## Markets` row
+
+- The agent adds `job_facts.market`: the label of the matching row in the `## Markets` table of `profile.md`. The table keeps its existing free-text format; there is no schema migration.
+- **Row existence.** The label is compared after NFC normalisation, whitespace collapsing and case folding. A `market` that names no row is an input error (`EVL006`).
+- **Floor.** The row's "Min base" cell is *parseable* only when it contains exactly one numeric amount (using the same number scanner as the evidence check, including `k`, `lakh`, `crore` and `M` suffixes) and exactly one currency indicator (a symbol or ISO code). Anything else (`TBD — derive from home floor`, a range, two figures, no currency) is *unparseable*. The column is a base figure, so a parsed floor always has `basis: base`.
+- **Sponsorship need.** The row's "Sponsorship" cell establishes the need only when it says exactly `required` (need = yes) or `not needed` (need = no), case-insensitively. `preferred`, anything else, or an empty cell leaves the need *unknown*. Nothing is inferred from nationality, location or any other field.
+- **Verification states** recorded in the result for each of floor and need: `verified` (the row establishes it and the agent's value agrees), `unverified` (the row is unparseable/ambiguous; the agent's value is kept for display only), or `conflict` (the row establishes a value and the agent's differs).
+- **A cap uses only verified inputs.** The compensation cap needs a verified floor (and equal currency and basis with the range, and range confidence not `low`/`unknown`). The sponsorship cap needs a verified need of `yes`, a listing of `not_offered` and a quote. An unverified or conflicting input never produces a cap. A conflict is never resolved in favour of the more favourable value; it adds an action item ("resolve the profile/agent mismatch") until the agent's value and the row agree.
+- **Auditability.** The basis (§16.2) stores the market label and the exact source cell text used for floor and sponsorship.
+- A conflict or an unverified input does not stop scoring (exit 0); it is reported as a result field, an action item and the validation warning `EVL011`.
+- **Confidence step 3** is restated: a decision-relevant unknown remains when (need is `yes` or unknown and listing is `unknown`), or (the range is null and a verified floor exists).
+
+### 16.2 A historical basis separate from the freshness stamps
+
+- `result.stamps` (`jd`, `memory`, `rubric`, `rules`, `inputs`) answers "is this evaluation current?".
+- `result.basis` answers "can the recorded result be reproduced?". It holds the exact normalised inputs of the pure scoring function: per requirement `{id, class, outcome, facts, status_floor}`; per fit row `{weight, judgement}`; the cap inputs (sponsorship need and listing with their verification states, quote presence, the compensation range, floor, confidence, and the source cell text); `requirement_count`; `rubric_state`; and the two versions `basis_version` and `rules_version`. A sibling `result.basis_sha256` is the hash of its canonical form.
+- **Canonical form.** Keys sorted, UTF-8, `ensure_ascii=False`, `allow_nan=False`. Scoring inputs contain no floating-point values: weights are integers; any non-integer quantity is a string fraction such as `"1/2"`. A float or non-finite number in a hashed structure is an error.
+- Historical scoring is recomputed from the stored basis with the constants of the `rules_version` the basis declares, never from today's memory or profile. A result that disagrees with that recomputation (scores, tier, caps, confidence, action items, rendered body) is **tampering** (`EVL007`). `validate` reports it and never repairs.
+
+### 16.3 Versions that can no longer be recomputed
+
+`basis_version` and `rules_version` are independent of the current inputs. A record whose `basis_version` or `rules_version` this CareerOS no longer supports (or does not yet know) **cannot be verified**: that is the warning `EVL010` ("cannot be verified: unsupported version"), never `EVL007`. The record is also reported stale when its rules differ. `evaluate` always recomputes from current inputs with the current version and so replaces such a record without calling it tampered.
+
+### 16.4 File/ledger consistency: `EVL009`
+
+- `evaluation.completed` carries `artifacts: ["sha256:<result hash>"]` where the result hash is the SHA-256 of the **canonical form of the committed `result:` mapping** (§16.2 rules; the 4-decimal score fields are converted to fixed-point strings before hashing, the body being a pure function of the result).
+- `EVL009` (warning, read-only): a record that has a `result:` and (a) has no `evaluation.completed` event for its `evl_` id, (b) whose last such event has a malformed or missing hash, or (c) whose last event's hash differs from the file's current result hash. A skeleton that was never evaluated and a normal, never-run job produce no `EVL009`.
+- Ordinary exceptions still restore the previous file (and the ledger is restored by the append). A hard kill between the file write and the ledger append can still leave the pair inconsistent; `EVL009` **detects** that window, it does not remove it. `evaluate` heals it on the next run by writing a fresh `evaluation.completed`.
+
+### 16.5 Code table additions
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `EVL009` | warning | the evaluation file's result differs from, or has no matching, `evaluation.completed` event (§16.4) |
+| `EVL010` | warning | the record cannot be verified because its `basis_version` or `rules_version` is unsupported (§16.3) |
+| `EVL011` | warning | a floor or sponsorship need is `unverified` or in `conflict` with the `## Markets` row (§16.1) |
+
+### 16.6 Defaults retained
+
+A `direct` link can upgrade a gap only to `adjacent`; a malformed or duplicate rubric omits the fit score and lowers confidence; a hand-edited generated body is tampering; `--init` logs no event; the release is `0.5.0`.
