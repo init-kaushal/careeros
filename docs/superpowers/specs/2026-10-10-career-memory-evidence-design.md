@@ -32,7 +32,7 @@ The user's seven locked decisions come first.
 | D2 | **"Supported" is defined narrowly.** Exact numbers, years, employers, titles, schools, certifications and technologies are checked against structured facts. The checker flags unsupported entities and metrics; it never claims a whole sentence is true. | §8.1, §8.6 |
 | D3 | **Compound claims are handled conservatively.** Atoms in one sentence must co-occur in a single memory record; each atom being supported somewhere is not enough. Otherwise the sentence is flagged `review`. | §8.4 |
 | D4 | **The check is mandatory in every drafting skill** (`prep`, `apply`, `outreach`, `follow-up`, `humanize`, `interview`), on the final draft after all edits. Failures must be fixed or confirmed with you, never ignored. | §12 |
-| D5 | **The guarantee stays narrow.** A pass means "supported by the current career memory under these rules". The output separates confirmed support from claimed-only support. | §8.6 |
+| D5 | **The guarantee stays narrow.** A pass means "all detected claims are supported by the current career memory under these rules" and never "every claim was detected". The output has three parts: Supported, Review required, Not evaluated; and it separates confirmed support from claimed-only support. | §8.6 |
 | D6 | **Imports and edits are reviewable.** Re-import produces a deterministic diff, never overwrites confirmed facts, never deletes manual facts, and is audited with backup and rollback. | §6, §7 |
 | D7 | **Failure paths are tested**, not just examples, including keyword-stuffing and malformed memory. | §14 |
 
@@ -224,16 +224,22 @@ A draft is checked for **atoms**, the checkable claims in v1:
 | `certification` | a certification lexicon term, or a proper name after `certified`/`certification` | it matches a certification `name` |
 | `title` | a role phrase after a self-description cue (below) | it equals an experience `title` or an identity `headline` (normalized) |
 
+**Detection runs in three layers**, so a name is not missed just because of the words around it:
+
+1. **Known names, anywhere.** Every employer, school, title/headline, certification and technology (with aliases) in the career memory is matched wherever it appears in a sentence, with no cue needed. This is how a cue-less mention of a real employer still takes part in the relationship check (§8.4): "My time at Acme taught me to cut costs 35%" ties Acme and 35% together even though no cue phrase is present.
+2. **Cues for names the memory does not know.** The enumerated patterns below catch unknown employers, schools, titles and certifications in their usual phrasings.
+3. **Residual scan for unrecognized names.** A name-shaped span (one to four capitalized tokens, or a role phrase) that is not sentence-initial, is not in the memory, the lexicon, a bundled stoplist of common capitalized words, the `--against` company or the `--allow` list, and is not covered by layers 1-2 is reported as `CHK009 unrecognized name` (a `review` finding). Role phrases are recognized anywhere by shape: a seniority or function word followed by a role noun (`Director of Engineering`, `Head of Platform`, `VP Engineering`, `Staff Engineer`) that is not an experience title or identity headline is `CHK006` even without a cue. This turns "experience at FakeCorp", "As Director of Engineering, I led…" and "I graduated from Fake University" into findings whichever way they are phrased, at the price of some false positives (clear them by adding the fact, or `--allow`).
+
 Cues are enumerated, not guessed:
 - employment: `(worked|working|employed|interned|served|experience|role|position|tenure|time) … (at|for|with) NAME`, `(joined|left) NAME`, `ROLE-PHRASE (at|@) NAME`
 - education: `(studied|graduated|degree|B.Tech|M.Tech|Bachelor|Master|PhD|MBA|diploma) … (at|from) NAME`
-- self-description: `(as|I am|I'm|I was|was) (a|an|the) ROLE-PHRASE`
+- self-description: `(as|I am|I'm|I was|was) (a|an|the)? ROLE-PHRASE` (including a sentence-initial `As ROLE-PHRASE,`)
 
 `NAME` is one to four capitalized tokens (letters, digits, `&`, `.`, `-`), optionally followed by a legal suffix. `ROLE-PHRASE` is up to four words ending in a role noun from the lexicon.
 
 **Supporting records** are those with status `claimed`, `confirmed` or `verified`. `disputed` and `retired` records support nothing.
 
-What the checker deliberately does **not** do: judge whether prose is true, compare wording or meaning, detect claims outside these atoms, or recognize technologies that are in neither the lexicon nor the memory. It reports how many sentences held no checkable claim, so coverage is visible.
+**What remains undetectable** (stated in the docs and in every `--json` result as `not_evaluated_categories`): whether prose is true; wording or meaning; claims outside these atoms (responsibilities, team size words like "a large team", qualitative outcomes such as "improved reliability", scope such as "company-wide"); a lowercase or sentence-initial unknown employer or school with no cue; a technology in neither the lexicon nor the memory; a number written as words ("a dozen", "twofold"); and any claim in a language other than English. The output lists every sentence in which nothing was detected, so a person can see exactly which text received no evidence check (§8.5).
 
 ### 8.2 Normalization
 
@@ -243,7 +249,9 @@ Case-folded, punctuation-collapsed, `&` = `and`, legal suffixes (`Inc`, `Ltd`, `
 
 ### 8.3 Context terms
 
-`--against JOB` makes the job's company and title *known names* for this check, so cover letters can name the employer they apply to. It does **not** add technologies or numbers from the job. A term that must be allowed anyway (a technology the company uses, a number from the job post) is passed with `--allow TERM`; each allowed term is listed in the output as an **unverified mention**, never as support, so a person can see exactly what was waved through.
+`--against JOB` makes the job's company and title *known names* for this check, so cover letters can name the employer they apply to without a `CHK009`. It does **not** add technologies or numbers from the job, and it does not make a claim of working there supported: "I worked at <that company>" still needs an experience record.
+
+A term that must be mentioned anyway (a technology the company uses, a number from the job post) is passed with `--allow TERM`. **An allowed term is never evidence.** It only suppresses the "not in memory" finding for that term, and only when the sentence has no other checkable atom (apart from other allowed terms): "We use Kafka at scale, which excites me" passes with Kafka listed as an *unverified mention*. If the same sentence also holds any other atom, the allowed term still has to be in the same supporting record as the rest, so "I used Kafka to reduce costs by 35%" with `--allow Kafka` still fails as `CHK010` when no single record contains both Kafka and 35%. An allowed term can never satisfy, or substitute for, a missing record.
 
 ### 8.4 Compound claims
 
@@ -252,6 +260,8 @@ Split the draft into sentences (sentence punctuation, newlines, bullets). For ea
 1. **Unsupported atom → `unsupported`.** Any atom with no supporting record fails with its specific code.
 2. **Relationship check → `review`.** If the sentence has two or more distinct atoms, a single supporting **record** (an achievement, project or experience, with facets inherited from its parent experience: employer, title, date range) must contain **all** of them. If every atom is supported individually but no single record holds them together, the sentence fails as `review: relationship not represented`, and the finding names which atoms were found in which records.
 3. **List exemption.** Technology (and skill) enumerations are exempt from step 2 among themselves: a line under a `Skills`/`Technologies`/`Tech stack` heading, or technologies in a list after `experience with`, `proficient in`, `skilled in`, `familiar with`, `such as`, `including`, `stack:` or `technologies:`. Each is still checked individually. An enumeration that also contains a number, employer, school or title is not exempt.
+
+4. **Allowed terms never satisfy step 2.** A term passed with `--allow` counts as an atom that no record supports. It is exempt from `CHK003` only under the §8.3 rule; in any sentence with another atom, it makes the sentence `review` (`CHK010`).
 
 Why this works: an achievement record such as *"Reduced AWS costs by 35% using Kafka-based batching"* holds the metric and both technologies together, so a faithful restatement passes; "Reduced costs 35% with Kafka" built from a 35% in one achievement and Kafka in a skills list fails.
 
@@ -269,18 +279,19 @@ Each finding has a code, the sentence, the atom, a reason and a fix:
 | `CHK006` | title not in memory | unsupported |
 | `CHK007` | certification not in memory | unsupported |
 | `CHK008` | duration not derivable or above the derived total | unsupported / review |
-| `CHK010` | atoms supported separately but not together | review |
+| `CHK009` | name-shaped span not recognized (layer 3) | review |
+| `CHK010` | atoms supported separately but not together, or an allowed term combined with other atoms | review |
 | `CHK020` | supported only by `claimed` facts | info (a failure with `--require-confirmed`) |
 | `CHK030` | career memory is empty or has no usable facts | fail closed |
 | `CHK031` | a source file changed since it was imported (stale import) | warning |
 
-Exit codes: **0** every checkable claim is supported (`CHK020`/`CHK031` may be printed); **1** at least one `unsupported`, `review` or `CHK030` finding (or `CHK020` with `--require-confirmed`); **2** usage error or invalid career memory (malformed files: the checker will not run against memory it cannot trust). `--json` prints the same facts as machine-readable data (`findings`, `supported_by_claimed`, `allowed_mentions`, `sentences_without_claims`, `memory_stale`) with nothing else on standard output.
+The result has three sections: **Supported** (each detected claim and the record that supports it, noting which records are only `claimed`), **Review required** (every `unsupported`, `review` and `CHK009` finding with its fix), and **Not evaluated** (the count and the text of every sentence in which nothing was detected, plus the standing list of undetectable categories from §8.1). Exit codes: **0** every *detected* checkable claim is supported and no review is required (`CHK020`/`CHK031` may be printed; this does not mean every career claim in the draft was detected); **1** at least one `unsupported`, `review` or `CHK030` finding (or `CHK020` with `--require-confirmed`); **2** usage error or invalid career memory (malformed files: the checker will not run against memory it cannot trust). `--json` prints the same facts as machine-readable data (`supported`, `review_required`, `not_evaluated` with `sentences` and `categories`, `supported_by_claimed`, `allowed_mentions`, `memory_stale`) with nothing else on standard output.
 
 `--record` appends a non-reserved `draft.checked` ledger event with the draft's sha256, the entity (`--against`), the verdict and the finding counts, so the audit trail shows which exact text passed.
 
 ### 8.6 The guarantee, stated once
 
-Every successful run prints: *"Passed: every checkable claim (numbers, years, durations, technologies, employers, schools, titles, certifications) is supported by your career memory. Prose was not evaluated, and N supporting fact(s) are claimed rather than confirmed."* Documentation and skills use that wording and never say "verified" or "true" about a draft.
+Every successful run prints: *"Passed: all N detected checkable claims (numbers, years, durations, technologies, employers, schools, titles, certifications) are supported by your career memory; M sentence(s) had nothing the checker can evaluate and K supporting fact(s) are claimed rather than confirmed. A pass does not mean every claim in the draft was detected."* followed by the Not-evaluated list. Documentation and skills use that wording and never say "verified" or "true" about a draft.
 
 ## 9. Lexicon
 
@@ -336,6 +347,9 @@ Test-first, failure paths first. All tests use temporary workspaces.
 
 - **Checker, unsupported atoms:** an invented metric, year, employer (each cue pattern), school, certification, technology (canonical name and alias), title, and a technology duration. Each exits 1 with the right code.
 - **Checker, relationships:** a number and a technology each present but in different records → `review`; the same atoms in one achievement → pass; employer and metric from different experiences → `review`; a keyword present only in a skills list cannot back a metric claim; list exemption passes for plain enumerations and does not apply when a number is in the line.
+- **Checker, detection without cues:** "My experience at FakeCorp taught me…", "As Director of Engineering, I led…", "I graduated from Fake University", an unknown capitalized name mid-sentence (`CHK009`), a role phrase with no cue; a known real employer mentioned without a cue still takes part in the relationship check; the stoplist and `--against` company suppress `CHK009`.
+- **Checker, `--allow`:** an allowed technology alone in a sentence → unverified mention, exit 0; **the allowed technology appearing in an unsupported achievement ("I used Kafka to reduce costs by 35%" where no single record holds both) still fails with `CHK010`**; `--allow` never turns an employer, number or title claim into a supported one; allowed terms are listed as unverified mentions.
+- **Checker, result shape:** Supported / Review required / Not evaluated sections; sentences with no detected atoms are listed in Not evaluated; exit 0 with a non-empty Not evaluated section; the pass wording includes the "not every claim detected" sentence; `--json` has the same sections.
 - **Checker, paraphrase:** a reworded but atom-identical restatement of a supported achievement passes.
 - **Status semantics:** claimed-only support passes and is reported; `--require-confirmed` fails it; `disputed` and `retired` facts support nothing; stale-source warning; empty memory fails closed (`CHK030`).
 - **Normalization:** `35%`/`35 percent`, `1M`/`1,000,000`, the directional `+` rule, `k8s`/Kubernetes, `golang`/Go, case-sensitive `Go` versus the verb, versions attached to technologies, URL and phone digits ignored, year ranges.
