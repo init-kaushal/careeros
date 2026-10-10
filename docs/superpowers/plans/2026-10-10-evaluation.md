@@ -98,7 +98,7 @@ Strictly linear: each task's tests run green before the next starts. Every task 
 - `canonical_json` rejects `float('nan')`, `inf`, and any float; `result_canonical` turns `0.8` into `"0.8000"` and `result_sha256` of a fixed invented result equals a hard-coded expected hash.
 - Enum values equal the spec strings exactly (guards a typo changing a stored value).
 
-**Acceptance:** all primitives pure and importable with no workspace; a table test asserts each constant equals the spec's number.
+**Acceptance:** all primitives pure and importable with no workspace; a table test asserts each constant equals the spec's number. **Task A's review must approve, before any dependent code starts,** the canonicalisation rules (sorted keys, UTF-8, no floats or non-finite values), the integer/string-fraction representation of exact quantities, and the behaviour for unsupported versions (`UnsupportedVersion` → `EVL010`, never tamper); these contracts are documented in the module docstrings and pinned by the tests.
 
 **Failure/rollback:** none (no writes).
 
@@ -200,7 +200,7 @@ Strictly linear: each task's tests run green before the next starts. Every task 
   4. **Derivation check (only when `memory`, `rubric` and `inputs` stamps are all current):** `derive(current agent, current memory) == stored basis`, otherwise `EVL007` (the stored basis itself was altered).
   Both reports can be non-empty at once; they are reported separately.
 - An unsupported stored version is `EVL010` (warning), not an error and not tamper (spec §16.3); a rules version that merely differs from the current one is also `EVL008`.
-- `EVL009` (file vs ledger, spec §16.4) is computed by `ledgercheck.verify(record, events) -> list[Issue]`: missing completion event for a record that has a `result:`, malformed/missing hash, or hash mismatch against `result_sha256(result)`; a skeleton without `result:` yields nothing.
+- `EVL009` (file vs ledger, spec §16.4) is computed by `ledgercheck.verify(record, all_records, events) -> list[Issue]`, using only existing event metadata: select events with `type == "evaluation.completed"` and `entity == record.id`, take the one with the highest `seq` (chain order; no timestamps); ignore `evaluation.rejected` and `evaluation.result_replaced`. Report **missing** (a record with a `result:` and no such event), **malformed** (not exactly one `sha256:`+64 lowercase hex artifact and exactly one artifact equal to this record's job-relative path), **mismatched** (hash differs from `result_sha256(result)`, including a file hand-reverted to an older result), and **ambiguous** (another evaluation file in the workspace has the same `evl_` id, or the event's path artifact names a different file). A skeleton without `result:` yields nothing. No new ledger fields or event types are added.
 - `EVL011` (spec §16.1): reports every `unverified` or `conflict` floor/need in the basis with the source cell text.
 
 **Tests first (`test_evaluation_record.py`):**
@@ -210,7 +210,16 @@ Strictly linear: each task's tests run green before the next starts. Every task 
 - Tamper: flip `result.tier`; change a score; delete a cap; edit the body; edit `result.basis` → each `EVL007` with the right message. Tamper with all stamps current → `EVL007` from the derivation check. Result edited **and** `jd.md` changed → both `EVL007` and `EVL008` reported, `tampered` detected using the stored basis even though current memory differs.
 - **Cannot-verify, not tamper:** a stored `basis_version` or `rules_version` this build does not support (use a version string absent from the registries) → `EVL010` only, no `EVL007`, and the record is also reported stale; an older **known** version recomputes with its own constants (register a second test version) and still detects tampering; a tampered tier under an unsupported version reports only `EVL010` (documented limit: it cannot be verified).
 - **Basis vs stamps separation:** changing the current memory/rubric makes the record stale (`EVL008`) but `EVL007` stays clean because verification uses only the stored basis; editing the stored basis alone is `EVL007`; editing `stamps.rules` to differ from `basis.rules_version` is `EVL007`.
-- **EVL009 (`test_evaluation_ledgercheck.py`):** a record with a `result:` and no completion event; a completion event with a malformed hash; one whose hash differs from the file's result; a normal evaluated record whose last event matches → none; a never-evaluated skeleton → none; read-only (workspace snapshot unchanged).
+- **EVL009 (`test_evaluation_ledgercheck.py`, all read-only; each case also asserts the workspace file bytes and `ledger.jsonl` bytes are unchanged by `validate`):**
+  1. result present, completion event present with the correct hash and path → no warning;
+  2. result present, completion event missing → `EVL009` (missing);
+  3. event with no hash, two hashes, a non-hex or wrong-length hash, no path artifact, or two path artifacts → `EVL009` (malformed); event with a different hash → `EVL009` (mismatched);
+  4. never evaluated (no `evaluation.md`), and an `--init` skeleton with no `result:` → no warning;
+  5. re-evaluation: three successive evaluations with different results → only the highest-`seq` completion is compared (older events with other hashes are ignored); the file hand-reverted to the first result → `EVL009` (mismatched);
+  6. a failed attempt: an `evaluation.rejected` event between two completions, and a ledger-append failure that restored the previous file → no warning and the latest completion still matches the restored file; `evaluation.result_replaced` events never affect the comparison;
+  7. crash window: file written, ledger append not performed → `EVL009` (missing or mismatched) reported by `validate`, which modifies neither file; the next `evaluate` heals it;
+  8. unique association: a copied job directory (same `evl_` id in two files) → `EVL009` (ambiguous) for both; a record moved to another job directory whose latest event names the old path → ambiguous; events for other entities never interfere;
+  9. `--init` never reuses an existing `evl_` id (checked against both evaluation files and ledger entities).
 - **EVL011:** an unparseable floor cell, a `preferred` sponsorship cell, and an agent/row conflict each warn with the cell text; a verified floor does not.
 - `render_body` is deterministic and contains no timestamps; golden-file test for a fixed result.
 - Canonicalization determinism: the stamp for a fixed invented memory equals a hard-coded expected hash (catches accidental changes to the canonical form).
@@ -262,7 +271,7 @@ Strictly linear: each task's tests run green before the next starts. Every task 
 - `ledger append --type evaluation.completed` is refused (reserved); `LED003` fires when an evaluation file is deleted but its entity is in the ledger.
 - `--json` output is pure JSON on success and on failure.
 
-**Acceptance:** all guarantees of spec §7 hold; failure injection proves no half-written state in the file/ledger pair (see clarification 8 for the one residual window).
+**Acceptance:** all guarantees of spec §7 hold; failure injection proves no half-written state in the file/ledger pair (see clarification 8 for the one residual window, which `EVL009` detects). **Existing guarantees are preserved:** the entire pre-existing suite (state-transition, ledger, migration and Career Memory tests) passes unchanged, and `evaluate` is shown not to touch job state or `career/`.
 
 **Failure/rollback:** described above; the file is restored, the ledger is restored by `append_events`.
 
@@ -311,6 +320,8 @@ Strictly linear: each task's tests run green before the next starts. Every task 
 8. Run `scaffold(refresh=True)` and assert `prep` contains the fresh-evaluation rule and the evidence gate.
 
 **Manual acceptance (disposable workspace only, never `~/Projects/job-search`):** repeat the flow with `careeros` on a freshly generated invented workspace; record in `docs/END_TO_END_TEST.md`: date, commit, counts, tier, exit codes, validation codes. No posting text, employer names, personal data or compensation figures.
+
+**Reporting rule:** acceptance reports state test counts, exit codes, warning/error codes and checksum comparisons of the disposable workspace before and after each read-only command (`validate` must leave every file byte-identical) — never job descriptions, employer details or compensation figures.
 
 **Release checks to run and report truthfully:** full suite on Python 3.14 and 3.11; `mkdocs build --strict`; build the wheel and verify `evaluate/SKILL.md` and the `evaluation` package are inside; `git diff --check`; confirm the real workspace's checksums are unchanged if (and only if) it was ever used — it is not used in this task, so state "not touched".
 
