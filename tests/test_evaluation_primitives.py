@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import decimal
 import hashlib
 import unicodedata
 from fractions import Fraction
@@ -12,7 +13,10 @@ import pytest
 from careeros.core.evaluation import canon, model, rules
 from careeros.core.evaluation.canon import (
     canonical_json,
+    exact,
+    fixed4,
     normalize_text,
+    parse_exact,
     result_canonical,
     result_sha256,
     sha256_hex,
@@ -165,8 +169,9 @@ def test_unknown_basis_version_is_unsupported(bad):
         basis_schema_for(bad)  # type: ignore[arg-type]
 
 
-def test_unsupported_version_is_a_value_error_not_a_tamper_signal():
-    assert issubclass(UnsupportedVersion, ValueError)
+def test_unsupported_version_is_a_lookup_error_not_a_value_error():
+    assert issubclass(UnsupportedVersion, LookupError)
+    assert not issubclass(UnsupportedVersion, ValueError)
     assert UnsupportedVersion("x").args == ("x",)
 
 
@@ -174,7 +179,8 @@ def test_basis_schema_current_version():
     s = basis_schema_for("1")
     assert s is BASIS_VERSIONS["1"]
     assert s.version == "1"
-    assert {"requirements", "fit", "caps", "requirement_count", "rubric_state"} <= set(s.keys)
+    assert {"requirements", "fit", "cap_inputs", "requirement_count", "rubric_state"} <= set(s.keys)
+    assert "caps" not in s.keys
 
 
 def test_rules_and_basis_versions_are_independent(monkeypatch):
@@ -223,9 +229,84 @@ def test_score_rounding(value, text):
     assert result_canonical({"coverage": value})["coverage"] == text
 
 
-def test_omitted_or_null_fit_stays_so():
-    assert "fit" not in result_canonical({"coverage": 0.5})
-    assert result_canonical({"fit": None})["fit"] is None
+def test_score_keys_always_emitted_and_missing_equals_null():
+    for name in ("coverage", "fit", "combined"):
+        others = {k: None for k in ("coverage", "fit", "combined") if k != name}
+        a = result_canonical({**others, name: None})
+        b = result_canonical(others)
+        assert a[name] is None and b[name] is None
+        assert result_sha256({**others, name: None}) == result_sha256(others)
+    assert result_canonical({}) == {"coverage": None, "fit": None, "combined": None}
+    assert result_sha256({"fit": None}) == result_sha256({}) == result_sha256({"coverage": None})
+
+
+def test_scores_outside_unit_interval_are_rejected():
+    for bad in (-0.1, 1.0001, F(-1, 3), F(3, 2), 2, "1.5000"):
+        with pytest.raises(ValueError):
+            fixed4(bad)
+
+
+@pytest.mark.parametrize(
+    "value,text",
+    [(F(1, 32), "0.0313"), (F(1, 3), "0.3333"), (F(2, 3), "0.6667"), (F(1, 20000), "0.0001"),
+     (0, "0.0000"), (-0.0, "0.0000"), (1, "1.0000"), (0.8, "0.8000"), (1.0, "1.0000"), ("0.1235", "0.1235"),
+     (F(1, 40000), "0.0000"), (0.00005, "0.0001")],
+)
+def test_fixed4_integer_half_up(value, text):
+    assert fixed4(value) == text
+    assert float(fixed4(value)) == float(text)
+
+
+def test_fixed4_rejects_bad_types_and_non_finite():
+    for bad in (True, None, [1], "0.8", "0.80000"):
+        with pytest.raises((TypeError, ValueError)):
+            fixed4(bad)
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(TypeError):
+            fixed4(bad)
+
+
+def test_fixed4_ignores_decimal_context():
+    ctx = decimal.getcontext()
+    old = ctx.prec
+    try:
+        ctx.prec = 3
+        assert fixed4(F(1, 32)) == "0.0313"
+        assert fixed4(0.12345) == "0.1235"
+        assert result_canonical(INVENTED)["coverage"] == "0.8000"
+        assert result_sha256(INVENTED) == INVENTED_SHA256
+    finally:
+        ctx.prec = old
+
+
+@pytest.mark.parametrize(
+    "value,enc",
+    [(F(3), 3), (3, 3), (F(1, 2), "1/2"), (F(2, 4), "1/2"), (F(4, 2), 2), (F(0), 0), (F(-1, 2), "-1/2"),
+     (F(1, -2), "-1/2"), (F(13, 20), "13/20")],
+)
+def test_exact_encoding_round_trips(value, enc):
+    got = exact(value)
+    assert got == enc and type(got) is type(enc)
+    assert parse_exact(enc) == F(value)
+
+
+def test_exact_rejects_bool_float_and_others():
+    for bad in (True, 0.5, "1/2", None):
+        with pytest.raises(TypeError):
+            exact(bad)
+
+
+@pytest.mark.parametrize("bad", ["0.5", "2/2", "1/0", " 1/2", "1/2 ", "2/4", "0/5", "+1/2", "01/2", "1/-2",
+                                 "", "1", "a/b", True, 0.5, None, [1]])
+def test_parse_exact_rejects_non_canonical(bad):
+    with pytest.raises((TypeError, ValueError)):
+        parse_exact(bad)
+
+
+def test_normalize_strips_a_leading_bom_only():
+    assert _h("\ufeffabc") == _h("abc")
+    assert _h("\ufeffcaf\u00e9") == _h(unicodedata.normalize("NFD", "caf\u00e9"))
+    assert _h("a\u200bc") != _h("ac")
 
 
 def test_other_floats_are_rejected():
@@ -275,6 +356,17 @@ def test_enum_values_equal_spec_strings():
     assert [e.value for e in model.Strength] == ["direct", "adjacent"]
     assert [e.value for e in model.Judgement] == ["yes", "partial", "no"]
     assert [e.value for e in model.Listing] == ["offered", "not_offered", "unknown"]
+    assert [e.value for e in model.Verification] == ["verified", "unverified", "conflict"]
+    assert [e.value for e in model.MarketBasis] == ["base", "total"]
+    assert [e.value for e in model.SourceConfidence] == ["high", "medium", "low", "unknown"]
+
+
+def test_job_facts_typed_fields():
+    jf = model.JobFacts(range_basis=model.MarketBasis.BASE, floor_basis=model.MarketBasis.TOTAL,
+                        comp_confidence=model.SourceConfidence.UNKNOWN,
+                        floor_verification=model.Verification.CONFLICT,
+                        need_verification=model.Verification.UNVERIFIED)
+    assert jf.range_basis == "base" and jf.floor_verification == "conflict"
 
 
 def test_enums_compare_equal_to_their_strings():

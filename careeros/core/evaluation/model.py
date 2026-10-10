@@ -2,7 +2,10 @@
 
 Enum values are the exact strings stored in `evaluation.md` and the ledger; tests pin them so a typo cannot
 silently change a stored value. Exact quantities are never floats here: weights are integers and any
-non-integer quantity is a `Fraction` in memory and a string fraction (`"1/2"`) when hashed (see `canon`).
+non-integer quantity is a `Fraction` in memory and a string fraction (`"1/2"`) when hashed (`canon.exact`).
+
+`Cap.code` values are pinned in Task C. YAML 1.1 turns unquoted `yes`/`no` into booleans, so the parser
+(Task D) must convert them to the strings before building `Judgement` or the sponsorship `needed` value.
 """
 
 from __future__ import annotations
@@ -65,6 +68,26 @@ class Listing(StrEnum):
     UNKNOWN = "unknown"
 
 
+class Verification(StrEnum):
+    VERIFIED = "verified"
+    UNVERIFIED = "unverified"
+    CONFLICT = "conflict"
+
+
+class MarketBasis(StrEnum):
+    BASE = "base"
+    TOTAL = "total"
+
+
+class SourceConfidence(StrEnum):
+    """Confidence in a compensation figure's source (not the result confidence)."""
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True)
 class Link:
     """An agent-supplied pointer from a requirement to a fact; an input, never a conclusion."""
@@ -108,13 +131,15 @@ class JobFacts:
     range_low: int | None = None
     range_high: int | None = None
     range_currency: str | None = None
-    range_basis: str | None = None
+    range_basis: MarketBasis | None = None
     floor_amount: int | None = None
     floor_currency: str | None = None
-    floor_basis: str | None = None
+    floor_basis: MarketBasis | None = None
     source: str | None = None
-    comp_confidence: str | None = None
+    comp_confidence: SourceConfidence | None = None
     as_of: str | None = None
+    floor_verification: Verification | None = None
+    need_verification: Verification | None = None
 
 
 @dataclass(frozen=True)

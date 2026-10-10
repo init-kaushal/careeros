@@ -15,7 +15,7 @@ Two registries, looked up independently:
 
 Unsupported versions: `rules_for` and `basis_schema_for` raise `UnsupportedVersion` for any version this
 CareerOS does not know (older-and-dropped or newer, and any non-string value). That means "cannot be
-verified", never "tampered": callers must report it as `EVL010` and must not report `EVL007`. A fresh
+verified", never "tampered": callers must report it as `EVL010` and must not report `EVL007`. The registries are plain dicts that only tests may mutate. A fresh
 `evaluate` always uses the current versions and so replaces such a record without calling it tampered.
 """
 
@@ -30,8 +30,12 @@ RULES_VERSION = "1"
 BASIS_VERSION = "1"
 
 
-class UnsupportedVersion(ValueError):
-    """A rules or basis version this CareerOS does not know. Means 'cannot be verified' (EVL010), not tamper."""
+class UnsupportedVersion(LookupError):
+    """A rules or basis version this CareerOS does not know. Means 'cannot be verified' (EVL010), not tamper.
+
+    Deliberately not a `ValueError`: callers that catch `ValueError` for malformed input must not swallow it
+    as tamper, and should catch `UnsupportedVersion` first.
+    """
 
 
 def _frozen(**items: int | Fraction) -> Mapping[str, Fraction]:
@@ -42,6 +46,9 @@ def _frozen(**items: int | Fraction) -> Mapping[str, Fraction]:
 class Rules:
     """One released set of scoring constants."""
 
+    # Field names map to the plan/spec constants: coverage_share = COVERAGE_SHARE, fit_share = FIT_SHARE,
+    # tier_* = tier cut-offs, class_weights/credits/fit_weights/fit_credits = spec 6.1-6.2 tables,
+    # claimed_share/unverifiable_share(_severe)/min_requirements = spec 6.5 thresholds.
     version: str
     coverage_share: Fraction
     fit_share: Fraction
@@ -92,7 +99,7 @@ RULES: dict[str, Rules] = {"1": RulesV1()}
 BASIS_VERSIONS: dict[str, BasisSchema] = {
     "1": BasisSchema(
         version="1",
-        keys=("basis_version", "rules_version", "requirement_count", "rubric_state", "requirements", "fit", "caps"),
+        keys=("basis_version", "rules_version", "requirement_count", "rubric_state", "requirements", "fit", "cap_inputs"),
     ),
 }
 

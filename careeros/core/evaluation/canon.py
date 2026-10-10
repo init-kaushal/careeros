@@ -11,24 +11,43 @@ Canonical form (used for every hash stored in or derived from an evaluation):
   string fractions such as `"13/20"`, so a hash cannot depend on the Python version or on float repr.
   `bool` is allowed (it serialises as `true`/`false`).
 
-The one exception is the committed `result:` mapping, whose top-level `coverage`, `fit` and `combined`
+Notes for callers:
+
+* `canonical_json` does not Unicode-normalise strings: the same bytes give the same hash.
+* `True` and `1` are distinct in the hashed form but equal under Python `==`: compare structures by their
+  canonical form, never with `==`.
+* `result_sha256`/`result_canonical` may raise `TypeError`, `ValueError` or `AttributeError` on a
+  hand-edited malformed result; callers (the validator) must catch these and report, not crash.
+
+Exact values: `exact(x)` encodes an `int`/`Fraction` as an `int` when the reduced denominator is 1, else as
+the reduced string `"p/q"` (positive denominator); `parse_exact` is its strict inverse (an int or a reduced
+`"p/q"` only; `"0.5"`, `"2/2"`, `"1/0"`, whitespace, bools and floats are rejected). Every quantity in the
+basis uses this one encoder.
+
+Scores: `fixed4(x)` is the one rounding routine: round half up to four decimals using integer arithmetic
+only (no `decimal`, no float arithmetic, so no process-wide setting can change it). A float is read through
+its shortest repr as an exact fraction. The value stored in YAML for each score field MUST be
+`float(fixed4(x))`, never Python's `round()`. Scores outside [0, 1] are a `ValueError`.
+
+The committed `result:` mapping, whose top-level `coverage`, `fit` and `combined`
 are stored as four-decimal numbers. `result_canonical` renders those three (float, int or Fraction) as
 fixed-point strings such as `"0.8000"` (round half up on the decimal repr), leaves an omitted or `null`
-`fit` as it is, passes an already fixed-point string through (so it is idempotent), and rejects any other
-float anywhere in the result. `result_sha256` hashes that form: it is the hash `evaluation.completed`
+`fit` as `null`, passes an already fixed-point string through (so it is idempotent), and rejects any other
+float anywhere in the result. The three keys are always emitted: a missing key and `null` hash identically. `result_sha256` hashes that form: it is the hash `evaluation.completed`
 carries.
 
 `normalize_text` is the form hashed for the `jd` stamp: NFC, all line endings and whitespace runs become
-one space, ends stripped. Case is kept, so a reflowed posting stays fresh and a reworded one goes stale.
+one space, ends stripped; a leading U+FEFF (editor byte-order mark) is dropped first. A zero-width space
+is not whitespace here and stays, so inserting one makes the posting stale. Case is kept, so a reflowed posting stays fresh and a reworded one goes stale.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import unicodedata
-from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
 from typing import Any
 
@@ -64,23 +83,56 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _fixed4(value: Any) -> str:
+def fixed4(value: Any) -> str:
+    """A score in [0, 1] as a four-decimal string, rounded half up with integer arithmetic only."""
     if isinstance(value, bool):
         raise TypeError("a score is a number, not a bool")
     if isinstance(value, str):
         if not _FIXED.fullmatch(value):
             raise ValueError(f"score {value!r} is not fixed-point with four decimals")
-        return value
-    if isinstance(value, float):
-        if value != value or value in (float("inf"), float("-inf")):
+        exact_value = Fraction(value)
+    elif isinstance(value, float):
+        if not math.isfinite(value):
             raise TypeError(f"non-finite score {value!r}")
-        exact = Fraction(Decimal(repr(value)))
+        exact_value = Fraction(repr(value))
     elif isinstance(value, (int, Fraction)):
-        exact = Fraction(value)
+        exact_value = Fraction(value)
     else:
         raise TypeError(f"score of type {type(value).__name__}")
-    scaled = (Decimal(exact.numerator) * 10000 / Decimal(exact.denominator)).quantize(Decimal(1), ROUND_HALF_UP)
-    return f"{int(scaled) // 10000}.{int(scaled) % 10000:04d}"
+    if not 0 <= exact_value <= 1:
+        raise ValueError(f"score {value!r} is outside [0, 1]")
+    q, r = divmod(exact_value.numerator * 10000, exact_value.denominator)
+    if 2 * r >= exact_value.denominator:
+        q += 1
+    return f"{q // 10000}.{q % 10000:04d}"
+
+
+_EXACT = re.compile(r"(0|-?[1-9]\d*)/([1-9]\d*)")
+
+
+def exact(value: int | Fraction) -> int | str:
+    """Encode an exact quantity: an int when whole, else the reduced string `"p/q"`."""
+    if isinstance(value, bool) or not isinstance(value, (int, Fraction)):
+        raise TypeError(f"{type(value).__name__} is not an exact quantity")
+    f = Fraction(value)
+    return f.numerator if f.denominator == 1 else f"{f.numerator}/{f.denominator}"
+
+
+def parse_exact(value: Any) -> Fraction:
+    """Inverse of `exact`; accepts only what `exact` produces."""
+    if isinstance(value, bool):
+        raise TypeError("bool is not an exact quantity")
+    if isinstance(value, int):
+        return Fraction(value)
+    if not isinstance(value, str):
+        raise TypeError(f"{type(value).__name__} is not an exact quantity")
+    m = _EXACT.fullmatch(value)
+    if not m:
+        raise ValueError(f"{value!r} is not an exact quantity")
+    f = Fraction(int(m[1]), int(m[2]))
+    if exact(f) != value:
+        raise ValueError(f"{value!r} is not in reduced form")
+    return f
 
 
 def _plain(obj: Any, path: str = "$") -> Any:
@@ -96,8 +148,8 @@ def result_canonical(result: dict) -> dict:
     """A copy of `result` ready to hash: score fields as fixed-point strings; any other float is an error."""
     out = {k: _plain(v, f"$.{k}") for k, v in result.items() if k not in SCORE_FIELDS}
     for name in SCORE_FIELDS:
-        if name in result:
-            out[name] = None if result[name] is None else _fixed4(result[name])
+        value = result.get(name)
+        out[name] = None if value is None else fixed4(value)
     return out
 
 
@@ -106,4 +158,5 @@ def result_sha256(result: dict) -> str:
 
 
 def normalize_text(text: str) -> str:
+    text = text.removeprefix("\ufeff")
     return _WS.sub(" ", unicodedata.normalize("NFC", text)).strip()
