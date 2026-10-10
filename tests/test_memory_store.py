@@ -179,8 +179,9 @@ def test_verifying_needs_evidence_that_lists_the_fact(career) -> None:
     fact = ops.verify_fact(root, ids["costs"], good.id, confirm=YES)
     assert fact.status == "verified" and events(root)[-1]["artifacts"] == [good.id]
     assert store.load_career(root).issues == []
-    ops.retire_fact(root, good.id, "link died", confirm=YES)
-    assert "MEM005" in codes(root)  # verified, but its evidence is retired
+    with pytest.raises(MemoryOpError, match="only evidence for verified fact"):
+        ops.retire_fact(root, good.id, "link died", confirm=YES)  # it would leave the verified fact unbacked (MEM005)
+    assert store.load_career(root).issues == []
 
 
 def test_changing_a_confirmed_fact_resets_it_to_claimed_after_confirmation(career) -> None:

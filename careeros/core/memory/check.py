@@ -135,13 +135,24 @@ class Record:
     certs: frozenset = frozenset()
     span: tuple[int, int] | None = None
     points: frozenset = frozenset()
+    stale: bool = False
 
 
-def _year_month(value: str, now_year: int, now_month: int) -> int:
+def _year_month(value: str, now_year: int, now_month: int) -> int | None:
     if value == "present":
         return now_year * 12 + now_month
-    year, month = value.split("-")
-    return int(year) * 12 + int(month)
+    try:
+        year, month = value.split("-")
+        return int(year) * 12 + int(month)
+    except ValueError:
+        return None
+
+
+def _year(value: object) -> int | None:
+    try:
+        return int(str(value)[:4])
+    except ValueError:
+        return None
 
 
 def _title_variants(title: str) -> set[str]:
@@ -187,12 +198,14 @@ class Memory:
                 continue
             self.records.append(record)
             if fact.kind == "experience":
-                interval = (_year_month(str(fact.get("start")), self.now_year, self.now_month),
-                            _year_month(str(fact.get("end")), self.now_year, self.now_month))
-                intervals.append(interval)
-                by_employer.setdefault(record.employer or "", []).append(interval)
+                begin = _year_month(str(fact.get("start")), self.now_year, self.now_month)
+                finish = _year_month(str(fact.get("end")), self.now_year, self.now_month)
+                if begin is not None and finish is not None:
+                    intervals.append((begin, finish))
+                    by_employer.setdefault(record.employer or "", []).append((begin, finish))
         self.months = self._union(intervals)
         self.employer_months = {k: self._union(v) for k, v in by_employer.items()}
+        self.stale_ids = {r.id for r in self.records if r.stale}
         self.has_content = any(
             f.kind in ("experience", "achievement", "project", "skill", "education", "certification") for f in active)
 
@@ -234,7 +247,7 @@ class Memory:
         lx, kind = self.lx, fact.kind
         techs = {lx.canonical_tech(t) or t for t in (fact.get("technologies") or ()) if isinstance(t, str)}
         metrics = tuple((*metric_key(m["value"], m["unit"]), bool(m.get("plus"))) for m in (fact.get("metrics") or ()))
-        rec = Record(fact.id, kind, fact.status, frozenset(techs), metrics)
+        rec = Record(fact.id, kind, fact.status, frozenset(techs), metrics, stale=bool(fact.get("stale")))
         if kind == "skill":
             name = str(fact.get("name"))
             rec.techs = frozenset({lx.canonical_tech(name) or name})
@@ -248,29 +261,29 @@ class Memory:
             end = str(source.get("end"))
             rec.employer = norm_org(employer, lx.org_suffixes)
             rec.titles = frozenset(_title_variants(title))
-            rec.span = (int(str(source.get("start"))[:4]), self.now_year if end == "present" else int(end[:4]))
+            first, last = _year(source.get("start")), self.now_year if end == "present" else _year(end)
+            if first is not None and last is not None:
+                rec.span = (first, last)
             if kind == "experience":
                 self._register_name(self.employers, employer)
                 self._register_title(title)
-        elif kind == "project":
-            pass
         elif kind == "education":
             school = str(fact.get("school"))
             rec.school = norm_org(school, lx.org_suffixes)
             self._register_name(self.schools, school)
-            if fact.get("end"):
-                rec.points = frozenset({int(str(fact.get("end"))[:4])})
+            if fact.get("end") and _year(fact.get("end")) is not None:
+                rec.points = frozenset({_year(fact.get("end"))})
         elif kind == "certification":
             name = str(fact.get("name"))
             rec.certs = frozenset({(lx.certs.get(name.lower()) or name).lower()})
             self.cert_names.append(name)
-            if fact.get("year"):
-                rec.points = frozenset({int(str(fact.get("year"))[:4])})
+            if fact.get("year") and _year(fact.get("year")) is not None:
+                rec.points = frozenset({_year(fact.get("year"))})
         elif kind == "identity":
             rec.titles = frozenset(v for h in (fact.get("headlines") or ()) for v in _title_variants(str(h)))
             for headline in fact.get("headlines") or ():
                 self._register_title(str(headline))
-        else:
+        elif kind != "project":      # a project is only its technologies and metrics, set above
             return None
         return rec
 
@@ -385,7 +398,7 @@ class Checker:
             if free(pipe.start("e"), pipe.end("e")):
                 self._employer_atom(pipe.group("e").strip(), pipe.start("e"), pipe.end("e"), add)
             if free(pipe.start("t"), pipe.end("t")):
-                self._title_atom(pipe.group("t"), pipe.start("t"), pipe.end("t"), add)
+                self._title_atom(pipe.group("t"), pipe.start("t"), add)
             return
         claims = [m.span("t") for m in self._cue_role.finditer(text) if not _APPLYING.search(text[:m.start()])]
 
@@ -395,16 +408,16 @@ class Checker:
         for pattern in (self._sen_run, self._head_of, self._acronym):
             for match in pattern.finditer(text):
                 if free(match.start(), match.end()):
-                    self._title_atom(match.group(0), match.start(), match.end(), add, claim=claimed(match.start(), match.end()))
+                    self._title_atom(match.group(0), match.start(), add, claim=claimed(match.start(), match.end()))
         for display in self._known_titles:
             for match in _word_re(display).finditer(text):
                 if free(match.start(), match.end()):
-                    self._title_atom(match.group(0), match.start(), match.end(), add, claim=claimed(match.start(), match.end()))
+                    self._title_atom(match.group(0), match.start(), add, claim=claimed(match.start(), match.end()))
         for match in self._cue_role.finditer(text):
             if free(match.start("t"), match.end("t")):
-                self._title_atom(match.group("t"), match.start("t"), match.end("t"), add, claim=True)
+                self._title_atom(match.group("t"), match.start("t"), add, claim=True)
 
-    def _title_atom(self, raw: str, start: int, end: int, add, claim: bool = False) -> None:
+    def _title_atom(self, raw: str, start: int, add, claim: bool = False) -> None:
         raw = raw.strip().rstrip(".,;:")
         key = norm_text(raw)
         kind = "context" if key in self.against_title_keys and not claim else "title"
@@ -676,4 +689,9 @@ def run_check(
         list_line = in_list or bool(_LIST_PREFIX.match(line))
         for sentence in split_sentences(line):
             checker.judge(sentence, list_line, result, require_confirmed)
+    stale_ids = sorted({fid for item in result.supported for fid in item["facts"] if fid in memory.stale_ids})
+    if stale_ids:
+        result.info.append(Finding(
+            "CHK031", "", "", "supported by stale fact(s) whose source line is gone from the resume: " + ", ".join(stale_ids),
+            FIX["CHK031"]))
     return result

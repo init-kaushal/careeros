@@ -142,7 +142,7 @@ def update_cmd(
     actor: Optional[str] = typer.Option(None, "--actor"),
     workspace: Optional[Path] = _util.WorkspaceOption,
 ) -> None:
-    """Change a fact. Changing a confirmed or verified fact resets it to claimed and needs a terminal."""
+    """Change a fact. Any fact that is not claimed (confirmed, verified or disputed) needs a terminal, and the change resets it to claimed."""
     root = _util.resolve_root(workspace)
     changes = _pairs(set_)
     if text is not None:
@@ -273,13 +273,17 @@ def status_cmd(
     for f in career.facts:
         by_kind.setdefault(f.kind, {}).setdefault(f.status, 0)
         by_kind[f.kind][f.status] += 1
+    try:
+        pending = sum(int(e.get("pending_review") or 0) for e in store.load_sources(root).values())
+    except WorkspaceError:
+        pending = 0  # the MEM001 error from load_career is reported below
     active = career.active()
     claimed = sum(1 for f in active if f.status == "claimed")
     data = {
         "facts": len(career.facts), "by_kind": by_kind, "claimed_share": round(claimed / len(active), 2) if active else 0.0,
         "stale_facts": sum(1 for f in career.facts if f.get("stale")),
         "stale_imports": [i.path for i in career.issues if i.code == "MEM006"],
-        "pending_review": sum(int(e.get("pending_review") or 0) for e in store.load_sources(root).values()),
+        "pending_review": pending,
         "errors": [i.to_dict() for i in career.errors],
     }
     if as_json:

@@ -83,9 +83,12 @@ def check_cmd(
         except WorkspaceError as exc:
             _util.fail(str(exc), _util.EXIT_USAGE)
         target = (job.company, job.title)
-    result = core_check.run_check(
-        root, text, allow=list(allow or ()), against=target, require_confirmed=require_confirmed, career=career
-    )
+    try:
+        result = core_check.run_check(
+            root, text, allow=list(allow or ()), against=target, require_confirmed=require_confirmed, career=career
+        )
+    except WorkspaceError as exc:
+        _util.fail(str(exc), _util.EXIT_USAGE)
     if record:
         try:
             ensure_writable(root)

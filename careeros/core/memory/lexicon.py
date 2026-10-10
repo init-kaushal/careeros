@@ -106,6 +106,29 @@ def _check_tech(entry: object, where: str) -> None:
     unknown = set(entry) - _TECH_KEYS
     if unknown:
         raise LexiconError(f"{where}: unknown key(s) {', '.join(sorted(unknown))} for {entry['name']}")
+    for key in ("aliases", "case_sensitive"):
+        if not all(isinstance(a, str) for a in entry.get(key) or ()):
+            raise LexiconError(f"{where}: {key} of {entry['name']} must be strings")
+
+
+def _check_extra(extra: dict, where: str) -> None:
+    for key in ("technologies", "certifications"):
+        value = extra.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, list):
+            raise LexiconError(f"{where}: {key} must be a list of mappings, each with a name")
+        for entry in value:
+            if key == "technologies":
+                _check_tech(entry, where)
+            elif not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or not entry["name"].strip():
+                raise LexiconError(f"{where}: every certification needs a name")
+            elif not all(isinstance(a, str) for a in entry.get("aliases") or ()):
+                raise LexiconError(f"{where}: aliases of {entry['name']} must be strings")
+    for key in ("role_nouns", "seniority", "title_words", "org_suffixes", "stoplist"):
+        value = extra.get(key)
+        if value is not None and not (isinstance(value, list) and all(isinstance(w, str) for w in value)):
+            raise LexiconError(f"{where}: {key} must be a list of strings")
 
 
 def load_lexicon(root: Path | None = None) -> Lexicon:
@@ -115,10 +138,7 @@ def load_lexicon(root: Path | None = None) -> Lexicon:
         extra_path = Path(root) / "career" / "lexicon.yaml"
         if extra_path.is_file():
             extra = _read(extra_path)
-            for entry in extra.get("technologies", ()):
-                _check_tech(entry, "career/lexicon.yaml")
-            for key in ("technologies", "certifications"):
-                data[key] = [*data.get(key, ()), *extra.get(key, ())]
-            for key in ("role_nouns", "seniority", "title_words", "org_suffixes", "stoplist"):
-                data[key] = [*data.get(key, ()), *extra.get(key, ())]
+            _check_extra(extra, "career/lexicon.yaml")
+            for key in ("technologies", "certifications", "role_nouns", "seniority", "title_words", "org_suffixes", "stoplist"):
+                data[key] = [*data.get(key, ()), *(extra.get(key) or ())]
     return Lexicon(data)

@@ -41,7 +41,14 @@ REQUIRED = {
 }
 COMMON = ("id", "type", "schema", "status", "origin", "source", "created_at", "updated_at")
 MEMORY_ID_PREFIXES = tuple(f"{ids.PREFIXES[ID_KIND[k]]}_" for k in KINDS)
-_DATE = re.compile(r"^(\d{4}-(0[1-9]|1[0-2])|present)$")
+_MONTH = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+_YEAR = re.compile(r"^\d{4}$")
+# kind -> key -> (pattern, what the key must look like); `present` is allowed only where the form says so
+DATE_RULES = {
+    "experience": {"start": (_MONTH, "YYYY-MM"), "end": (re.compile(r"^(\d{4}-(0[1-9]|1[0-2])|present)$"), "YYYY-MM or present")},
+    "education": {"end": (_MONTH, "YYYY-MM")},
+    "certification": {"year": (_YEAR, "a 4-digit year (YYYY)")},
+}
 _NULLABLE = {"parent"}
 
 
@@ -81,6 +88,21 @@ class Career:
 
     def active(self) -> list[Fact]:
         return [f for f in self.facts if f.status in ACTIVE]
+
+
+def date_problem(kind: str, fm: dict, keys=None) -> str | None:
+    """Why a date-like field cannot be read by the check, or None. Optional keys may be empty."""
+    for key, (pattern, form) in DATE_RULES.get(kind, {}).items():
+        if keys is not None and key not in keys:
+            continue
+        if key not in fm:
+            continue
+        value = fm[key]
+        if value in (None, "") and key not in REQUIRED[kind]:
+            continue
+        if not pattern.match(str(value)):
+            return f"{key} must be {form}, not {value!r}"
+    return None
 
 
 def sha256_hex(data: bytes) -> str:
@@ -182,6 +204,13 @@ def load_career(root: Path) -> Career:
             continue
         career.facts.append(Fact({k: normalize_value(v) for k, v in fm.items()}, body, path))
     _validate(root, career, add)
+    try:
+        if (root / CAREER / "lexicon.yaml").is_file():
+            from careeros.core.memory.lexicon import load_lexicon
+
+            load_lexicon(root)
+    except WorkspaceError as exc:
+        add("error", "MEM001", "career/lexicon.yaml", str(exc), "fix the file, or delete it to use the bundled vocabulary")
     return career
 
 
@@ -220,9 +249,9 @@ def _validate(root: Path, career: Career, add) -> None:
             add("error", "MEM004", rel, "a user_statement source needs the user's own words in quote", "add the quote")
         elif source["kind"] != "user_statement" and not source.get("path"):
             add("error", "MEM004", rel, f"a {source['kind']} source needs a path", "add the path")
-        for key in ("start", "end"):
-            if kind == "experience" and key in fm and not _DATE.match(str(fm[key])):
-                add("error", "MEM004", rel, f"{key} {fm[key]!r} must be YYYY-MM or present", "use a value like 2024-01")
+        problem = date_problem(kind, fm)
+        if problem:
+            add("error", "MEM004", rel, problem, "use a value like 2024-01 (a year like 2024 for a certification)")
         if fm.get("status") in ("confirmed", "verified") and not fm.get("confirmed_at"):
             add("error", "MEM005", rel, f"{fm.get('status')} but confirmed_at is empty", "confirm the fact again with `careeros memory confirm`")
     for fact in career.facts:

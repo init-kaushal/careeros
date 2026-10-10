@@ -6,7 +6,6 @@ the files back if the ledger append fails.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -28,7 +27,6 @@ EDITABLE = {
     "evidence": ("note",),
 }
 _LIST_FIELDS = {"technologies", "headlines", "supports"}
-_DATE = re.compile(r"^(\d{4}-(0[1-9]|1[0-2])|present)$")
 
 
 class MemoryOpError(WorkspaceError):
@@ -56,13 +54,15 @@ def _prepare(kind: str, fields: dict, career: Career, lexicon) -> dict:
         fields[key] = _as_list(fields[key])
     if kind == "experience":
         fields.setdefault("technologies", [])
+    if kind == "achievement" and fields.get("section") == "summary" and not fields.get("parent"):
+        fields["parent"] = None
     required = store.REQUIRED[kind]
     missing = [k for k in required if k not in fields or (fields[k] in (None, "", []) and k != "parent")]
     if missing:
         raise MemoryOpError(f"a {kind} needs: {', '.join(missing)}")
-    for key in ("start", "end"):
-        if kind == "experience" and not _DATE.match(str(fields[key])):
-            raise MemoryOpError(f"{key} must be YYYY-MM or present, not {fields[key]!r}")
+    problem = store.date_problem(kind, fields)
+    if problem:
+        raise MemoryOpError(problem)
     if kind in ("achievement", "project", "education") and fields.get("text"):
         fields.update(facets.derive_facets(str(fields["text"]), lexicon))
     if kind == "achievement":
@@ -170,10 +170,9 @@ def update_fact(root: Path, fact_id: str, changes: dict, *, actor: str = "user",
         fm = dict(fact.fm)
         for key, value in changes.items():
             fm[key] = _as_list(value) if key in _LIST_FIELDS else value
-        if fact.kind == "experience":
-            for key in ("start", "end"):
-                if not _DATE.match(str(fm[key])):
-                    raise MemoryOpError(f"{key} must be YYYY-MM or present, not {fm[key]!r}")
+        problem = store.date_problem(fact.kind, fm, keys=set(changes))
+        if problem:
+            raise MemoryOpError(problem)
         if "text" in changes and fact.kind in ("achievement", "project"):
             fm.update(facets.derive_facets(str(fm["text"]), store.lexicon_for(root, career)))
         fm["origin"] = "manual"
@@ -184,6 +183,15 @@ def update_fact(root: Path, fact_id: str, changes: dict, *, actor: str = "user",
         _commit(root, tx, [event_spec(fact_id, "memory.fact_updated", f"updated {fact.kind}: {', '.join(changes)}",
                                   actor=actor, prev=prev, new="claimed")])
         return updated
+
+
+def _keep_verified_backed(career: Career, evidence: Fact) -> None:
+    """Evidence cannot go while it is the only active evidence record of a verified fact."""
+    others = [e for e in career.facts if e.kind == "evidence" and e.status in ACTIVE and e.id != evidence.id]
+    for target in evidence.get("supports") or ():
+        fact = career.by_id().get(target)
+        if fact is not None and fact.status == "verified" and not any(target in (e.get("supports") or ()) for e in others):
+            raise MemoryOpError(f"{evidence.id} is the only evidence for verified fact {target}; dispute or re-verify that fact first")
 
 
 def _set_status(root: Path, fact_id: str, new: str, event_type: str, *, actor: str, allowed: tuple[str, ...],
@@ -197,6 +205,8 @@ def _set_status(root: Path, fact_id: str, new: str, event_type: str, *, actor: s
             raise MemoryOpError(f"{fact_id} is {fact.status}; this needs it to be {' or '.join(allowed)}")
         if check:
             check(career, fact)
+        if fact.kind == "evidence" and new in ("disputed", "retired"):
+            _keep_verified_backed(career, fact)
         prev = fact.status
         if needs_human or prev != "claimed":
             ask = _need_confirm(fact, new, confirm)
