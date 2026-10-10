@@ -272,3 +272,30 @@ def test_operations_refuse_to_build_on_a_broken_memory(career) -> None:
 def test_memory_event_types_are_reserved_for_the_memory_commands() -> None:
     assert ledger.is_reserved("memory.fact_confirmed") and ledger.is_reserved("memory.imported")
     assert not ledger.is_reserved("draft.checked")
+
+
+# --- fix round 1: guards on update ---------------------------------------------------------
+
+def test_editing_a_disputed_fact_needs_a_person(career) -> None:
+    root, ids = career
+    ops.dispute_fact(root, ids["costs"], "wrong")
+    with pytest.raises(MemoryOpError, match="interactive terminal"):
+        ops.update_fact(root, ids["costs"], {"text": "Reduced AWS costs by 30%."})
+    assert ops.update_fact(root, ids["costs"], {"text": "Reduced AWS costs by 30%."}, confirm=NO) is None
+    assert events(root)[-1]["type"] == "memory.declined"
+    assert store.load_career(root).by_id()[ids["costs"]].status == "disputed"
+    fact = ops.update_fact(root, ids["costs"], {"text": "Reduced AWS costs by 30%."}, confirm=YES)
+    assert fact.status == "claimed"
+
+
+@pytest.mark.parametrize("kind,field,value", [
+    ("costs", "text", None), ("costs", "text", "   "), ("costs", "text", ""),
+    ("skill_go", "name", None), ("skill_go", "name", "   "), ("skill_go", "name", ""),
+])
+def test_update_rejects_empty_required_values(career, kind: str, field: str, value: object) -> None:
+    root, ids = career
+    path = store.load_career(root).by_id()[ids[kind]].path
+    before, count = path.read_bytes(), len(ledger.read_events(root))
+    with pytest.raises(MemoryOpError, match="cannot be empty"):
+        ops.update_fact(root, ids[kind], {field: value})
+    assert path.read_bytes() == before and len(ledger.read_events(root)) == count

@@ -157,8 +157,12 @@ def update_fact(root: Path, fact_id: str, changes: dict, *, actor: str = "user",
         unknown = set(changes) - set(EDITABLE[fact.kind])
         if unknown or not changes:
             raise MemoryOpError(f"a {fact.kind} can change: {', '.join(EDITABLE[fact.kind])}")
+        for key, value in changes.items():
+            cleaned = _as_list(value) if key in _LIST_FIELDS else value
+            if key in store.REQUIRED[fact.kind] and (cleaned is None or cleaned == [] or (isinstance(cleaned, str) and not cleaned.strip())):
+                raise MemoryOpError(f"{key} cannot be empty")
         prev = fact.status
-        if prev in ("confirmed", "verified"):
+        if prev != "claimed":
             ask = _need_confirm(fact, "changing", confirm)
             if not ask(f"{fact_id} is {prev}. Changing it resets it to claimed so you review it again. Continue?"):
                 _decline(root, fact, "change", actor)
