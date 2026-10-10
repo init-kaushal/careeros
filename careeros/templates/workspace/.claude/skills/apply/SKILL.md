@@ -4,6 +4,22 @@
 
 ---
 
+## EVIDENCE GATE (mandatory)
+
+**Applies to:** the cover letter (STEP 1) and every free-text answer you type into the form (STEP 4). Check them before you show the letter or fill any field.
+
+Every claim in text you write for the user must trace to their career memory (`career/`). Before you show, send, paste or save any draft as final:
+
+1. Save the final text after your last edit (after `humanize`, if you used it) to a file, or pass it on standard input with `-`.
+2. Run `careeros check <file> --against <job-id> --record`. Leave out `--against` when the text is not for one job.
+3. **Exit 0:** tell the user the result in these words, with the real count: "Evidence check passed: every checkable claim (numbers, years, technologies, employers, schools, titles, certifications) is supported by your career memory. It does not evaluate prose, and N supporting fact(s) are still only claimed, not confirmed." Never call a draft "verified" or "true".
+4. **Exit 1:** do not show the draft. For every finding, remove or rewrite the claim, or ask the user whether it is true. If they say it is, add it with `careeros memory add ... --quote "<their exact words>"` and run the check again. `CHK010` means the claims in one sentence do not come from a single fact: rewrite the sentence so it says only what one fact says, or ask. Never use `--allow` to get past a claim about the user's own history; it is only for names or terms that come from the job or from other people.
+5. **Exit 2:** the career memory is missing or broken. Tell the user, run `careeros validate`, and stop.
+
+Re-run the check after every edit. Never skip it and never ignore a failure.
+
+---
+
 ## STEP 0 — IDENTIFY THE JOB
 
 Read the job file from `jobs/discovered/`. Match the user's mention to a file by company name or title.

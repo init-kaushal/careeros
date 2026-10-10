@@ -15,6 +15,13 @@
 |---------|-------|
 | "add my resume" / "update my resume" | `.claude/skills/onboard/SKILL.md` (resume-only intake) |
 
+### Career memory
+| Trigger | Skill |
+|---------|-------|
+| "import my resume" / "remember that [fact]" / "add this achievement" / "what do you know about me?" / "confirm [fact]" | `.claude/skills/memory/SKILL.md` |
+
+Every text you write for the user (resume, cover letter, outreach note, follow-up, interview answer) is checked with `careeros check` before you show it; see the EVIDENCE GATE in each skill.
+
 ### Discovery
 | Trigger | Skill |
 |---------|-------|
@@ -65,6 +72,7 @@ jobs/
       interview-prep.md — question bank, STAR stories, company refresher
       offer.md          — offer details + negotiation notes
 activity.md             — append-only action log (source of truth for follow-up cadence)
+career/                 — your career memory: one file per fact, each with its source and status (claimed, confirmed, verified)
 ```
 
 ## Pipeline status icons
