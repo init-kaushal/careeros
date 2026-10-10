@@ -288,3 +288,82 @@ def test_a_repeated_line_is_imported_once_and_reported() -> None:
 def test_windows_line_endings_in_the_resume_are_handled() -> None:
     text = FIXTURE.read_text(encoding="utf-8").replace("\n", "\r\n")
     assert parse(text).errors == [] and len(parse(text).candidates) == len(parse(FIXTURE.read_text(encoding="utf-8")).candidates)
+
+
+# --- review fixes --------------------------------------------------------------------------
+
+def test_a_bullet_with_a_year_range_is_not_swallowed_as_the_date_line() -> None:
+    text = "## Experience\n\n### Acme | Engineer\n- Migrated the 2019 - 2021 billing stack to Go.\n"
+    result = parse(text)
+    assert any("no date range" in e for e in result.errors)
+    dated = parse("## Experience\n\n### Acme | Engineer\nJan 2024 - Present\n- Migrated the 2019 - 2021 billing stack to Go.\n")
+    assert dated.errors == [] and [c.kind for c in dated.candidates].count("achievement") == 1
+
+
+def test_a_date_range_must_be_the_first_line_under_the_heading() -> None:
+    result = parse("## Experience\n\n### Acme | Engineer\nBuilt things.\nJan 2024 - Present\n")
+    assert any("no date range" in e for e in result.errors)
+
+
+def test_a_retired_fact_is_not_resurrected_by_a_reimport(ws: Path) -> None:
+    importer.apply_import(ws)
+    fact = next(f for f in facts_of(ws, "achievement") if "35%" in str(f.get("text")))
+    ops.retire_fact(ws, fact.id, "no longer true", confirm=lambda p: True)
+    files = sorted(p.name for p in (ws / "career").rglob("*.md"))
+    plan = importer.plan_import(ws)
+    assert plan.count("added") == 0 and plan.count("removed") == 0 and not plan.actionable
+    assert importer.apply_import(ws).status == "noop"
+    assert sorted(p.name for p in (ws / "career").rglob("*.md")) == files
+
+
+@pytest.mark.parametrize("heading", ["### Acme |", "### | Engineer", "### Acme | "])
+def test_an_empty_employer_or_title_is_a_hard_error(heading: str) -> None:
+    text = f"## Experience\n\n{heading}\nJan 2024 - Present\n- x\n"
+    assert any("expected '### Employer | Title'" in e for e in parse(text).errors)
+
+
+def test_a_byte_order_mark_does_not_hide_the_first_heading(tmp_path: Path, clock) -> None:
+    root = make_workspace(tmp_path / "ws")
+    (root / "resume.md").write_bytes("﻿## Summary\n\nBuilds reliable systems.\n".encode("utf-8"))
+    plan = importer.plan_import(root)
+    assert plan.errors == [] and [c.candidate.kind for c in plan.changes] == ["achievement"]
+    assert not any("Summary" in s for s in plan.skipped)
+
+
+def test_a_mid_file_h1_is_reported_as_skipped(ws: Path) -> None:
+    edit_resume(ws, "## Education", "# Appendix\n\n## Education")
+    plan = importer.plan_import(ws)
+    assert any("heading 'Appendix'" in s and "was not imported" in s for s in plan.skipped)
+    assert not any("Resume - Jordan" in s for s in plan.skipped)
+
+
+def test_a_project_bullet_starting_with_a_plus_is_not_a_project_heading() -> None:
+    text = "## Projects\n\n**Tool** - 2024\nA tool.\n+ **Bold start** of a bullet.\n"
+    kinds = [c.kind for c in parse(text).candidates]
+    assert kinds.count("project") == 1
+
+
+def test_two_sources_do_not_cross_resolve_parents(ws: Path) -> None:
+    importer.apply_import(ws)
+    shutil.copy(ws / "resume.md", ws / "other.md")
+    edit_resume(ws, "Reduced AWS costs by 35%", "Reduced AWS costs by 35.5%")
+    importer.apply_import(ws, "other.md")
+    career = store.load_career(ws)
+    other = [f for f in career.facts if (f.get("source") or {}).get("path") == "other.md"]
+    mine = {f.id for f in career.facts if (f.get("source") or {}).get("path") == "resume.md"}
+    assert other and all(f.get("parent") not in mine for f in other if f.kind == "achievement")
+
+
+def test_two_degrees_at_the_same_school_are_both_imported() -> None:
+    text = ("## Education\n\n**Some School** - Jun 2018\nB.Sc. in Maths\n\n"
+            "**Some School** - Jun 2020\nM.Sc. in Maths\n")
+    result = parse(text)
+    assert result.errors == [] and [c.kind for c in result.candidates].count("education") == 2
+
+
+def test_a_true_duplicate_degree_is_reported_and_dropped() -> None:
+    text = ("## Education\n\n**Some School** - Jun 2018\nB.Sc. in Maths\n\n"
+            "**Some School** - Jun 2018\nB.Sc. in Maths\n")
+    result = parse(text)
+    assert [c.kind for c in result.candidates].count("education") == 1
+    assert any("duplicate" in s for s in result.skipped)

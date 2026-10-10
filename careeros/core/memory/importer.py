@@ -119,6 +119,7 @@ class _Parser:
         self.prj: Candidate | None = None
         self.prj_text_set = False
         self.dated = False
+        self.await_date = False
 
     def add(self, kind: str, key: str, fields: dict, n: int, raw: str, parent_key: str | None = None) -> Candidate | None:
         if key in self.keys:
@@ -139,7 +140,7 @@ class _Parser:
             self.out.errors.append(
                 f"line {self.exp.line}: experience {self.exp.fields['employer']!r} has no date range "
                 f"(expected a line such as 'Jan 2024 - Present')")
-        self.exp, self.dated = None, False
+        self.exp, self.dated, self.await_date = None, False, False
 
     def finish_education(self) -> None:
         if self.edu is not None and "degree" not in self.edu.fields:
@@ -157,17 +158,20 @@ class _Parser:
         heading = re.match(r"^###\s+(.+)$", line)
         if heading:
             self.finish_experience()
-            if "|" not in heading.group(1):
+            parts = [part.strip() for part in heading.group(1).split("|", 1)]
+            if len(parts) != 2 or not all(parts):
                 self.out.errors.append(f"line {n}: expected '### Employer | Title', found {line.strip()!r}")
                 return
-            employer, title = (part.strip() for part in heading.group(1).split("|", 1))
+            employer, title = parts
             fields = {"employer": employer, "title": title, "technologies": []}
             self.exp = self.add("experience", f"exp|{norm_text(employer)}|{norm_text(title)}", fields, n, line)
+            self.await_date = True
             return
         if self.exp is None:
             self.out.errors.append(f"line {n}: expected '### Employer | Title' before this line, found {line.strip()!r}")
             return
-        if not self.dated:
+        first, self.await_date = self.await_date, False
+        if first and not self.dated and not re.match(r"^\s*[-*+•]\s+", line):
             dates = _date_range(line)
             if dates:
                 self.exp.fields["start"], self.exp.fields["end"] = dates
@@ -190,7 +194,8 @@ class _Parser:
             if end is None:
                 self.out.errors.append(f"line {n}: education {school!r} needs a date after the name (for example '- Jun 2020')")
                 return
-            self.edu = self.add("education", f"edu|{norm_text(school)}", {"school": school, "end": end}, n, line)
+            self.edu = Candidate("education", f"edu|{norm_text(school)}", {"school": school, "end": end}, n, _sha(line))
+            self.out.candidates.append(self.edu)
             return
         if self.edu is None or "degree" in self.edu.fields:
             self.out.errors.append(f"line {n}: expected '**School** - Month YYYY' then a degree line, found {line.strip()!r}")
@@ -201,10 +206,15 @@ class _Parser:
             self.edu.fields["text"] = rest.strip()
             self.edu.fields.update(facets.derive_facets(rest, self.lx))
         self.edu.key = f"edu|{norm_text(self.edu.fields['school'])}|{norm_text(degree)}"
+        if self.edu.key in self.keys:
+            self.out.candidates.remove(self.edu)
+            self.out.skipped.append(f"line {self.edu.line}: duplicate of an earlier line, ignored")
+        else:
+            self.keys.add(self.edu.key)
 
     def _projects(self, n: int, line: str) -> None:
         heading = re.match(r"^###\s+(.+)$", line)
-        bold = _BOLD.match(line.strip()) if not line.lstrip().startswith(("-", "*+")) else None
+        bold = _BOLD.match(line.strip()) if not re.match(r"^\s*[-*+•]\s", line) else None
         if heading or bold:
             name = (heading.group(1) if heading else bold.group(1)).strip()
             fields = {"name": name, "text": name, **facets.derive_facets(name, self.lx)}
@@ -254,6 +264,7 @@ def parse_resume(text: str, lexicon: Lexicon) -> ParseResult:
     parser = _Parser(lexicon)
     section: str | None = None
     skipped: dict[str, list[int]] = {}
+    seen_content = False
     for n, raw in enumerate(text.splitlines(), 1):
         line = raw.rstrip()
         if not line.strip():
@@ -263,12 +274,17 @@ def parse_resume(text: str, lexicon: Lexicon) -> ParseResult:
             parser.finish_experience()
             parser.finish_education()
             parser.prj = None
+            seen_content = True
             section = _section_of(heading.group(1))
             if section is None:
                 skipped.setdefault(f"section '{heading.group(1).strip()}'", []).append(n)
             continue
         if re.match(r"^#\s", line):
+            if seen_content:
+                parser.out.skipped.append(f"heading '{line[1:].strip()}' (line {n}) was not imported")
+            seen_content = True
             continue
+        seen_content = True
         if section is None:
             skipped.setdefault("preamble" if not skipped else next(reversed(skipped)), []).append(n)
             continue
@@ -334,6 +350,8 @@ def _same(candidate: Candidate, fact: Fact) -> bool:
 def _decide(result: str, fact: Fact | None) -> str:
     if result == "added":
         return "create"
+    if fact is not None and fact.status == "retired":
+        return "none"
     if fact is not None and fact.get("origin") == "manual":
         return "skip_manual" if result in ("changed", "removed") else "none"
     if result == "unchanged":
@@ -354,7 +372,7 @@ def plan_import(root: Path, source_rel: str = "resume.md") -> ImportPlan:
     if career.errors:
         first = career.errors[0]
         raise MemoryOpError(f"the career memory has errors ({first.code} {first.path}: {first.message}); run `careeros validate`")
-    parsed = parse_resume(data.decode("utf-8"), store.lexicon_for(root, career))
+    parsed = parse_resume(data.decode("utf-8-sig"), store.lexicon_for(root, career))
     plan.skipped, plan.errors = parsed.skipped, parsed.errors
     if parsed.errors:
         return plan
@@ -362,17 +380,17 @@ def plan_import(root: Path, source_rel: str = "resume.md") -> ImportPlan:
     existing = [
         f for f in career.facts
         if f.get("import_key") and isinstance(f.get("source"), dict) and f.get("source").get("path") == source_rel
-        and f.status != "retired"
     ]
     order = {f.id: (int((f.get("source") or {}).get("line") or 0), f.id) for f in existing}
-    by_key = {str(f.get("import_key")): f for f in existing}
+    by_key = {str(f.get("import_key")): f for f in existing if f.status == "retired"}
+    by_key.update({str(f.get("import_key")): f for f in existing if f.status != "retired"})
     matched: dict[int, tuple[Fact, str]] = {}
     for i, cand in enumerate(parsed.candidates):
         fact = by_key.get(cand.key)
         if fact is not None:
-            matched[i] = (fact, "unchanged" if _same(cand, fact) else "changed")
+            matched[i] = (fact, "unchanged" if fact.status == "retired" or _same(cand, fact) else "changed")
     taken = {fact.id for fact, _ in matched.values()}
-    loose = [f for f in sorted(existing, key=lambda f: order[f.id]) if f.id not in taken]
+    loose = [f for f in sorted(existing, key=lambda f: order[f.id]) if f.id not in taken and f.status != "retired"]
 
     def group(fact: Fact) -> str:
         parent = by_id.get(str(fact.get("parent")))
@@ -433,7 +451,7 @@ def apply_import(root: Path, source_rel: str = "resume.md", *, actor: str = "use
             return ImportResult("noop", plan)
         now = entry["imported_at"]
         taken = set(career.by_id())
-        resolved = {str(f.get("import_key")): f.id for f in career.facts if f.get("import_key")}
+        resolved = {c.candidate.key: c.fact.id for c in plan.changes if c.candidate is not None and c.fact is not None}
         writes: dict[Path, bytes] = {}
         specs: list[dict] = []
         for change in plan.changes:
