@@ -39,8 +39,8 @@ class Lexicon:
         self._exact: dict[str, str] = {}     # alias -> canonical (aliases that must match exactly)
         for entry in self._tech_defs:
             canonical = entry["name"]
-            sensitive = set(entry.get("case_sensitive", ()))
-            for alias in [canonical, *entry.get("aliases", ())]:
+            sensitive = set(entry.get("case_sensitive") or ())
+            for alias in [canonical, *(entry.get("aliases") or ())]:
                 if alias in sensitive:
                     self._exact[alias] = canonical
                 else:
@@ -48,7 +48,7 @@ class Lexicon:
         self.certs: dict[str, str] = {}      # lower-cased alias -> canonical
         self.cert_aliases: list[tuple[str, str]] = []  # (alias as written, canonical)
         for entry in self._cert_defs:
-            for alias in [entry["name"], *entry.get("aliases", ())]:
+            for alias in [entry["name"], *(entry.get("aliases") or ())]:
                 self.certs[alias.lower()] = entry["name"]
                 self.cert_aliases.append((alias, entry["name"]))
         self._fold_re = self._compile(sorted(self._fold, key=len, reverse=True), re.IGNORECASE)
@@ -100,6 +100,11 @@ def _read(path: Path) -> dict:
     return data
 
 
+def _is_string_list(value: object) -> bool:
+    """None counts as absent; otherwise it must be a list whose items are all strings (a bool is not a list)."""
+    return value is None or (isinstance(value, list) and all(isinstance(a, str) for a in value))
+
+
 def _check_tech(entry: object, where: str) -> None:
     if not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or not entry["name"].strip():
         raise LexiconError(f"{where}: every technology needs a name")
@@ -107,8 +112,8 @@ def _check_tech(entry: object, where: str) -> None:
     if unknown:
         raise LexiconError(f"{where}: unknown key(s) {', '.join(sorted(unknown))} for {entry['name']}")
     for key in ("aliases", "case_sensitive"):
-        if not all(isinstance(a, str) for a in entry.get(key) or ()):
-            raise LexiconError(f"{where}: {key} of {entry['name']} must be strings")
+        if not _is_string_list(entry.get(key)):
+            raise LexiconError(f"{where}: {key} of {entry['name']} must be a list of strings")
 
 
 def _check_extra(extra: dict, where: str) -> None:
@@ -123,8 +128,8 @@ def _check_extra(extra: dict, where: str) -> None:
                 _check_tech(entry, where)
             elif not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or not entry["name"].strip():
                 raise LexiconError(f"{where}: every certification needs a name")
-            elif not all(isinstance(a, str) for a in entry.get("aliases") or ()):
-                raise LexiconError(f"{where}: aliases of {entry['name']} must be strings")
+            elif not _is_string_list(entry.get("aliases")):
+                raise LexiconError(f"{where}: aliases of {entry['name']} must be a list of strings")
     for key in ("role_nouns", "seniority", "title_words", "org_suffixes", "stoplist"):
         value = extra.get(key)
         if value is not None and not (isinstance(value, list) and all(isinstance(w, str) for w in value)):

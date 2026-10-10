@@ -224,3 +224,68 @@ def test_a_summary_achievement_can_be_added_from_the_cli(career) -> None:
                  "--text", "Shipped a thing.", "--quote", "I shipped a thing")
     assert result.exit_code == 0, result.output
     assert not store.load_career(root).errors
+
+
+# --- follow-up: aliases / case_sensitive must be a list of strings --------------------------
+
+def _tech(field: str, value: str) -> str:
+    return f"technologies:\n  - name: Zig\n    {field}: {value}\n"
+
+
+def _cert(value: str) -> str:
+    return f"certifications:\n  - name: Zig Pro\n    aliases: {value}\n"
+
+
+MALFORMED_LISTS = ["5", "true", "false", "Go", "{a: b}", "[1]", "[true]"]
+MALFORMED_CASES = (
+    [(_tech("aliases", v), "aliases of Zig") for v in MALFORMED_LISTS]
+    + [(_tech("case_sensitive", v), "case_sensitive of Zig") for v in MALFORMED_LISTS]
+    + [(_cert(v), "aliases of Zig Pro") for v in MALFORMED_LISTS]
+)
+
+
+@pytest.mark.parametrize("text,fragment", MALFORMED_CASES)
+def test_malformed_alias_fields_raise_a_clean_lexicon_error(tmp_path: Path, text: str, fragment: str) -> None:
+    (tmp_path / "career").mkdir()
+    (tmp_path / "career" / "lexicon.yaml").write_text(text, encoding="utf-8")
+    with pytest.raises(LexiconError, match="lexicon.yaml") as info:
+        load_lexicon(tmp_path)
+    assert fragment in str(info.value) and "list of strings" in str(info.value)
+
+
+@pytest.mark.parametrize("text", [
+    _tech("aliases", "null"), _tech("case_sensitive", "null"), _tech("aliases", "[]"), _tech("case_sensitive", "[]"),
+    _tech("aliases", "[Zig-lang, ZG]"), _tech("case_sensitive", "[ZG]"), _cert("null"), _cert("[]"), _cert("[ZP]"),
+])
+def test_null_empty_and_string_lists_stay_valid(tmp_path: Path, text: str) -> None:
+    (tmp_path / "career").mkdir()
+    (tmp_path / "career" / "lexicon.yaml").write_text(text, encoding="utf-8")
+    assert load_lexicon(tmp_path) is not None
+
+
+def test_lexicon_constructor_tolerates_null_alias_fields() -> None:
+    from careeros.core.memory.lexicon import Lexicon
+
+    lx = Lexicon({"technologies": [{"name": "Zig", "aliases": None, "case_sensitive": None}],
+                  "certifications": [{"name": "ZP", "aliases": None}]})
+    assert lx.canonical_tech("zig") == "Zig" and lx.certs["zp"] == "ZP"
+
+
+@pytest.mark.parametrize("text", [_tech("aliases", "5"), _tech("case_sensitive", "true"), _tech("aliases", "Go"), _cert("5")])
+def test_malformed_alias_fields_at_the_cli_are_clean(career, text: str) -> None:
+    root, _ = career
+    (root / "career" / "lexicon.yaml").write_text(text, encoding="utf-8")
+    assert [(i.code, i.path) for i in store.load_career(root).errors] == [("MEM001", "career/lexicon.yaml")]
+    codes = {}
+    for name, args, kw in [
+        ("validate", ("validate",), {}),
+        ("check", ("check", "-"), {"input": "I worked at Acme Corp."}),
+        ("memory list", ("memory", "list"), {}),
+        ("memory status", ("memory", "status"), {}),
+    ]:
+        result = run(root, *args, **kw)
+        assert "Traceback" not in result.output and not isinstance(result.exception, TypeError), name
+        assert result.exception is None or isinstance(result.exception, SystemExit), name
+        assert "lexicon.yaml" in result.output, name
+        codes[name] = result.exit_code
+    assert codes["validate"] == 1 and codes["check"] == 2 and codes["memory list"] == 2 and codes["memory status"] == 0
