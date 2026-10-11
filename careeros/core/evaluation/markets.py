@@ -186,6 +186,7 @@ class MarketCheck:
     row: MarketRow | None
     floor: FieldCheck
     need: FieldCheck
+    unusable: bool = False        # the whole table is unusable (more than one Markets heading)
 
 
 def _agent_need(value: object) -> str | None:
@@ -234,5 +235,5 @@ def verify_market(job_facts: JobFacts, markets: Markets) -> MarketCheck:
         raise MarketError(f"market {name!r} names no row of the Markets table")
     if markets.unusable:
         return MarketCheck(row, FieldCheck(Verification.UNVERIFIED, row.floor_cell),
-                           FieldCheck(Verification.UNVERIFIED, row.sponsorship_cell))
+                           FieldCheck(Verification.UNVERIFIED, row.sponsorship_cell), unusable=True)
     return MarketCheck(row, _check_floor(row, job_facts), _check_need(row, job_facts))

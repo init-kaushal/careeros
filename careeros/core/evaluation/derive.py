@@ -97,6 +97,8 @@ def _row_state(check: MarketCheck, parsed) -> str:
     """Whether the Markets row gave the parser something to read, recorded so the scorer never re-parses a cell."""
     if check.row is None:
         return "no_market"
+    if check.unusable:
+        return "unreadable"
     return "parseable" if parsed is not None else "unreadable"
 
 
@@ -107,7 +109,8 @@ def _cap_inputs(facts: JobFacts, check: MarketCheck) -> dict:
         rng = {"low": facts.range_low if type(facts.range_low) is int else None, "high": facts.range_high,
                "currency": _currency(facts.range_currency),
                "basis": str(facts.range_basis) if facts.range_basis else None}
-    given = type(facts.floor_amount) is int
+    amount = facts.floor_amount if type(facts.floor_amount) is int else None
+    currency = _currency(facts.floor_currency)
     verified = check.floor.state == Verification.VERIFIED
     basis = check.floor.value.basis if verified else facts.floor_basis
     return {
@@ -118,9 +121,8 @@ def _cap_inputs(facts: JobFacts, check: MarketCheck) -> dict:
         "listing": str(facts.listing),
         "quote": bool(facts.sponsorship_quote and facts.sponsorship_quote.strip()),
         "range": rng,
-        "floor": {"amount": facts.floor_amount if given else None,
-                  "currency": _currency(facts.floor_currency) if given else None,
-                  "basis": str(basis) if given and basis else None,
+        "floor": {"amount": amount, "currency": currency,
+                  "basis": str(basis) if (amount is not None or currency) and basis else None,
                   "verification": str(check.floor.state), "source_cell": check.floor.source,
                   "row_state": _row_state(check, check.row.floor if check.row else None)},
         "confidence": str(facts.comp_confidence) if facts.comp_confidence else None,

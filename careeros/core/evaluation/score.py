@@ -1,7 +1,7 @@
 """The pure scorer (spec section 6 and 16.1): coverage, fit, combined score, tier, caps, confidence, action items.
 
-`score(basis, rules)` is a pure function of a stored basis (`result.basis`, layout `BasisSchema` v1) and the `Rules` of
-the version that basis declares: no memory, profile, clock or filesystem, so history can be recomputed from a stored
+`score(basis)` is a pure function of a stored basis (`result.basis`, layout `BasisSchema` v1) and the `Rules` of
+the version that basis declares (it resolves them itself): no memory, profile, clock or filesystem, so history can be recomputed from a stored
 record. All arithmetic is on exact `Fraction`s and every comparison against a threshold uses the exact value; rounding
 exists only in `stored_score`, which no decision reads. A basis holds integers, strings, booleans and nulls only.
 
@@ -42,7 +42,7 @@ Decisions this module pins (changing any of them requires a new rules version):
 Stored text constants: every cap reason and action-item template is a named module constant. Changing any of them, or any
 decision above, requires a new rules version: `REASON_SPONSORSHIP`, `REASON_COMPENSATION`, `REASON_MUST_GAPS`,
 `ITEM_UNVERIFIABLE`, `ITEM_MUST_GAP`, `ITEM_CLAIMED`, `ITEM_NEED_CONFLICT`, `ITEM_NEED_NO_VALUE`, `ITEM_NEED_UNREADABLE`,
-`ITEM_NEED_NO_MARKET`, `ITEM_LISTING_UNKNOWN`, `ITEM_FLOOR_CONFLICT`, `ITEM_FLOOR_NO_VALUE`, `ITEM_FLOOR_UNREADABLE`,
+`ITEM_NEED_NO_MARKET`, `ITEM_LISTING_UNKNOWN`, `ITEM_FLOOR_CONFLICT`, `ITEM_FLOOR_NO_VALUE`, `ITEM_FLOOR_INCOMPLETE`, `ITEM_FLOOR_UNREADABLE`,
 `ITEM_FLOOR_NO_MARKET`, `ITEM_RANGE_UNDISCLOSED`, `ITEM_CURRENCY_MISMATCH`, `ITEM_BASIS_MISMATCH`, `ITEM_LOW_CONFIDENCE`.
 """
 
@@ -76,6 +76,8 @@ ITEM_NEED_NO_MARKET = "no market is named; name the profile Markets row so the n
 ITEM_LISTING_UNKNOWN = "not mentioned in the posting; ask about sponsorship before investing time"
 ITEM_FLOOR_CONFLICT = 'resolve the profile/agent mismatch for the floor (the Markets row says "{cell}")'
 ITEM_FLOOR_NO_VALUE = "the Markets row says {cell} but the evaluation gave no floor; state it so the cap can be checked"
+ITEM_FLOOR_INCOMPLETE = ("the evaluation's floor is incomplete (amount and currency are both required); "
+                         "state both so the cap can be checked")
 ITEM_FLOOR_UNREADABLE = "the Markets row is not machine-readable; clarify it in profile.md"
 ITEM_FLOOR_NO_MARKET = "no market is named; name the profile Markets row so the floor can be checked"
 ITEM_RANGE_UNDISCLOSED = "not disclosed in the posting; ask the recruiter"
@@ -210,6 +212,12 @@ def _validate(basis: dict, keys: tuple[str, ...], rules: Rules) -> None:
     _one_of(cap["floor"]["verification"], _VERIFICATION, "floor verification")
     _str_or_none(cap["floor"]["source_cell"], "floor source_cell")
     _one_of(cap["floor"]["row_state"], _ROW_STATES, "floor row_state")
+    floor = cap["floor"]
+    _state("need", cap["need"], cap["need"]["value"] is not None, cap["need"]["value"] is None)
+    _state("floor", floor, floor["amount"] is not None and floor["currency"] is not None,
+           floor["amount"] is None and floor["currency"] is None)
+    if floor["verification"] == "verified" and floor["basis"] is None:
+        _bad("floor is verified but has no basis")
     if cap["range"] is not None:
         _keys(cap["range"], ("low", "high", "currency", "basis"), "range")
         _int_or_none(cap["range"]["low"], "range low")
@@ -217,6 +225,19 @@ def _validate(basis: dict, keys: tuple[str, ...], rules: Rules) -> None:
             _bad(f"range high {cap['range']['high']!r} is not an integer")
         _str_or_none(cap["range"]["currency"], "range currency")
         _one_of(cap["range"]["basis"], _BASES, "range basis")
+
+
+def _state(name: str, field: dict, complete: bool, empty: bool) -> None:
+    """State combinations the builder can never produce: `complete` = the agent's value is fully given, `empty` = absent."""
+    state, row = field["verification"], field["row_state"]
+    if row == "no_market" and field["source_cell"] is not None:
+        _bad(f"{name} has no market but a source cell")
+    if state in ("verified", "conflict") and row != "parseable":
+        _bad(f"{name} is {state} but its Markets row is {row}")
+    if state in ("verified", "conflict") and not complete:
+        _bad(f"{name} is {state} without a complete value")
+    if state == "unverified" and row == "parseable" and complete:
+        _bad(f"{name} is unverified with a readable row and a complete value")
 
 
 def _requirements(basis: dict) -> list[dict]:
@@ -315,13 +336,16 @@ def _confidence(basis: dict, reqs: list[dict], rules: Rules, coverage: Fraction 
 
 # --- action items -------------------------------------------------------------------------------
 
-def _unverified_input(ref: str, field: dict, value, no_value: str, unreadable: str, no_market: str) -> ActionItem:
+def _unverified_input(ref: str, field: dict, no_value: str, unreadable: str, no_market: str,
+                      incomplete: str | None = None) -> ActionItem:
     """The cause-specific item for an unverified input, from the stored `row_state` and `value` only."""
     if field["row_state"] == "no_market":
         return ActionItem(ref, no_market)
-    if value is None and field["row_state"] == "parseable":
-        return ActionItem(ref, no_value.format(cell=field["source_cell"]))
-    return ActionItem(ref, unreadable)
+    if field["row_state"] == "unreadable":
+        return ActionItem(ref, unreadable)
+    if incomplete:
+        return ActionItem(ref, incomplete)
+    return ActionItem(ref, no_value.format(cell=field["source_cell"]))     # a readable row, an empty value
 
 
 def _action_items(reqs: list[dict], cap_inputs: dict, caps: tuple[Cap, ...]) -> tuple[ActionItem, ...]:
@@ -334,15 +358,15 @@ def _action_items(reqs: list[dict], cap_inputs: dict, caps: tuple[Cap, ...]) -> 
     if need["verification"] == "conflict":
         items.append(ActionItem("sponsorship", ITEM_NEED_CONFLICT.format(cell=need["source_cell"])))
     elif need["verification"] == "unverified":
-        items.append(_unverified_input("sponsorship", need, need["value"], ITEM_NEED_NO_VALUE,
+        items.append(_unverified_input("sponsorship", need, ITEM_NEED_NO_VALUE,
                                        ITEM_NEED_UNREADABLE, ITEM_NEED_NO_MARKET))
     if cap_inputs["listing"] == "unknown" and not (need["verification"] == "verified" and need["value"] == "no"):
         items.append(ActionItem("sponsorship", ITEM_LISTING_UNKNOWN))
     if floor["verification"] == "conflict":
         items.append(ActionItem("pay", ITEM_FLOOR_CONFLICT.format(cell=floor["source_cell"])))
     elif floor["verification"] == "unverified":
-        items.append(_unverified_input("pay", floor, floor["amount"], ITEM_FLOOR_NO_VALUE,
-                                       ITEM_FLOOR_UNREADABLE, ITEM_FLOOR_NO_MARKET))
+        items.append(_unverified_input("pay", floor, ITEM_FLOOR_NO_VALUE, ITEM_FLOOR_UNREADABLE, ITEM_FLOOR_NO_MARKET,
+                                       ITEM_FLOOR_INCOMPLETE if (floor["amount"] is None) != (floor["currency"] is None) else None))
     if rng is None:
         items.append(ActionItem("pay", ITEM_RANGE_UNDISCLOSED))
     elif floor["verification"] == "verified" and not any(c.code == CAP_COMPENSATION for c in caps):

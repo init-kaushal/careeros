@@ -477,7 +477,7 @@ def test_decision_relevant_unknown_costs_one_step(cap):
     sponsor(value="yes", listing="offered"),                                           # listing known
     sponsor(value="yes", listing="not_offered"),                                       # established: a cap, not an unknown
     caps_in(),                                                                         # need verified no
-    {**comp(verification="unverified"), "range": None},                                # no verified floor
+    {**comp(verification="unverified", row_state="unreadable"), "range": None},                                # no verified floor
     {**caps_in(), "range": None, "floor": no_floor()},                                  # no floor at all
 ])
 def test_known_inputs_cost_no_confidence_step(cap):
@@ -626,6 +626,16 @@ def mutate(path, value):
     return b
 
 
+def mutate_many(changes):
+    b = copy.deepcopy(basis(solid(), SOLID_FIT, cap=merge(sponsor(), comp())))
+    for path, value in changes.items():
+        target = b
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = value
+    return b
+
+
 MALFORMED = [
     (("requirement_count",), 2), (("requirement_count",), True), (("requirement_count",), "3"),
     (("rubric_state",), "great"), (("rubric_state",), None),
@@ -684,10 +694,14 @@ def test_extra_keys_anywhere_and_non_mappings_are_value_errors():
 
 def test_valid_enum_values_are_accepted():
     for path, value in ((("rubric_state",), "invalid"), (("cap_inputs", "confidence"), None),
-                        (("cap_inputs", "confidence"), "unknown"), (("cap_inputs", "need", "value"), None),
+                        (("cap_inputs", "confidence"), "unknown"),
                         (("requirements", 0, "status_floor"), None), (("cap_inputs", "range"), None),
-                        (("cap_inputs", "floor", "amount"), None), (("cap_inputs", "market"), None)):
+                        (("cap_inputs", "market"), None)):
         score.score(mutate(path, value))
+    # a null need value / floor amount is valid once the input is not claimed verified
+    score.score(mutate_many({("cap_inputs", "need", "value"): None, ("cap_inputs", "need", "verification"): "unverified"}))
+    score.score(mutate_many({("cap_inputs", "floor", "amount"): None, ("cap_inputs", "floor", "verification"): "unverified",
+                             ("cap_inputs", "floor", "row_state"): "unreadable"}))
 
 
 def test_pinned_cap_codes():
@@ -886,7 +900,7 @@ def test_listed_facts_are_sorted_in_claimed_items():
 
 def test_every_pinned_text_is_a_named_constant():
     names = [n for n in dir(score) if n.startswith(("REASON_", "ITEM_"))]
-    assert len(names) == 19
+    assert len(names) == 20
     doc = score.__doc__
     assert all(f"`{n}`" in doc for n in names)
     assert "requires a new rules version" in doc
@@ -923,3 +937,92 @@ def test_row_state_is_recorded_at_build_time():
     assert none["cap_inputs"]["need"]["row_state"] == none["cap_inputs"]["floor"]["row_state"] == "no_market"
     out, _ = singapore(needed=None, floor_amount=None, floor_currency=None)
     assert out["cap_inputs"]["need"]["row_state"] == out["cap_inputs"]["floor"]["row_state"] == "parseable"
+
+
+# --- state combinations (fix round 3) ---------------------------------------------------------------------------
+
+NEED, FLOOR = ("cap_inputs", "need"), ("cap_inputs", "floor")
+BAD_COMBINATIONS = {
+    "verified need without a value": {NEED + ("value",): None},
+    "verified floor without an amount": {FLOOR + ("amount",): None},
+    "verified floor without a currency": {FLOOR + ("currency",): None},
+    "verified floor without a basis": {FLOOR + ("basis",): None},
+    "verified need with an unreadable row": {NEED + ("row_state",): "unreadable"},
+    "verified need with no market": {NEED + ("row_state",): "no_market", NEED + ("source_cell",): None},
+    "verified floor with an unreadable row": {FLOOR + ("row_state",): "unreadable"},
+    "verified floor with no market": {FLOOR + ("row_state",): "no_market", FLOOR + ("source_cell",): None},
+    "conflicting need with an unreadable row": {NEED + ("verification",): "conflict", NEED + ("row_state",): "unreadable"},
+    "conflicting floor with no market": {FLOOR + ("verification",): "conflict", FLOOR + ("row_state",): "no_market",
+                                         FLOOR + ("source_cell",): None},
+    "conflicting need without a value": {NEED + ("verification",): "conflict", NEED + ("value",): None},
+    "conflicting floor without an amount": {FLOOR + ("verification",): "conflict", FLOOR + ("amount",): None},
+    "conflicting floor without a currency": {FLOOR + ("verification",): "conflict", FLOOR + ("currency",): None},
+    "no_market need with a source cell": {NEED + ("verification",): "unverified", NEED + ("row_state",): "no_market"},
+    "no_market floor with a source cell": {FLOOR + ("verification",): "unverified", FLOOR + ("row_state",): "no_market"},
+    "unverified need, readable row, complete value": {NEED + ("verification",): "unverified"},
+    "unverified floor, readable row, complete value": {FLOOR + ("verification",): "unverified"},
+}
+
+
+@pytest.mark.parametrize("name", list(BAD_COMBINATIONS))
+def test_impossible_state_combinations_are_value_errors(name):
+    with pytest.raises(ValueError) as info:
+        score.score(mutate_many(BAD_COMBINATIONS[name]))
+    assert type(info.value) is ValueError and "malformed basis" in str(info.value)
+
+
+def test_possible_state_combinations_are_accepted():
+    for changes in ({NEED + ("verification",): "conflict", NEED + ("value",): "no"},
+                    {FLOOR + ("verification",): "conflict"},
+                    {NEED + ("verification",): "unverified", NEED + ("value",): None},
+                    {NEED + ("verification",): "unverified", NEED + ("row_state",): "no_market", NEED + ("source_cell",): None,
+                     NEED + ("value",): "yes"},
+                    {FLOOR + ("verification",): "unverified", FLOOR + ("amount",): None, FLOOR + ("currency",): None},
+                    {FLOOR + ("verification",): "unverified", FLOOR + ("amount",): None}):
+        score.score(mutate_many(changes))
+
+
+# --- unusable table and incomplete floor ---------------------------------------------------------------------------
+
+UNUSABLE = SG_PROFILE + "\n## Markets\n| Market | Min base | Sponsorship |\n|---|---|---|\n| Other | $1 | required |\n"
+
+
+def singapore_in(table, **over):
+    given = dict(market="Singapore", listing=Listing.NOT_OFFERED, sponsorship_quote="no visa support",
+                 range_low=6000, range_high=7500, range_currency="SGD", range_basis=MarketBasis.BASE,
+                 comp_confidence=SourceConfidence.HIGH, as_of="2026-09", needed=True, floor_amount=8000, floor_currency="SGD")
+    given.update(over)
+    facts = JobFacts(**given)
+    out = Basis((entry("r1"), entry("r2", "strong"), entry("r3", "nice")), 3).complete(
+        judgements(("Role title matches", "yes")), facts, markets.verify_market(facts, table),
+        Rubric((FitRow("Role title matches", 3),), (), "ok"))
+    return out, score.score(json.loads(canon.canonical_json(out)))
+
+
+@pytest.mark.parametrize("over", [dict(needed=None, floor_amount=None, floor_currency=None), {}])
+def test_unusable_table_is_unreadable_never_caps_and_says_so(over):
+    out, result = singapore_in(markets.parse(UNUSABLE), **over)
+    assert markets.parse(UNUSABLE).unusable
+    for field in ("need", "floor"):
+        assert out["cap_inputs"][field]["row_state"] == "unreadable"
+        assert out["cap_inputs"][field]["verification"] == "unverified"
+    assert result.caps == () and result.tier == Tier.PURSUE
+    assert texts(result) == ["sponsorship: the Markets row is not machine-readable; clarify it in profile.md",
+                             "pay: the Markets row is not machine-readable; clarify it in profile.md"]
+
+
+def test_incomplete_floor_is_the_agents_problem_not_the_profiles():
+    expected = ("pay: the evaluation's floor is incomplete (amount and currency are both required); "
+                "state both so the cap can be checked")
+    for over in (dict(floor_currency=None), dict(floor_amount=None)):
+        out, result = singapore_in(SG, **over)
+        floor = out["cap_inputs"]["floor"]
+        assert floor["verification"] == "unverified" and floor["row_state"] == "parseable"
+        assert expected in texts(result)
+        assert "pay: the Markets row is not machine-readable; clarify it in profile.md" not in texts(result)
+        assert [c.code for c in result.caps] == ["sponsorship"]          # the incomplete floor never feeds the cap
+    assert floor["currency"] == "SGD" and floor["amount"] is None        # the partial value is stored, not dropped
+
+
+def test_module_docstring_describes_the_current_signature():
+    assert "`score(basis)`" in score.__doc__ and "score(basis, rules)" not in score.__doc__
