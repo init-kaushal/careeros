@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from careeros.core import fold, ids, ledger, models, versions
+from careeros.core.evaluation import integrity as evaluation_integrity
 from careeros.core.memory import store
 from careeros.core.models import Issue, State
 from careeros.core.state_machine import (
@@ -46,6 +47,18 @@ def _lenient_events(root: Path) -> list[dict]:
         if isinstance(event, dict):
             events.append(event)
     return events
+
+
+def _evaluation_ids(root: Path) -> set[str]:
+    found: set[str] = set()
+    for path in sorted((root / "jobs" / "discovered").glob("*/evaluation.md")):
+        try:
+            frontmatter, _ = split_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, WorkspaceError, RecursionError, MemoryError):
+            continue
+        if frontmatter and isinstance(frontmatter.get("id"), str):
+            found.add(frontmatter["id"])
+    return found
 
 
 def validate_workspace(root: Path) -> list[Issue]:
@@ -171,6 +184,10 @@ def validate_workspace(root: Path) -> list[Issue]:
     # --- ledger ---
     issues.extend(ledger.verify_chain(root))
     events = _lenient_events(root)
+
+    # --- evaluations ---
+    issues.extend(evaluation_integrity.validate_workspace(root, events))
+    evaluation_ids = _evaluation_ids(root)
     reported: set[str] = set()
     memory_ids = store.known_ids(root)
     for event in events:
@@ -187,6 +204,11 @@ def validate_workspace(root: Path) -> list[Issue]:
             add("error", "LED003", "ledger.jsonl",
                 f"event {event.get('seq')} refers to {entity}, but no career file has that id",
                 "restore the file from .careeros/backups or version control; retire facts with `careeros memory retire` instead of deleting them")
+        elif entity.startswith("evl_") and entity not in evaluation_ids:
+            reported.add(entity)
+            add("error", "LED003", "ledger.jsonl",
+                f"event {event.get('seq')} refers to {entity}, but no evaluation.md has that id",
+                "restore the evaluation.md from .careeros/backups or version control; evaluations are replaced with `careeros evaluate`, not deleted")
     for event in events:
         if event.get("type") != "job.status_changed":
             continue

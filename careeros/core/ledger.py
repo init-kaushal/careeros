@@ -35,7 +35,7 @@ _SPEC_KEYS = {
 }
 _TYPE_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 _ACTOR_RE = re.compile(r"^(user|system|agent:[A-Za-z0-9._-]+)$")
-_NEEDS_REASON = {"job.status_corrected", "job.transition_rejected"}
+_NEEDS_REASON = {"job.status_corrected", "job.transition_rejected", "evaluation.rejected"}
 
 
 class LedgerError(WorkspaceError):
@@ -43,7 +43,7 @@ class LedgerError(WorkspaceError):
 
 
 def is_reserved(event_type: str) -> bool:
-    return event_type in RESERVED_TYPES or event_type.startswith(("workspace.", "memory."))
+    return event_type in RESERVED_TYPES or event_type.startswith(("workspace.", "memory.", "evaluation."))
 
 
 def _line_hash(line: bytes) -> str:
