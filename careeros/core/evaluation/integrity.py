@@ -26,7 +26,11 @@ cell. Staleness and tampering are reported separately and can both be present.
 
 By-design limits (EVL009, the file-vs-ledger check, is the backstop for both): an unsupported `basis_version` or
 `rules_version` suppresses the tamper checks (EVL010 says "cannot be verified"); and editing `stamps.memory`,
-`stamps.rubric` or `stamps.inputs` to a stale value skips the derivation check (step 4).
+`stamps.rubric` or `stamps.inputs` to a stale value skips the derivation check (step 4). Likewise, in a STALE record
+the free-text term inside an `unverifiable` reason cannot be verified against the stored basis (the term is not in it,
+and the basis shape is fixed): a forged term, or a swap between the two legal reason templates, is EVL007 only while
+the memory, rubric and inputs stamps are current (derivation check), and always visible through EVL009 against the
+ledger. `evaluate` replaces stale records, and the body is rendered from `result` only.
 
 `validate_workspace(root)` runs this and `ledgercheck.verify` (EVL009) for every `jobs/discovered/*/evaluation.md`; it
 never writes and never raises on a hand-edited file.
@@ -95,7 +99,7 @@ def _score_field(stored: object, want: object) -> bool:
     return type(stored) is float and stored == want
 
 
-_REASONS = (re.compile(r"years of \S.* cannot be derived from dated experience"),
+_REASONS = (re.compile(r"years of \S.* cannot be derived from dated experience", re.DOTALL),
             re.compile(r"the number of years is missing or not positive"))
 _REQ_KEYS = {"id", "outcome", "facts", "status_floor", "reason"}
 

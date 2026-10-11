@@ -981,3 +981,34 @@ def test_skeleton_without_jd_is_clean_but_a_quote_without_jd_is_evl004(career):
     rec = load(root, job)
     assert record.validate_agent(rec, inputs.jd_text, inputs.career, inputs.rubric, inputs.markets, inputs.job_id) == []
     assert "EVL004" in [i.code for i in issues_of(root, job, agent_half(ids))]
+
+
+# --- fix round 2: multi-line terms and the documented stale-reason limit --------------------------------------
+
+@pytest.mark.parametrize("term", ["multi\nline", "a\r\nb", "tab\there"])
+@pytest.mark.parametrize("years", [5, 10, 100])
+def test_fresh_unverifiable_reason_with_odd_terms_is_integrity_clean(career, term, years):
+    root, ids = career
+    job = make_job(root)
+    agent = agent_half(ids)
+    agent["requirements"][1].update(term=term, years=years)
+    write_agent(root, job, agent)
+    assert any("reason" in r for r in stored_result(root, job)["requirements"])
+    rep = report(root, job)
+    assert (rep.tampered, rep.stale) == ((), ())
+
+
+def test_stale_record_accepts_a_different_legal_term_but_the_ledger_check_flags_it(ws):
+    from careeros.core import ledger
+    root, ids, job = ws
+    rec = load(root, job)
+    ledger.append_events(root, [{"type": "evaluation.completed", "actor": "system", "entity": rec.id,
+                                 "action": "evaluated",
+                                 "artifacts": [rec.rel, "sha256:" + canon.result_sha256(rec.result)]}])
+    ops.add_fact(root, "skill", {"name": "Rust"}, quote="said so")        # now stale: derivation check is skipped
+    idx = _unverifiable_index(root, job)
+    _forge_requirement(root, job, lambda d: d[idx].update(reason="years of Forged cannot be derived from dated experience"))
+    rep = report(root, job)
+    assert rep.tampered == () and "memory" in rep.stale
+    found = [i for i in integrity.validate_workspace(root) if i.code == "EVL009"]
+    assert len(found) == 1 and found[0].message.startswith("mismatched")
