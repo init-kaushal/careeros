@@ -27,7 +27,7 @@ careeros evaluate example-corp-platform --json     # the same, machine-readable
 | `agent:` | the agent | the judgements below, plus `updated_at` |
 | `result:` | the command | tier, scores, confidence, caps, action items, per-requirement outcomes, freshness stamps and the exact `basis` that was scored |
 
-The body below the frontmatter is rendered from `result:` and nothing else: tier and scores, a requirements table, the caps and "what would change this". Do not edit `result:` or the body. A changed value is reported as tampering (`EVL007`) and the next `careeros evaluate` replaces it, and the replacement is logged.
+The body below the frontmatter is rendered from `result:` and nothing else: tier and scores, a requirements table, the caps and "what would change this". Do not edit `result:` or the body. A changed value is reported as tampering (`EVL007`) and the next `careeros evaluate` replaces it. The replacement is logged as an `evaluation.result_replaced` event, written together with the new `evaluation.completed`, whenever the old result was tampered with, was from an unsupported version, or no longer matches the ledger's last completion. Its reason lists `tampered`, `stale` and `ledger_mismatch` (comma-joined, in that order; `ledger_mismatch` means the file differs from the result the ledger last recorded and is not added when `tampered` already says so). A result that is merely stale, or a file whose completion event is missing after an interrupted run, is rewritten with a plain `evaluation.completed` and no replacement event.
 
 ### What the agent must supply
 
@@ -150,7 +150,7 @@ The two are reported separately and can both be present.
 | Code | Severity | Meaning |
 |---|---|---|
 | `EVL001` | error | the file cannot be read, has bad YAML, a wrong header or no `agent:` |
-| `EVL002` | error | a requirement has no id or repeats one, or the record's `job` is not this job |
+| `EVL002` | error | a requirement has no id or repeats one, the record's `job` is not this job, or a record with a `result:` lists no requirements |
 | `EVL003` | error | a required text field is missing, a field has the wrong type, an unknown key or a value outside its enum; a `fit` row is not a fit row of the rubric or is judged more than once |
 | `EVL004` | error | a quote is missing or not found in `jd.md`, or `jd.md` is missing |
 | `EVL005` | error | a link names a fact that does not exist or is not active |

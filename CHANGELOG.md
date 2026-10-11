@@ -3,7 +3,7 @@
 ## 0.5.0 — Job evaluation
 
 ### Added
-- `careeros evaluate <job>`: scores a saved job against your career memory from the agent's recorded judgements. `--init` creates `jobs/discovered/[job-slug]/evaluation.md`; `--json` prints machine-readable output. Exit 0 scored or unchanged, 1 the record or posting cannot be scored (nothing changed), 2 usage or a career memory with errors.
+- `careeros evaluate <job>`: scores a saved job against your career memory from the agent's recorded judgements. `--init` creates `jobs/discovered/[job-slug]/evaluation.md`; `--json` prints machine-readable output. Exit 0 scored or unchanged, 1 the record or posting cannot be scored (evaluation.md is unchanged; an `evaluation.rejected` event is logged for invalid inputs), 2 usage or a career memory with errors.
 - The result: a tier (`pursue`, `stretch`, `weak`, `skip`, `unrated`), coverage, fit and combined scores, confidence, sponsorship, pay and unmet-`must` caps, and action items. Outcomes (`covered`, `adjacent`, `gap`, `unverifiable`) are derived from your active facts by code, never by the agent; every judgement carries a verbatim quote from `jd.md`.
 - Freshness stamps and integrity checks: `validate` reports `EVL001`-`EVL011` (stale `EVL008`, tampered `EVL007`, file and ledger disagreement `EVL009`). New ledger events `evaluation.completed`, `evaluation.rejected` and `evaluation.result_replaced`; the type prefix `evaluation.*` is reserved.
 - An `evaluate` skill for Claude Code, a fresh-evaluation check in `prep` (its EVIDENCE GATE is unchanged), a closing hint in `browse` and a routing row in `CLAUDE.md`. GPT Work is unchanged.

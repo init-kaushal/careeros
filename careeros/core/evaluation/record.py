@@ -558,6 +558,13 @@ def parse_agent(rec: Record) -> tuple[Agent, list[Issue]]:
     return Agent(tuple(reqs), tuple(fit), job_facts, tuple(p.quotes), tuple(p.links)), p.issues
 
 
+def no_requirements(rec: Record) -> list[Issue]:
+    """EVL002 when the agent half lists no requirements (an untouched `--init` skeleton). Not part of `validate_agent`."""
+    if rec.agent.get("requirements") in (None, []):
+        return [Issue("error", "EVL002", rec.rel, "the agent half has no requirements; extract them from jd.md", _FIX)]
+    return []
+
+
 def validate_agent(rec: Record, jd_text: str | None, career: Career, rubric: Rubric, markets: Markets,
                    job_id: str | None) -> list[Issue]:
     """EVL002-EVL006 for the agent half (spec 8 and 16.1). Pure; never raises on a malformed record.

@@ -102,6 +102,7 @@ def evaluate(root: Path, ref: str, actor: str) -> Summary:
         issues = record.validate_agent(rec, inputs.jd_text, inputs.career, inputs.rubric, inputs.markets, inputs.job_id)
         if inputs.jd_text is None and not any(i.code == "EVL004" for i in issues):
             issues.append(Issue("error", "EVL004", rec.rel, f"{record.JD_FILE} is missing or unreadable", ""))
+        issues += record.no_requirements(rec)
         if issues:
             _rejected(root, job, actor, issues, events)
         try:
@@ -131,8 +132,11 @@ def evaluate(root: Path, ref: str, actor: str) -> Summary:
             return Summary("unchanged", job.id, rec.id, rec.rel, result)
         if new != old:
             report = integrity.check(rec, inputs)
-            reasons = (["tampered"] if report.tampered else []) + (["stale"] if report.stale or report.unsupported else [])
-            if report.tampered or report.unsupported:
+            # a tampered result always differs from the ledger's hash; the token is for what integrity cannot see
+            mismatch = not report.tampered and any(i.message.startswith("mismatched") for i in ledgercheck.verify(rec, records, events))
+            reasons = ([] + (["tampered"] if report.tampered else []) + (["stale"] if report.stale or report.unsupported else [])
+                       + (["ledger_mismatch"] if mismatch else []))
+            if report.tampered or report.unsupported or mismatch:
                 replaced = ",".join(reasons)
                 specs.append({"type": "evaluation.result_replaced", "actor": actor, "entity": rec.id, "source": "cli",
                               "reason": replaced, "artifacts": [rec.rel, digest],

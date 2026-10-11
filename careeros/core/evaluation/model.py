@@ -4,8 +4,8 @@ Enum values are the exact strings stored in `evaluation.md` and the ledger; test
 silently change a stored value. Exact quantities are never floats here: weights are integers and any
 non-integer quantity is a `Fraction` in memory and a string fraction (`"1/2"`) when hashed (`canon.exact`).
 
-`Cap.code` values are pinned in Task C. YAML 1.1 turns unquoted `yes`/`no` into booleans, so the parser
-(Task D) must convert them to the strings before building `Judgement` or the sponsorship `needed` value.
+`Cap.code` values are pinned by tests. YAML 1.1 turns unquoted `yes`/`no` into booleans, so the record parser
+converts them to the strings before building `Judgement` or the sponsorship `needed` value.
 """
 
 from __future__ import annotations
@@ -138,8 +138,6 @@ class JobFacts:
     source: str | None = None
     comp_confidence: SourceConfidence | None = None
     as_of: str | None = None
-    floor_verification: Verification | None = None
-    need_verification: Verification | None = None
 
 
 @dataclass(frozen=True)

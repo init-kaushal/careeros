@@ -363,10 +363,8 @@ def test_enum_values_equal_spec_strings():
 
 def test_job_facts_typed_fields():
     jf = model.JobFacts(range_basis=model.MarketBasis.BASE, floor_basis=model.MarketBasis.TOTAL,
-                        comp_confidence=model.SourceConfidence.UNKNOWN,
-                        floor_verification=model.Verification.CONFLICT,
-                        need_verification=model.Verification.UNVERIFIED)
-    assert jf.range_basis == "base" and jf.floor_verification == "conflict"
+                        comp_confidence=model.SourceConfidence.UNKNOWN)
+    assert jf.range_basis == "base" and jf.floor_basis == "total" and jf.comp_confidence == "unknown"
 
 
 def test_enums_compare_equal_to_their_strings():

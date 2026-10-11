@@ -109,12 +109,12 @@ Run `careeros evaluate <job>` (add `--json` if you want to read the fields).
 | Code | Meaning | Fix |
 |---|---|---|
 | EVL001 | `evaluation.md` cannot be read: bad YAML, no header, no `agent:` | repair the file, or move it aside and run `--init` again |
-| EVL002 | a requirement has no id or repeats one; or the record belongs to another job | give each requirement its own id (`r1`, `r2`, ...) |
+| EVL002 | a requirement has no id or repeats one; the record belongs to another job, or the agent half lists no requirements | give each requirement its own id (`r1`, `r2`, ...); an empty `requirements` list is also EVL002, so extract the requirements first |
 | EVL003 | a required text field is missing, a field has the wrong type or is not an allowed value, a `fit` row is not in the rubric, or a `fit` row is judged twice | use the values in the tables above; copy fit labels exactly |
 | EVL004 | a quote is not found in `jd.md`, a required quote is missing, or `jd.md` is missing | copy the words from `jd.md`; save `jd.md` first |
 | EVL005 | a link names a fact that is missing or not active | find the right id with `careeros memory list`, or remove the link |
 | EVL006 | `market` is not a `## Markets` row, a floor or need has no market, or a pay or sponsorship field is incomplete | copy the row label; give `source`, `confidence`, `as_of` and any needed quote |
-| EVL007 | someone edited `result:` or the body | do not edit them; re-running replaces the stored result and logs that it did |
+| EVL007 | someone edited `result:` or the body | do not edit them; re-running replaces the stored result and logs it as `evaluation.result_replaced` (reasons: `tampered`, `stale`, `ledger_mismatch`) |
 | EVL008 | the evaluation is stale: `jd.md`, the career memory, the rubric or Markets table, or your judgements changed since it was scored | re-read `jd.md`, check the judgements still hold, and run `careeros evaluate <job>` again |
 | EVL009 | the file and the ledger disagree (a run was interrupted, or the file was copied or restored) | re-running heals it; for a copied file, delete the copy and `--init` a fresh one |
 

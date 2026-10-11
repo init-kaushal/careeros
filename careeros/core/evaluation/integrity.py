@@ -241,6 +241,8 @@ def check(rec: Record, inputs: Inputs) -> IntegrityReport:
     unsupported = _unsupported(result)
     version_issues = [Issue("warning", "EVL010", rec.rel, unsupported, _FIX_VERSION)] if unsupported else []
     structure = record.validate_agent(rec, inputs.jd_text, inputs.career, inputs.rubric, inputs.markets, inputs.job_id)
+    if result is not None:
+        structure += record.no_requirements(rec)
     if structure or result is None:
         return IntegrityReport((), (), unsupported, tuple(structure + version_issues))
     found: list[tuple[str, str]] = []

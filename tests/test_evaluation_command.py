@@ -295,7 +295,7 @@ def test_unsupported_version_is_replaced_and_validates_clean(done) -> None:
     assert run(root, "evaluate", job["id"]).exit_code == 0
     replaced, completed = ledger.read_events(root)[count:]
     assert replaced["type"] == "evaluation.result_replaced" and replaced["reason"] not in ("tampered", "tampered,stale")
-    assert replaced["reason"] == "stale" and completed["type"] == "evaluation.completed"
+    assert replaced["reason"] == "stale,ledger_mismatch" and completed["type"] == "evaluation.completed"
     assert codes(root) == []
 
 
@@ -411,3 +411,72 @@ def test_duplicated_evaluation_id_is_refused_and_recovers_after_deleting_the_cop
     assert res.exit_code == 1 and json.loads(res.stdout)["issues"][0]["code"] == "EVL009"
     (copy_dir / "evaluation.md").unlink()
     assert run(root, "evaluate", job["id"]).exit_code == 0
+
+
+# --- final wave: ledger_mismatch replacements and the empty requirement list -----------------------------
+
+def _replaced_then_completed(root, count):
+    new = ledger.read_events(root)[count:]
+    assert [e["type"] for e in new] == ["evaluation.result_replaced", "evaluation.completed"]
+    return new[0]
+
+
+def test_forged_basis_version_and_changed_tier_is_logged_as_ledger_mismatch(done) -> None:
+    root, _, job = done
+    good = job["eval"].read_bytes()
+    edit(root, job, lambda fm: (fm["result"]["basis"].update(basis_version="99"), fm["result"].update(tier="skip")))
+    count = len(ledger.read_events(root))
+    assert run(root, "evaluate", job["id"]).exit_code == 0
+    event = _replaced_then_completed(root, count)
+    assert "ledger_mismatch" in event["reason"].split(",")
+    assert job["eval"].read_bytes() == good and codes(root) == []
+
+
+def test_forged_stale_stamp_with_a_rewritten_result_is_logged_as_ledger_mismatch(done) -> None:
+    root, _, job = done
+    good = job["eval"].read_bytes()
+    rec = record.load(job["eval"], root)
+    basis = copy.deepcopy(rec.result["basis"])
+    basis["fit"] = [dict(row, judgement="no") if isinstance(row, dict) and "judgement" in row else row
+                    for row in basis["fit"]] if isinstance(basis.get("fit"), list) else basis.get("fit")
+    stamps = dict(rec.result["stamps"], inputs="junk")
+    forged = record.assemble(basis, stamps, rec.result["requirements"])
+    assert forged["basis_sha256"] != rec.result["basis_sha256"] or forged != rec.result
+    job["eval"].write_bytes(record.to_bytes(rec, forged))
+    count = len(ledger.read_events(root))
+    assert run(root, "evaluate", job["id"]).exit_code == 0
+    event = _replaced_then_completed(root, count)
+    assert "ledger_mismatch" in event["reason"].split(",")
+    assert job["eval"].read_bytes() == good and codes(root) == []
+
+
+def test_crash_window_heal_still_writes_only_a_lone_completed(fresh, monkeypatch) -> None:
+    root, _, job = fresh
+    with monkeypatch.context() as m:
+        m.setattr(service.ledger, "append_events", boom)
+        m.setattr(store.Transaction, "rollback", lambda self: None)
+        run(root, "evaluate", job["id"])
+    count = len(ledger.read_events(root))
+    assert run(root, "evaluate", job["id"]).exit_code == 0
+    assert [e["type"] for e in ledger.read_events(root)[count:]] == ["evaluation.completed"]
+
+
+def test_an_untouched_skeleton_is_rejected_with_evl002_and_validate_is_silent(career) -> None:
+    root, _ = career
+    job = make_job(root)
+    run(root, "evaluate", job["id"], "--init")
+    assert codes(root) == []
+    before = job["eval"].read_bytes()
+    res = run(root, "evaluate", job["id"])
+    assert res.exit_code == 1 and "EVL002" in res.output
+    assert job["eval"].read_bytes() == before
+    (event,) = evl_events(root)
+    assert event["type"] == "evaluation.rejected" and "EVL002" in event["reason"]
+    run(root, "evaluate", job["id"])
+    assert len(evl_events(root)) == 1
+
+
+def test_a_record_with_a_result_but_no_requirements_is_evl002(done) -> None:
+    root, _, job = done
+    edit(root, job, lambda fm: fm["agent"].update(requirements=[]))
+    assert "EVL002" in codes(root)
