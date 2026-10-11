@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from careeros.core.evaluation.markets import MarketCheck, _agent_need
+from careeros.core.evaluation.markets import MarketCheck, _agent_need, norm_basis, norm_currency
 from careeros.core.evaluation.model import FitJudgement, JobFacts, Kind, Outcome, Requirement, Verification
 from careeros.core.evaluation.rubric import Rubric, norm_label
 from careeros.core.evaluation.rules import BASIS_VERSION, RULES_VERSION
@@ -89,8 +89,7 @@ class Basis:
                 "fit": rows, "cap_inputs": _cap_inputs(facts, check)}
 
 
-def _currency(value: str | None) -> str | None:
-    return value.strip().upper() if isinstance(value, str) and value.strip() else None
+_CONFIDENCES = ("high", "medium", "low", "unknown")
 
 
 def _row_state(check: MarketCheck, parsed) -> str:
@@ -107,26 +106,25 @@ def _cap_inputs(facts: JobFacts, check: MarketCheck) -> dict:
     rng = None
     if type(facts.range_high) is int:
         rng = {"low": facts.range_low if type(facts.range_low) is int else None, "high": facts.range_high,
-               "currency": _currency(facts.range_currency),
-               "basis": str(facts.range_basis) if facts.range_basis else None}
+               "currency": norm_currency(facts.range_currency), "basis": norm_basis(facts.range_basis)}
     amount = facts.floor_amount if type(facts.floor_amount) is int else None
-    currency = _currency(facts.floor_currency)
+    currency = norm_currency(facts.floor_currency)
     verified = check.floor.state == Verification.VERIFIED
-    basis = check.floor.value.basis if verified else facts.floor_basis
+    basis = str(check.floor.value.basis) if verified else norm_basis(facts.floor_basis)
     return {
         "market": facts.market.strip() if facts.market and facts.market.strip() else None,
         "need": {"value": _agent_need(facts.needed), "verification": str(check.need.state),
                  "source_cell": check.need.source,
                  "row_state": _row_state(check, check.row.need if check.row else None)},
-        "listing": str(facts.listing),
+        "listing": str(facts.listing) if str(facts.listing) in ("offered", "not_offered", "unknown") else "unknown",
         "quote": bool(facts.sponsorship_quote and facts.sponsorship_quote.strip()),
         "range": rng,
         "floor": {"amount": amount, "currency": currency,
-                  "basis": str(basis) if (amount is not None or currency) and basis else None,
+                  "basis": basis if amount is not None or currency else None,
                   "verification": str(check.floor.state), "source_cell": check.floor.source,
                   "row_state": _row_state(check, check.row.floor if check.row else None)},
-        "confidence": str(facts.comp_confidence) if facts.comp_confidence else None,
-        "as_of": facts.as_of,
+        "confidence": str(facts.comp_confidence) if str(facts.comp_confidence) in _CONFIDENCES else None,
+        "as_of": facts.as_of if isinstance(facts.as_of, str) else None,
     }
 
 

@@ -13,7 +13,7 @@ import pytest
 
 from careeros.core.evaluation import canon, markets, score
 from careeros.core.evaluation.derive import Basis
-from careeros.core.evaluation.model import Cap, Confidence, JobFacts, Listing, MarketBasis, SourceConfidence, Tier
+from careeros.core.evaluation.model import Cap, Confidence, JobFacts, Listing, MarketBasis, SourceConfidence, Tier, Verification
 from careeros.core.evaluation.rubric import FitRow, Rubric
 from careeros.core.evaluation.rules import BASIS_VERSIONS, RULES, UnsupportedVersion
 
@@ -1026,3 +1026,51 @@ def test_incomplete_floor_is_the_agents_problem_not_the_profiles():
 
 def test_module_docstring_describes_the_current_signature():
     assert "`score(basis)`" in score.__doc__ and "score(basis, rules)" not in score.__doc__
+
+
+# --- builder output always scores (fix round 4) ------------------------------------------------------------------
+
+GRID_PROFILE = SG_PROFILE + "| Home | SGD 5000 | not needed | 2 |\n| Vague | TBD | preferred | 3 |\n"
+GRID_TABLES = {
+    "readable required": (markets.parse(GRID_PROFILE), "Singapore"),
+    "readable not needed": (markets.parse(GRID_PROFILE), "Home"),
+    "unreadable": (markets.parse(GRID_PROFILE), "Vague"),
+    "duplicate heading": (markets.parse(UNUSABLE), "Singapore"),
+    "no market": (markets.parse(GRID_PROFILE), None),
+}
+GRID_AMOUNTS = [None, 0, 8000, 7000, True, 8000.0, "8000"]
+GRID_CURRENCIES = [None, "", "  ", "sgd", " SGD ", "EUR", 5, True]
+GRID_BASES = [None, "base", "total", "x"]
+GRID_NEEDS = [None, "", "yes", "YES", " no ", True, "maybe"]
+
+
+def test_builder_output_is_always_accepted_by_the_scorer():
+    rubric = Rubric((FitRow("Role title matches", 3),), (), "ok")
+    reqs = Basis((entry("r1"), entry("r2", "strong"), entry("r3", "nice")), 3)
+    judged = judgements(("Role title matches", "yes"))
+    count = 0
+    for table, name in GRID_TABLES.values():
+        for amount in GRID_AMOUNTS:
+            for currency in GRID_CURRENCIES:
+                for basis_ in GRID_BASES:
+                    for need in GRID_NEEDS:
+                        facts = JobFacts(market=name, needed=need, listing=Listing.NOT_OFFERED, sponsorship_quote="q",
+                                         range_high=7500, range_currency=currency, range_basis=basis_,
+                                         floor_amount=amount, floor_currency=currency, floor_basis=basis_,
+                                         comp_confidence="great" if basis_ == "x" else SourceConfidence.HIGH, as_of=2026)
+                        out = reqs.complete(judged, facts, markets.verify_market(facts, table), rubric)
+                        try:
+                            score.score(json.loads(canon.canonical_json(out)))
+                        except ValueError as exc:                                           # pragma: no cover
+                            raise AssertionError(f"{name} {amount!r} {currency!r} {basis_!r} {need!r}: {exc}") from exc
+                        count += 1
+    assert count == 5 * 7 * 8 * 4 * 7
+
+
+def test_whitespace_or_non_string_currency_is_absent_not_a_conflict():
+    for currency in ("  ", "", 5, True, None):
+        facts = JobFacts(market="Singapore", floor_amount=8000, floor_currency=currency)
+        check = markets.verify_market(facts, SG)
+        assert check.floor.state == Verification.UNVERIFIED
+    facts = JobFacts(market="Singapore", floor_amount=8000, floor_currency=" sgd ")
+    assert markets.verify_market(facts, SG).floor.state == Verification.VERIFIED

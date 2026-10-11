@@ -199,12 +199,24 @@ def _agent_need(value: object) -> str | None:
     return None
 
 
+def norm_currency(value: object) -> str | None:
+    """The one normalisation of an agent currency (stored in the basis and compared with the row): a non-blank string,
+    stripped and upper-cased; anything else (None, blank, a non-string) is absent."""
+    return value.strip().upper() if isinstance(value, str) and value.strip() else None
+
+
+def norm_basis(value: object) -> str | None:
+    """`base` or `total` (a `MarketBasis` or the same string); anything else is absent."""
+    return str(value) if isinstance(value, str) and value in ("base", "total") else None
+
+
 def _check_floor(row: MarketRow, facts: JobFacts) -> FieldCheck:
     unverified = FieldCheck(Verification.UNVERIFIED, row.floor_cell)
-    if row.floor is None or type(facts.floor_amount) is not int or not facts.floor_currency:
+    currency = norm_currency(facts.floor_currency)
+    if row.floor is None or type(facts.floor_amount) is not int or currency is None:
         return unverified
-    same = (facts.floor_amount == row.floor.amount and facts.floor_currency.strip().upper() == row.floor.currency
-            and facts.floor_basis in (None, row.floor.basis))
+    basis_ok = facts.floor_basis is None or norm_basis(facts.floor_basis) == row.floor.basis
+    same = facts.floor_amount == row.floor.amount and currency == row.floor.currency and basis_ok
     return FieldCheck(Verification.VERIFIED, row.floor_cell, row.floor) if same else FieldCheck(Verification.CONFLICT, row.floor_cell)
 
 
