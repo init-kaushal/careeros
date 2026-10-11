@@ -22,7 +22,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from careeros.core.evaluation.model import Kind, Outcome, Requirement
+from careeros.core.evaluation.markets import FieldCheck, MarketCheck, _agent_need
+from careeros.core.evaluation.model import FitJudgement, JobFacts, Kind, MarketBasis, Outcome, Requirement, Verification
+from careeros.core.evaluation.rubric import Rubric, norm_label
 from careeros.core.evaluation.rules import BASIS_VERSION, RULES_VERSION
 from careeros.core.memory import store
 from careeros.core.memory.check import Memory, _year_month
@@ -71,6 +73,53 @@ class Basis:
             "requirement_count": self.requirement_count,
             "requirements": [dict(r, facts=list(r["facts"])) for r in self.requirements],
         }
+
+    def complete(self, fit: tuple[FitJudgement, ...], facts: JobFacts, check: MarketCheck, rubric: Rubric) -> dict:
+        """The full BasisSchema-v1 basis: `as_dict()` plus `rubric_state`, `fit` and `cap_inputs`.
+
+        Fit rows are the usable rubric's rows that have a judgement, sorted by normalised label (a judgement naming no
+        rubric row is ignored here; the record validator rejects it). An unusable rubric gives `fit: []` and state
+        `missing` or `invalid`. Cap inputs hold the agent's values (display only unless `verified`) with the
+        verification states and exact source cells from `check`; a range needs an integer `high`.
+        """
+        by_row = {norm_label(j.row): j for j in fit}
+        rows = sorted(({"row": r.key, "weight": r.weight, "judgement": str(by_row[r.key].judgement)}
+                       for r in rubric.rows if r.key in by_row), key=lambda r: r["row"]) if rubric.usable else []
+        return {**self.as_dict(), "rubric_state": rubric.state if rubric.usable or rubric.state != "ok" else "missing",
+                "fit": rows, "cap_inputs": _cap_inputs(facts, check)}
+
+
+def _currency(value: str | None) -> str | None:
+    return value.strip().upper() if isinstance(value, str) and value.strip() else None
+
+
+def _field(check: FieldCheck) -> dict:
+    return {"verification": str(check.state), "source": check.source}
+
+
+def _cap_inputs(facts: JobFacts, check: MarketCheck) -> dict:
+    need = _agent_need(facts.needed)
+    rng = None
+    if type(facts.range_high) is int:
+        rng = {"low": facts.range_low if type(facts.range_low) is int else None, "high": facts.range_high,
+               "currency": _currency(facts.range_currency),
+               "basis": str(facts.range_basis) if facts.range_basis else None}
+    floor = None
+    if type(facts.floor_amount) is int:
+        verified = check.floor.state == Verification.VERIFIED
+        basis = check.floor.value.basis if verified else facts.floor_basis
+        floor = {"amount": facts.floor_amount, "currency": _currency(facts.floor_currency),
+                 "basis": str(basis) if basis else None, **_field(check.floor)}
+    return {
+        "market": facts.market.strip() if facts.market and facts.market.strip() else None,
+        "need": {"value": need, **_field(check.need)},
+        "listing": str(facts.listing),
+        "quote": bool(facts.sponsorship_quote and facts.sponsorship_quote.strip()),
+        "range": rng,
+        "floor": floor,
+        "confidence": str(facts.comp_confidence) if facts.comp_confidence else None,
+        "as_of": facts.as_of,
+    }
 
 
 @dataclass(frozen=True)
