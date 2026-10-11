@@ -24,6 +24,10 @@ clarification 7). Read-only.
 `EVL011` (warning) lists every `unverified` or `conflict` floor or need in a well-formed stored basis, with the source
 cell. Staleness and tampering are reported separately and can both be present.
 
+By-design limits (EVL009, the file-vs-ledger check, is the backstop for both): an unsupported `basis_version` or
+`rules_version` suppresses the tamper checks (EVL010 says "cannot be verified"); and editing `stamps.memory`,
+`stamps.rubric` or `stamps.inputs` to a stale value skips the derivation check (step 4).
+
 `validate_workspace(root)` runs this and `ledgercheck.verify` (EVL009) for every `jobs/discovered/*/evaluation.md`; it
 never writes and never raises on a hand-edited file.
 """
@@ -31,6 +35,7 @@ never writes and never raises on a hand-edited file.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -90,6 +95,31 @@ def _score_field(stored: object, want: object) -> bool:
     return type(stored) is float and stored == want
 
 
+_REASONS = (re.compile(r"years of \S.* cannot be derived from dated experience"),
+            re.compile(r"the number of years is missing or not positive"))
+_REQ_KEYS = {"id", "outcome", "facts", "status_floor", "reason"}
+
+
+def _requirements_ok(shown: object, basis_reqs: list) -> bool:
+    """`result.requirements` against what the stored basis implies: same ids, outcomes, facts and floors in natural id
+    order, no unknown keys, and `reason` present only on an `unverifiable` entry, as a string derive can produce (the
+    reason text depends on the requirement's term, which the basis does not hold)."""
+    expected = sorted(basis_reqs, key=lambda r: score._natural(r["id"]))
+    if not (isinstance(shown, list) and len(shown) == len(expected)):
+        return False
+    for s, e in zip(shown, expected):
+        if not (isinstance(s, dict) and set(s) <= _REQ_KEYS and _same(
+                {k: s.get(k) for k in ("id", "outcome", "facts", "status_floor")},
+                {k: e[k] for k in ("id", "outcome", "facts", "status_floor")})):
+            return False
+        if "reason" in s:
+            reason = s["reason"]
+            if e["outcome"] != "unverifiable" or type(reason) is not str or not any(
+                    r.fullmatch(reason) for r in _REASONS):
+                return False
+    return True
+
+
 def _self_consistency(rec: Record, result: dict) -> tuple[list[tuple[str, str]], bool]:
     """(failing parts with details, whether the stored basis scored)."""
     found: list[tuple[str, str]] = []
@@ -132,12 +162,7 @@ def _self_consistency(rec: Record, result: dict) -> tuple[list[tuple[str, str]],
             bad.append("caps")
         if not _same(result.get("action_items"), [score.action_item_text(i) for i in scored.action_items]):
             bad.append("action_items")
-        shown = result.get("requirements")
-        expected = sorted(basis["requirements"], key=lambda r: score._natural(r["id"]))
-        if not (isinstance(shown, list) and len(shown) == len(expected) and all(
-                isinstance(s, dict) and _same({k: s.get(k) for k in ("id", "outcome", "facts", "status_floor")},
-                                              {k: e[k] for k in ("id", "outcome", "facts", "status_floor")})
-                for s, e in zip(shown, expected))):
+        if not _requirements_ok(result.get("requirements"), basis["requirements"]):
             bad.append("requirements")
         if bad:
             found.append(("scores", f"stored {', '.join(bad)} differ from the recomputation of the stored basis"))
@@ -154,8 +179,16 @@ def _freshness(rec: Record, result: dict, inputs: Inputs) -> list[str]:
     stored = result.get("stamps") if isinstance(result.get("stamps"), dict) else {}
     current = record.stamps(inputs.jd_text, inputs.career, inputs.rubric, rules.RULES_VERSION, rec.fm.get("agent"),
                             lexicon=inputs.lexicon, markets=inputs.markets, now=inputs.now)
+    basis = result.get("basis")
+    unsupported_rules = False
+    if isinstance(basis, dict):
+        try:
+            rules.rules_for(basis.get("rules_version"))
+        except UnsupportedVersion:
+            unsupported_rules = True
     stale = [name for name in STAMP_KEYS
-             if not (type(stored.get(name)) is str and stored[name] == getattr(current, name))]
+             if (name == "rules" and unsupported_rules)
+             or not (type(stored.get(name)) is str and stored[name] == getattr(current, name))]
     basis = result.get("basis")
     if not (isinstance(basis, dict) and type(basis.get("basis_version")) is str
             and basis["basis_version"] == rules.BASIS_VERSION):

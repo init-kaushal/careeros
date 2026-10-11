@@ -180,7 +180,7 @@ def test_unreadable_or_invalid_yaml_is_evl001(tmp_path, raw):
     path = tmp_path / "evaluation.md"
     path.write_bytes(raw)
     with pytest.raises(record.RecordError) as exc:
-        record.load(path)
+        record.load(path, tmp_path)
     assert exc.value.code == "EVL001"
 
 
@@ -204,7 +204,7 @@ def test_missing_or_malformed_namespaces_and_header_are_evl001(ws, change):
 
 def test_missing_file_is_evl001(tmp_path):
     with pytest.raises(record.RecordError) as exc:
-        record.load(tmp_path / "evaluation.md")
+        record.load(tmp_path / "evaluation.md", tmp_path)
     assert exc.value.code == "EVL001"
 
 
@@ -213,7 +213,7 @@ def test_skeleton_has_an_empty_agent_and_no_result(tmp_path):
     assert isinstance(data, bytes)
     path = tmp_path / "evaluation.md"
     path.write_bytes(data)
-    rec = record.load(path)
+    rec = record.load(path, tmp_path)
     assert rec.agent == {} and rec.result is None and rec.job == "job_aaaaaaaaaa"
     assert rec.fm["created_at"] == CREATED and rec.fm["type"] == "evaluation" and rec.fm["schema"] == 1
     assert record.skeleton("job_aaaaaaaaaa", CREATED, taken={rec.id}) != data
@@ -889,3 +889,95 @@ def test_validate_never_writes(ws):
     integrity.validate_workspace(root)
     after = {p: p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
     assert before == after
+
+
+# --- fix round 1: deep nesting, listing, symmetric versions, full requirement check, jd-less skeleton ----------
+
+def test_deeply_nested_frontmatter_is_evl001_everywhere(ws):
+    root, ids, job = ws
+    nest = 1000
+    text = "---\nid: evl_aaaaaaaaaa\ntype: evaluation\nagent: " + "[" * nest + "]" * nest + "\n---\nbody\n"
+    job["eval"].write_text(text, encoding="utf-8")
+    with pytest.raises(record.RecordError) as exc:
+        record.load(job["eval"], root)
+    assert exc.value.code == "EVL001"
+    assert isinstance(record.taken_ids(root, []), set)
+    found = integrity.validate_workspace(root)
+    assert [i.code for i in found] == ["EVL001"]
+
+
+@pytest.mark.parametrize("value", [False, "", 0, True, 1, "maybe", []])
+def test_invalid_listing_values_are_evl003_not_unknown(career, value):
+    root, ids = career
+    job = make_job(root)
+    agent = agent_half(ids)
+    agent["job_facts"]["sponsorship"]["listing"] = value
+    assert "EVL003" in [i.code for i in issues_of(root, job, agent)]
+
+
+def test_absent_or_null_listing_is_unknown(career):
+    root, ids = career
+    job = make_job(root)
+    agent = agent_half(ids)
+    agent["job_facts"]["sponsorship"].pop("listing", None)
+    assert issues_of(root, job, agent) == []
+    agent["job_facts"]["sponsorship"]["listing"] = None
+    assert issues_of(root, job, agent) == []
+
+
+def test_unsupported_rules_version_with_a_current_rules_stamp_is_also_stale_rules(ws):
+    root, ids, job = ws
+    def bump(fm):
+        fm["result"]["basis"]["rules_version"] = "99"
+        fm["result"]["stamps"]["rules"] = "99"
+    edit(root, job, bump)
+    rep = report(root, job)
+    assert rep.unsupported and "rules" in rep.stale and rep.tampered == ()
+    # the stamp left current while only the basis version is unsupported
+    edit(root, job, lambda fm: fm["result"]["stamps"].update(rules=rules.RULES_VERSION))
+    assert "rules" in report(root, job).stale
+
+
+def _forge_requirement(root, job, mutate):
+    result = stored_result(root, job)
+    display = [dict(r) for r in result["requirements"]]
+    mutate(display)
+    rewrite_result(root, job, record.assemble(result["basis"], result["stamps"], display))
+
+
+def _unverifiable_index(root, job):
+    return next(i for i, r in enumerate(stored_result(root, job)["requirements"]) if r["outcome"] == "unverifiable")
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d, i: d[i].update(reason="forged"),
+    lambda d, i: d[i].update(extra="x"),
+    lambda d, i: d[0].update(reason="years of Go cannot be derived from dated experience") if i != 0 else d[1].update(
+        reason="years of Go cannot be derived from dated experience"),
+])
+def test_forged_requirement_reason_or_key_is_evl007_even_when_stale(ws, mutate):
+    root, ids, job = ws
+    idx = _unverifiable_index(root, job)
+    _forge_requirement(root, job, lambda d: mutate(d, idx))
+    rep = report(root, job)
+    assert "scores" in rep.tampered and rep.stale == ()
+    ops.add_fact(root, "skill", {"name": "Rust"}, quote="said so")
+    rep = report(root, job)
+    assert "scores" in rep.tampered and "memory" in rep.stale
+
+
+def test_genuine_requirement_reason_is_clean(ws):
+    root, ids, job = ws
+    assert any("reason" in r for r in stored_result(root, job)["requirements"])
+    assert report(root, job).tampered == ()
+
+
+def test_skeleton_without_jd_is_clean_but_a_quote_without_jd_is_evl004(career):
+    root, ids = career
+    job = make_job(root)
+    (job["path"].parent / "jd.md").unlink()
+    write_agent(root, job, {}, evaluate=False)
+    inputs = record.read_inputs(root, job["eval"].parent)
+    rec = load(root, job)
+    assert record.validate_agent(rec, inputs.jd_text, inputs.career, inputs.rubric, inputs.markets, inputs.job_id) == []
+    assert "EVL004" in [i.code for i in issues_of(root, job, agent_half(ids))]

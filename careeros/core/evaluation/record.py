@@ -122,8 +122,9 @@ def _rel(path: Path, root: Path | None) -> str:
     return path.as_posix()
 
 
-def load(path: Path, root: Path | None = None) -> Record:
-    """Read and parse an evaluation file. `RecordError` (EVL001) when it cannot be used; never any other exception."""
+def load(path: Path, root: Path) -> Record:
+    """Read and parse an evaluation file; `root` is required so `rec.rel` is always workspace-relative (Task E must
+    write exactly `rec.rel` as the path artifact of the completed event). `RecordError` (EVL001) when it cannot be used; never any other exception."""
     path = Path(path)
     rel = _rel(path, root)
     try:
@@ -134,6 +135,8 @@ def load(path: Path, root: Path | None = None) -> Record:
         fm, body = split_frontmatter(text)
     except WorkspaceError as exc:
         raise RecordError(f"{rel}: {exc}") from None
+    except (RecursionError, MemoryError):
+        raise RecordError(f"{rel}: the frontmatter is nested too deeply to read") from None
     if fm is None:
         raise RecordError(f"{rel} has no --- frontmatter block")
     problems = []
@@ -161,7 +164,7 @@ def taken_ids(root: Path, events: list) -> set[str]:
     for path in sorted((Path(root) / "jobs" / "discovered").glob(f"*/{EVALUATION_FILE}")):
         try:
             fm, _ = split_frontmatter(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, WorkspaceError):
+        except (OSError, UnicodeDecodeError, WorkspaceError, RecursionError, MemoryError):
             continue
         if fm and isinstance(fm.get("id"), str):
             taken.add(fm["id"])
@@ -479,7 +482,8 @@ def _job_facts(p: _Parser, raw: object) -> JobFacts:
         needed = needed_word == "yes"
     elif needed_word is not None:
         p.bad("EVL003", f"job_facts.sponsorship.needed {sponsor.get('needed')!r} is not one of yes | no")
-    listing = p.enum(Listing, sponsor.get("listing", "unknown") or "unknown", "job_facts.sponsorship.listing")
+    listing_raw = sponsor.get("listing")
+    listing = p.enum(Listing, "unknown" if listing_raw is None else listing_raw, "job_facts.sponsorship.listing")
     squote = sponsor.get("quote")
     if squote is not None and not isinstance(squote, str):
         p.bad("EVL003", "job_facts.sponsorship.quote must be a string")
@@ -572,7 +576,8 @@ def validate_agent(rec: Record, jd_text: str | None, career: Career, rubric: Rub
         if norm_label(judged.row) not in keys:
             bad("EVL003", f"fit row {judged.row.strip()!r} is not a fit row of the profile's Scoring rubric")
     if jd_text is None:
-        bad("EVL004", f"{JD_FILE} is missing or unreadable, so no quote can be verified; save the posting verbatim")
+        if agent.quotes:
+            bad("EVL004", f"{JD_FILE} is missing or unreadable, so no quote can be verified; save the posting verbatim")
     else:
         posting = normalize_text(jd_text)
         for where, quote in agent.quotes:
