@@ -136,6 +136,10 @@ A broken `career/lexicon.yaml` (your own technology, certification or vocabulary
 
 Evidence cannot be retired or disputed while it is the only active evidence for a `verified` fact; dispute or re-verify that fact first.
 
+## Job evaluation
+
+`careeros evaluate` scores a saved job against this memory. See [Job evaluation](evaluation.md). Changing any fact makes existing evaluations stale (`EVL008`); the score never counts as evidence for a draft.
+
 ## GPT Work
 
 The evidence gate is Claude Code only for now: GPT Work cannot run local commands, so its skills are unchanged and its drafts are not checked.

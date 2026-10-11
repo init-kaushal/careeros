@@ -37,6 +37,7 @@ Every text you write for the user (resume, cover letter, outreach note, follow-u
 ### Application
 | Trigger | Skill |
 |---------|-------|
+| "evaluate [job]" / "should I apply to [job]" / "how well do I fit [job]?" | `.claude/skills/evaluate/SKILL.md` |
 | "prep for [company]" / "tailor resume for [job]" / "what should I highlight for [company]?" | `.claude/skills/prep/SKILL.md` |
 | "apply to [job]" / "fill application for [job]" | `.claude/skills/apply/SKILL.md` |
 
@@ -67,6 +68,8 @@ jobs/
     [job-slug]/
       company.md        — company info + comp research
       people.md         — hiring manager, recruiter, peers, interviewers
+      jd.md             — the posting, saved verbatim (from evaluate)
+      evaluation.md     — fit evaluation against your career memory (from evaluate)
       prep.md           — tailoring brief (skills to highlight, ATS keywords)
       resume.md          — tailored resume for this job, generated from resume.md (from prep)
       interview-prep.md — question bank, STAR stories, company refresher

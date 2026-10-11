@@ -162,3 +162,4 @@ Record the choice as `- **Route:** reach-out-first | apply-direct | both` in `jo
 - Close every tab you opened before finishing.
 - Dismiss premium popups before reading: look for "No thanks" / "Continue" links.
 - Never navigate the user's existing tabs.
+- To see how well a saved job fits your career memory, say "evaluate [job]" (the `evaluate` skill); it scores the posting against your facts and never changes the job's state.

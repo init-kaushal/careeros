@@ -58,6 +58,8 @@ jobs/
     [job-slug]/
       company.md        — company info + comp research
       people.md         — hiring manager, recruiter, peers
+      jd.md             — the posting, saved verbatim
+      evaluation.md     — fit evaluation against your career memory
       prep.md           — tailoring brief (keywords, bullets)
       interview-prep.md — question bank + STAR stories
       offer.md          — offer details + negotiation notes
@@ -95,6 +97,15 @@ careeros check draft.md          # does every checkable claim trace to your fact
 ```
 
 Facts imported from your resume start as *claimed*; only you can confirm them. Each Claude Code drafting skill runs `careeros check` on its final text and fixes or asks about anything unsupported. A pass means the claims the checker could detect are supported, never that the whole draft is true. See `docs/career-memory.md`.
+
+## Job evaluation
+
+```bash
+careeros evaluate <job> --init   # create evaluation.md for the agent to fill in
+careeros evaluate <job>          # score it against your career memory
+```
+
+In Claude Code say "evaluate [job]". The agent saves the posting to `jd.md` and records the requirements and fit judgements with verbatim quotes; the command matches them against your facts and gives a tier, scores, confidence, sponsorship and pay caps and a list of what would change the result. It never changes a job's state, and a score is not evidence for a draft. Run `careeros upgrade` to receive the `evaluate` skill. See `docs/evaluation.md`.
 
 ## Requirements
 

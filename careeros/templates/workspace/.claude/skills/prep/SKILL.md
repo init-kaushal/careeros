@@ -40,6 +40,11 @@ If the job file exists but has no JD text, navigate to the job URL and extract t
 
 ## STEP 2 — ANALYSE THE JOB
 
+**First, check for a fresh evaluation** of this job (`jobs/discovered/[job-slug]/evaluation.md`). Run `careeros validate`, or run `careeros evaluate [job]` and read the exit status:
+
+- No `evaluation.md`, `careeros evaluate` exits 1, `careeros validate` shows `EVL008` (stale) or `EVL007` for it, or `careeros evaluate` exits 0 without printing `(unchanged)` (it was stale and has just been rescored from the old judgements) → it is missing or stale: run the `evaluate` skill first, then come back here. Do not analyse from a stale evaluation.
+- `careeros evaluate` prints `(unchanged)` → it is fresh. Use its requirement list (`requirements` and the `id`, `outcome` and `facts` of each) as the starting point below instead of extracting the requirements again, and add only what the evaluation does not hold (company and role signals, ATS keywords).
+
 From the JD, extract:
 
 **Must-haves** — hard requirements (years of exp, specific tech, certifications)
@@ -55,6 +60,7 @@ From the JD, extract:
 For each must-have and strong signal:
 - Find the closest match in your profile (skills, experience, projects)
 - Rate the fit: **direct** / **adjacent** / **gap**
+- When there is a fresh evaluation, take the outcome of each requirement from it: lead with the facts of the `covered` requirements, and state `adjacent`, `gap` and `unverifiable` honestly as what they are (related experience, not a match; not in the memory; cannot be derived from dates). The verdict is never proof of a claim: every sentence you draft still goes through the EVIDENCE GATE above.
 
 Gaps to flag honestly — don't paper over them, but note if they can be addressed with context (e.g. "used Kafka in adjacent tech X").
 
