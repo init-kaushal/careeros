@@ -34,7 +34,7 @@ The body below the frontmatter is rendered from `result:` and nothing else: tier
 Under `agent:`:
 
 - **`requirements`**: every requirement in the posting, each with an `id` (`r1`, `r2`, ...), a `class` (`must`, `strong`, `nice`), a `kind` (`technology`, `title`, `certification`, `education`, `years`, `domain`, `other`), `text`, a verbatim `quote` from `jd.md`, a `term` (the technology, title, certification or degree to look for) and, for `years`, `years`. Optional `links` point at related facts: `{fact, strength, why}`.
-- **`fit`**: a judgement (`"yes"`, `"partial"`, `"no"`) with a verbatim `quote` (or `quote: null` with `"no"` when the posting is silent) for every fit row of the profile's `## Scoring rubric`. Rows about compensation or sponsorship, and rows weighted `Negative`, are not fit rows.
+- **`fit`**: a judgement (`"yes"`, `"partial"`, `"no"`) with a verbatim `quote` (or `quote: null` with `"no"` when the posting is silent) for every fit row of the profile's `## Scoring rubric`. Rows whose label mentions compensation or sponsorship, and rows weighted `Negative`, are not fit rows.
 - **`job_facts`**: `market` (the exact label of the profile's `## Markets` row, including a `(home)` suffix), `sponsorship` (`needed`, `listing`, `quote`) and `compensation` (`range`, `floor`, `source`, `confidence`, `as_of`).
 
 Quote `"yes"` and `"no"` in YAML. Unquoted `yes` and `no` are read as booleans; the command turns them back into the words, but quoting avoids the confusion. The `evaluate` skill has a complete worked example, and a test runs that example through the command so it cannot drift from the code.
@@ -92,7 +92,7 @@ Rules version 1. All arithmetic uses exact fractions; the stored scores are roun
 
 ### Caps
 
-A cap limits the tier; it never raises one. The lowest ceiling wins. Caps use verified inputs only.
+A cap limits the tier; it never raises one. The lowest ceiling wins. The sponsorship and compensation caps use verified inputs only; the must-gaps cap uses the requirement outcomes.
 
 | Cap | Ceiling | When |
 |---|---|---|
@@ -106,7 +106,7 @@ A floor or need is **verified** only when the agent's value agrees with the one 
 
 Confidence starts at `high` and drops one step for each of these (never below `low`):
 
-- more than half of the weight of the supported requirements rests on `claimed` facts only;
+- more than half of the weight of the supported requirements is claimed-only (a requirement counts as claimed-only when the weakest of its supporting facts, its status floor, is `claimed`);
 - more than a quarter of the `must` and `strong` weight is `unverifiable` (two steps if more than half);
 - the sponsorship listing is unknown while the need is not established as `no`, or the range is not disclosed while a verified floor exists;
 - fewer than three requirements, or no `must` requirement;
@@ -114,7 +114,7 @@ Confidence starts at `high` and drops one step for each of these (never below `l
 
 ### Action items
 
-`result.action_items` lists what would change the result, in a fixed order: unverifiable requirements, `must` gaps, requirements supported only by claimed facts, sponsorship questions, then pay questions (conflict, unverified, range not disclosed, currency or basis mismatch, low source confidence). Each tells you the next step, usually to add or confirm a fact with the `memory` skill.
+`result.action_items` lists what would change the result, in a fixed order: unverifiable requirements, `must` gaps, requirements whose weakest supporting fact is only claimed, sponsorship questions, then pay questions (conflict, unverified, range not disclosed, currency or basis mismatch, low source confidence). Each tells you the next step, usually to add or confirm a fact with the `memory` skill.
 
 ## Freshness: stale versus tampered
 
@@ -138,10 +138,10 @@ The two are reported separately and can both be present.
 | Exit | Meaning |
 |---|---|
 | 0 | scored, replaced or unchanged |
-| 1 | the record or the posting cannot be scored (`EVL001`-`EVL006`, `EVL009` for a duplicated id), or the write failed; nothing was changed. The rejection is logged once as `evaluation.rejected` |
+| 1 | the record or the posting cannot be scored (`EVL001`-`EVL006`, `EVL009` for a duplicated id), or the write failed; evaluation.md is unchanged. A rejection for invalid input is logged once as `evaluation.rejected`; a missing file, `--init` on an existing file and a write failure log nothing |
 | 2 | a usage problem: unknown job, no workspace, or a career memory with errors (run `careeros validate`) |
 
-`--json` prints a single JSON object on stdout in every case; for exit 1 it has `error` and `issues`.
+`--json` prints a single JSON object on stdout once the workspace is found; for exit 1 it has `error` and `issues`. Usage errors before that (no workspace, bad arguments) print plain text on stderr.
 
 ## Codes
 
@@ -151,7 +151,7 @@ The two are reported separately and can both be present.
 |---|---|---|
 | `EVL001` | error | the file cannot be read, has bad YAML, a wrong header or no `agent:` |
 | `EVL002` | error | a requirement has no id or repeats one, or the record's `job` is not this job |
-| `EVL003` | error | a field has the wrong type, an unknown key or a value outside its enum; or a `fit` row is not a fit row of the rubric |
+| `EVL003` | error | a required text field is missing, a field has the wrong type, an unknown key or a value outside its enum; a `fit` row is not a fit row of the rubric or is judged more than once |
 | `EVL004` | error | a quote is missing or not found in `jd.md`, or `jd.md` is missing |
 | `EVL005` | error | a link names a fact that does not exist or is not active |
 | `EVL006` | error | `market` does not name exactly one `## Markets` row, or a pay or sponsorship field is incomplete |

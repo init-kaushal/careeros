@@ -103,14 +103,14 @@ The command compares your floor and need with the market row. A mismatch is reco
 Run `careeros evaluate <job>` (add `--json` if you want to read the fields).
 
 - **Exit 0:** the result was written. Continue to STEP 7. Running it again with nothing changed prints `(unchanged)` and writes nothing.
-- **Exit 1:** on exit 1 the record or the posting could not be scored and nothing was written. Read the `EVL` codes in the message, fix the `agent:` half (see the table below), and run it again; never edit `result:` to get around an error.
+- **Exit 1:** on exit 1 the record or the posting could not be scored and evaluation.md is unchanged (an invalid-input rejection is logged in the ledger). Read the `EVL` codes in the message, fix the `agent:` half (see the table below), and run it again; never edit `result:` to get around an error.
 - **Exit 2:** a usage problem (unknown job, no workspace) or a career memory with errors. Run `careeros validate`, show the user what it says, and stop.
 
 | Code | Meaning | Fix |
 |---|---|---|
 | EVL001 | `evaluation.md` cannot be read: bad YAML, no header, no `agent:` | repair the file, or move it aside and run `--init` again |
 | EVL002 | a requirement has no id or repeats one; or the record belongs to another job | give each requirement its own id (`r1`, `r2`, ...) |
-| EVL003 | a field is missing, has the wrong type, or is not an allowed value; or a `fit` row is not in the rubric | use the values in the tables above; copy fit labels exactly |
+| EVL003 | a required text field is missing, a field has the wrong type or is not an allowed value, a `fit` row is not in the rubric, or a `fit` row is judged twice | use the values in the tables above; copy fit labels exactly |
 | EVL004 | a quote is not found in `jd.md`, a required quote is missing, or `jd.md` is missing | copy the words from `jd.md`; save `jd.md` first |
 | EVL005 | a link names a fact that is missing or not active | find the right id with `careeros memory list`, or remove the link |
 | EVL006 | `market` is not a `## Markets` row, a floor or need has no market, or a pay or sponsorship field is incomplete | copy the row label; give `source`, `confidence`, `as_of` and any needed quote |

@@ -26,6 +26,15 @@ PREP_GATE_BEFORE = "caac6e951267c866b55512c66085694d10d621105c8e766648c110a654d5
 BROWSE_HINT = ('- To see how well a saved job fits your career memory, say "evaluate [job]" (the `evaluate` skill); '
                "it scores the posting against your facts and never changes the job's state.\n")
 
+GPT_TREE = {
+    ".gpt/skills/browse/SKILL.md": "e078ebb9e4428adbf3a0239ecd9fd7b6d301c9a62c9f6540f7cbd3195c805f71",
+    ".gpt/skills/market/SKILL.md": "660bd59aea64c3d94571bac5abd67e2c4a294ef31635eca92f2305f83ba39da4",
+    ".gpt/skills/onboard/SKILL.md": "96dda55ae94a61828d3481e25b85c004cae8e771426dec460bccc63f385d035d",
+    ".gpt/skills/onboard/boards-catalog.md": "d59f1e327ad09d3cd4c525b390330e4f38fdd94bd0c563863ed4077a29935203",
+    ".gpt/skills/track/SKILL.md": "45f496d3ea725e2e6c70facd75699f047f59fda55aca2646bf94c079e5791bea",
+    "AGENTS.md": "6ed61d4f9463c52aefaa09f1159638c0dd02a6c99a3566e2a363c456f3b638d4",
+}
+
 
 def skill(name: str) -> str:
     return (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
@@ -118,6 +127,41 @@ def test_refresh_delivers_the_evaluate_skill_to_an_existing_workspace(tmp_path: 
     refreshed = scaffold(root, refresh=True, runtime="claude")
     assert ".claude/skills/evaluate/SKILL.md" in refreshed
     assert target.read_text(encoding="utf-8") == skill("evaluate")
+
+
+def test_the_gpt_workspace_tree_is_unchanged() -> None:
+    gpt = TEMPLATES / "gpt-workspace"
+    now = {p.relative_to(gpt).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in gpt.rglob("*") if p.is_file()}
+    assert now == GPT_TREE
+
+
+def test_evaluate_forbids_editing_the_result_or_body() -> None:
+    assert "never edit `result:` or the body" in skill("evaluate").lower()
+
+
+def test_prep_checks_freshness_read_only_with_validate() -> None:
+    text = skill("prep")
+    step2 = text[text.index("## STEP 2"):text.index("## STEP 3")]
+    for phrase in ("careeros validate", "`result:`", "skeleton", "exit 2", "EVL011", "run the `evaluate` skill first",
+                   "**instead of** `EVL008`", "no longer matches"):
+        assert phrase in step2, phrase
+    for n in range(1, 11):
+        assert f"EVL{n:03d}" in step2, n
+    for gone in ("careeros evaluate [job]", "(unchanged)", "read the exit status", "rescored"):
+        assert gone not in text, gone
+    assert "do not run `careeros evaluate` to test freshness" in step2
+
+
+def test_the_docs_and_skill_are_accurate_about_rejections() -> None:
+    docs = (Path(__file__).parent.parent / "docs" / "evaluation.md").read_text(encoding="utf-8")
+    text = skill("evaluate")
+    for body in (docs, text):
+        assert "nothing was written" not in body and "nothing was changed" not in body
+        assert "evaluation.md is unchanged" in body
+    assert "plain text on stderr" in docs
+    assert "weakest" in docs and "judged more than once" in docs and "mentions compensation or sponsorship" in docs
+    assert "Rows about" not in docs
+    assert "sponsorship and compensation caps" in docs
 
 
 def test_the_gpt_workspace_has_no_evaluation() -> None:

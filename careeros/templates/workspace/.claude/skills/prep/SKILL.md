@@ -40,10 +40,17 @@ If the job file exists but has no JD text, navigate to the job URL and extract t
 
 ## STEP 2 — ANALYSE THE JOB
 
-**First, check for a fresh evaluation** of this job (`jobs/discovered/[job-slug]/evaluation.md`). Run `careeros validate`, or run `careeros evaluate [job]` and read the exit status:
+**First, check for a fresh evaluation** of this job. This check only reads; do not run `careeros evaluate` to test freshness, because it rewrites the stored result. The evaluation is **fresh** only when all three hold:
 
-- No `evaluation.md`, `careeros evaluate` exits 1, `careeros validate` shows `EVL008` (stale) or `EVL007` for it, or `careeros evaluate` exits 0 without printing `(unchanged)` (it was stale and has just been rescored from the old judgements) → it is missing or stale: run the `evaluate` skill first, then come back here. Do not analyse from a stale evaluation.
-- `careeros evaluate` prints `(unchanged)` → it is fresh. Use its requirement list (`requirements` and the `id`, `outcome` and `facts` of each) as the starting point below instead of extracting the requirements again, and add only what the evaluation does not hold (company and role signals, ATS keywords).
+1. `jobs/discovered/[job-slug]/evaluation.md` exists;
+2. it has a `result:` in its frontmatter (open the file and look: a skeleton made by `--init` has none, and `careeros validate` prints nothing for a skeleton);
+3. `careeros validate` reports **no** finding from `EVL001` through `EVL010` for that path. `EVL008` means stale (the posting, the career memory, the rubric or Markets table, or the judgements changed); `EVL004` appears **instead of** `EVL008` when the posting changed so that a quote no longer matches `jd.md`; `EVL007` means the result was edited; `EVL009` means the file and the ledger disagree; `EVL010` means it cannot be verified; `EVL001`, `EVL002`, `EVL003`, `EVL005` and `EVL006` mean the record is invalid.
+
+Anything else is not fresh: no file, a skeleton, any finding from `EVL001` through `EVL010`, or `careeros validate` ending in exit 2 (a career memory with errors). Then run the `evaluate` skill first (it re-reads `jd.md`, re-extracts and runs `careeros evaluate` itself), and come back here. Never analyse from a stale evaluation.
+
+`EVL011` is only a notice about the profile's Markets data, not staleness: mention it to the user and carry on.
+
+When it is fresh, use its requirement list (`requirements`, with the `id`, `outcome` and `facts` of each) as the starting point below instead of extracting the requirements again, and add only what the evaluation does not hold (company and role signals, ATS keywords).
 
 From the JD, extract:
 
