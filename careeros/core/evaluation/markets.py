@@ -62,8 +62,9 @@ class Markets:
 
 
 _SCALE = re.compile(r"\s?(?:k|thousand|m|million|lakhs?|crores?)\b", re.I)
-_ALLOWED = ("per annum", "per year", "at least", "minimum", "annually", "annual", "gross", "base", "p.a.", "/annum",
-            "/year", "/yr", "min", "pa")
+_ALLOWED = re.compile(
+    r"(?<!\w)(?:per annum|per year|at least|minimum|annually|annual|gross|base|min|p\.a\.|pa|/annum|/year|/yr)(?!\w)")
+_GROUPING = (re.compile(r"\d+"), re.compile(r"\d{1,3}(?:,\d{3})+"), re.compile(r"\d{1,2}(?:,\d{2})*,\d{3}"))
 _THOUSANDS_DOT = re.compile(r"\d\.\d{3}(?!\d)")
 _NEGATIVE = re.compile(r"(?<![\w])[-\u2212]\s*(?:[$€£₹]|[A-Z]{3})?\s*\d")
 
@@ -73,7 +74,7 @@ def parse_floor(cell: str) -> Floor | None:
 
     Parseable means exactly one amount (with an optional k/thousand/m/million/lakh/crore suffix) and exactly one
     currency indicator, and nothing else but annual-base words (`per year`, `p.a.`, `annual`, `base`, `gross`, `min`...).
-    Any other word (`pm`, `monthly`, `LPA`, `lac`, `Cr`, `CTC`, `hourly`...), a dot used as a thousands separator, a
+    Any other word or stray character (`pm`, `monthly`, `LPA`, `lac`, `Cr`, `CTC`, `hourly`...), a dot used as a thousands separator, a
     minus sign, a `+`, or an amount inside parentheses makes it unparseable.
     """
     symbols = [c for c in cell if c in _SYMBOLS]
@@ -99,11 +100,12 @@ def parse_floor(cell: str) -> Floor | None:
     rest = cell
     for lo, hi in cuts:
         rest = rest[:lo] + " " + rest[hi:]
-    rest = rest.lower()
-    for word in _ALLOWED:
-        rest = rest.replace(word, " ")
-    if re.search(r"[a-z]", rest):
-        return None
+    rest = _ALLOWED.sub(" ", rest.lower())
+    if re.sub(r"[\s.,/]", "", rest):
+        return None                         # any other word or character: the cell is not a plain annual base figure
+    integer = token.group(0).rstrip(",").split(".")[0]
+    if not any(g.fullmatch(integer) for g in _GROUPING):
+        return None                         # malformed or decimal-comma grouping (150,00 is not 15000)
     found = scan(cell)
     atoms = [*found.numbers, *found.years]
     if found.durations or len(atoms) > 1:

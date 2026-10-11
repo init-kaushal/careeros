@@ -396,3 +396,36 @@ def test_fold_helper_is_a_leaf_and_validation_keeps_its_names():
 
     assert validation._above_fold is fold.above_fold and validation._FOLD_MARKER == fold.FOLD_MARKER
     assert fold.above_fold("a\nx do not read past this line\nb\n") == "a\n"
+
+
+# --- fix round 2 -------------------------------------------------------------------------------
+
+FLOOR_TABLE_2 = [
+    # valid comma groups and unchanged parses
+    ("₹35,00,000", (3500000, "INR")), ("INR 1,50,000", (150000, "INR")), ("USD 150,000 per year", (150000, "USD")),
+    ("USD 150,000.00", (150000, "USD")), ("USD 1,234,567", (1234567, "USD")), ("USD 150000", (150000, "USD")),
+    # malformed or decimal-comma groups
+    ("USD 150,00", None), ("INR 35,00", None), ("USD 15,00", None), ("USD 1,50", None),
+    ("USD 150,000,00", None), ("USD 1,2345", None),
+    # allowlist by token
+    ("USD 150k p.a.", (150000, "USD")), ("USD 150k per annum", (150000, "USD")), ("USD 150k/yr", (150000, "USD")),
+    ("USD 150k /year", (150000, "USD")), ("USD 150k /annum", (150000, "USD")), ("USD 150k base", (150000, "USD")),
+    ("USD 150k gross", (150000, "USD")), ("USD 150k min", (150000, "USD")), ("USD 150k minimum", (150000, "USD")),
+    ("at least USD 150k", (150000, "USD")), ("USD 150k pa", (150000, "USD")),
+    ("USD 150k papa", None), ("USD 150k minpa", None),
+    # stray characters
+    ("USD 150k%", None), ("USD 150k?", None), ("USD ~150k", None), ("USD 150k ×", None), ("USD 150k -", None),
+    # conservative losses, documented
+    ("USD 150k<br>", None), ("USD 150k&nbsp;", None), ("USD 150k (negotiable)", None),
+]
+
+
+@pytest.mark.parametrize("cell, expected", FLOOR_TABLE_2)
+def test_floor_cell_table_round_two(cell, expected):
+    got = markets.parse_floor(cell)
+    assert got == (None if expected is None else markets.Floor(*expected))
+
+
+def test_weight_only_rubric_is_invalid_not_a_fit_row():
+    r = rubric.parse("## Scoring rubric\n| Weight |\n|-|\n| High |\n")
+    assert r.state == "invalid" and r.rows == () and not r.usable

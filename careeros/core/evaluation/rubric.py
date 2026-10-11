@@ -2,8 +2,8 @@
 
 Only the first table under the heading, above the fold, is read. Anything ambiguous degrades rather than guesses:
 an unknown weight word, an empty label or a duplicate label drops that row and flags the rubric `invalid`, in which
-case the fit score is omitted entirely (an ambiguous rubric must not be half-scored). The label is the first column that is not the Weight column (found by header; no Weight column means invalid). Row identity, used by the agent's
-`fit[].row`, is the normalised label (`norm_label`).
+case the fit score is omitted entirely (an ambiguous rubric must not be half-scored). The label is the first column that is not the Weight column (found by header; no Weight column, or no other
+column, means invalid). Row identity, used by the agent's `fit[].row`, is the normalised label (`norm_label`).
 
 `table_under` is shared with `markets.py`.
 """
@@ -122,7 +122,9 @@ def parse(profile_text: str) -> Rubric:
     if "weight" not in header:
         return Rubric((), (*problems, "rubric table has no Weight column"), "invalid")
     weight_at = header.index("weight")
-    label_at = next(i for i in range(len(header)) if i != weight_at)  if len(header) > 1 else weight_at
+    label_at = next((i for i in range(len(header)) if i != weight_at), None)
+    if label_at is None:
+        return Rubric((), (*problems, "rubric table has no label column"), "invalid")
     rows: list[FitRow] = []
     seen: set[str] = set()
     for number, cells in enumerate(table[1:], start=1):
