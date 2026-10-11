@@ -54,6 +54,16 @@ def _rejected(root: Path, job, actor: str, issues: list[Issue], events: list[dic
     raise InvalidInputs(f"the evaluation cannot be scored ({reason}): {first.message}", issues)
 
 
+def _all_records(root: Path) -> list[record.Record]:
+    found = []
+    for p in sorted((root / "jobs" / "discovered").glob(f"*/{EVALUATION_FILE}")):
+        try:
+            found.append(record.load(p, root))
+        except record.RecordError:
+            continue
+    return found
+
+
 def init(root: Path, ref: str) -> tuple[str, str]:
     """Write the skeleton. Returns (evaluation id, workspace-relative path). Appends no event: nothing was judged."""
     root = Path(root)
@@ -97,24 +107,31 @@ def evaluate(root: Path, ref: str, actor: str) -> Summary:
         try:
             result = record.compute(rec, inputs)
         except WorkspaceError as exc:         # a derivation or market problem validate_agent could not foresee
-            code = getattr(exc, "code", "EVL003")
+            code = getattr(exc, "code", "")
+            code = code if isinstance(code, str) and code.startswith("EVL") else "EVL003"
             _rejected(root, job, actor, [Issue("error", code, rec.rel, str(exc), "")], events)
+        records = _all_records(root)
+        twin = next((r for r in records if r.id == rec.id and r.rel != rec.rel), None)
+        if twin is not None:
+            message = (f"EVL009: duplicate evaluation id (also used by {twin.rel}); delete the copied {EVALUATION_FILE} "
+                       f"and run `careeros evaluate {job.id} --init` for a fresh id")
+            last = next((e for e in reversed(events) if e.get("entity") == job.id), None)
+            reason = message.split(";")[0]
+            if not (last and last.get("type") == "evaluation.rejected" and last.get("reason") == reason):
+                ledger.append_event(root, type="evaluation.rejected", actor=actor, entity=job.id, source="cli",
+                                    reason=reason, action="rejected evaluation: duplicate evaluation id")
+            raise InvalidInputs(message, [Issue("error", "EVL009", rec.rel, message, "")])
         new = record.to_bytes(rec, result)
         old = path.read_bytes()
         digest = f"sha256:{canon.result_sha256(result)}"
 
         specs: list[dict] = []
         replaced = None
-        if new == old and not ledgercheck.verify(rec, [rec], events):
+        if new == old and not ledgercheck.verify(rec, records, events):
             return Summary("unchanged", job.id, rec.id, rec.rel, result)
         if new != old:
             report = integrity.check(rec, inputs)
-            reasons = []
-            if report.tampered:
-                reasons.append("tampered")
-            if report.stale or report.unsupported:
-                if report.tampered or report.unsupported:
-                    reasons.append("stale")
+            reasons = (["tampered"] if report.tampered else []) + (["stale"] if report.stale or report.unsupported else [])
             if report.tampered or report.unsupported:
                 replaced = ",".join(reasons)
                 specs.append({"type": "evaluation.result_replaced", "actor": actor, "entity": rec.id, "source": "cli",

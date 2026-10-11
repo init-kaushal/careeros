@@ -380,3 +380,34 @@ def test_import_order_has_no_cycle() -> None:
                               "import careeros.cli.main; import careeros.core.evaluation.service"],
                              capture_output=True, text=True)
         assert out.returncode == 0, out.stderr
+
+
+# --- a copied job directory (duplicate evl_ id) -------------------------------------------------------
+
+def test_duplicated_evaluation_id_is_refused_and_recovers_after_deleting_the_copy(done) -> None:
+    import shutil
+    root, _, job = done
+    copy_dir = root / "jobs" / "discovered" / "example-copy"
+    shutil.copytree(job["path"].parent, copy_dir)
+    from helpers import add_job  # noqa: F401
+    fm, body = split_frontmatter((copy_dir / "job.md").read_text(encoding="utf-8"))
+    fm["id"] = "job_copycopy12"
+    from careeros.core.workspace import join_frontmatter
+    (copy_dir / "job.md").write_text(join_frontmatter(fm, body), encoding="utf-8")
+    efm, ebody = split_frontmatter((copy_dir / "evaluation.md").read_text(encoding="utf-8"))
+    efm["job"] = "job_copycopy12"
+    (copy_dir / "evaluation.md").write_text(join_frontmatter(efm, ebody), encoding="utf-8")
+    completed = len(evl_events(root, "evaluation.completed"))
+    snap = snapshot(root)
+    for ref in (job["id"], "example-copy", job["id"], "example-copy"):
+        res = run(root, "evaluate", ref)
+        assert res.exit_code == 1 and "--init" in res.output
+        assert snapshot(root) == snap
+    assert len(evl_events(root, "evaluation.completed")) == completed
+    rejected = evl_events(root, "evaluation.rejected")
+    assert rejected and all(e["reason"].startswith("EVL009: duplicate evaluation id (also used by ") for e in rejected)
+    assert len(rejected) == 2                                   # one per job; identical repeats are deduped
+    res = run(root, "evaluate", job["id"], "--json")
+    assert res.exit_code == 1 and json.loads(res.stdout)["issues"][0]["code"] == "EVL009"
+    (copy_dir / "evaluation.md").unlink()
+    assert run(root, "evaluate", job["id"]).exit_code == 0
