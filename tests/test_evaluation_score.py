@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import dataclasses
 import json
 from fractions import Fraction as F
 from pathlib import Path
@@ -27,15 +28,24 @@ def rq(rid, cls="must", outcome="covered", floor="verified", facts=("fct_a",)):
             "status_floor": floor if covered else None}
 
 
+def floor_in(amount=1, currency="INR", basis="base", verification="verified", source_cell="INR 1"):
+    return {"amount": amount, "currency": currency, "basis": basis, "verification": verification,
+            "source_cell": source_cell}
+
+
+def no_floor(verification="unverified", source_cell=None):
+    return floor_in(None, None, None, verification, source_cell)
+
+
 def caps_in(**over):
-    """Neutral cap inputs: need verified `no`, listing unknown, a disclosed range, no floor: no cap, no item."""
+    """Neutral cap inputs: need verified `no`, listing unknown, a disclosed range, a verified floor below it: no cap, no item."""
     base = {
         "market": "Atlantis",
-        "need": {"value": "no", "verification": "verified", "source": "not needed"},
+        "need": {"value": "no", "verification": "verified", "source_cell": "not needed"},
         "listing": "unknown",
         "quote": False,
         "range": {"low": 1, "high": 2, "currency": "INR", "basis": "base"},
-        "floor": None,
+        "floor": floor_in(),
         "confidence": "high",
         "as_of": "2026-09",
     }
@@ -44,16 +54,15 @@ def caps_in(**over):
 
 
 def sponsor(value="yes", verification="verified", listing="not_offered", quote=True):
-    return caps_in(need={"value": value, "verification": verification, "source": "required"},
+    return caps_in(need={"value": value, "verification": verification, "source_cell": "required"},
                    listing=listing, quote=quote)
 
 
 def comp(high=3_000_000, amount=3_500_000, floor_cur="INR", range_cur="INR", floor_basis="base", range_basis="base",
-         verification="verified", confidence="medium", **over):
+         verification="verified", confidence="medium", source_cell="INR 3,500,000", **over):
     return caps_in(
         range={"low": 2_000_000, "high": high, "currency": range_cur, "basis": range_basis},
-        floor={"amount": amount, "currency": floor_cur, "basis": floor_basis, "verification": verification,
-               "source": "INR 3,500,000"},
+        floor=floor_in(amount, floor_cur, floor_basis, verification, source_cell),
         confidence=confidence, as_of="2026-09", **over)
 
 
@@ -86,7 +95,7 @@ def basis(reqs, fit=None, rubric_state=None, cap=None, count=None):
 
 
 def run(*args, **kw):
-    return score.score(basis(*args, **kw), RULES1)
+    return score.score(basis(*args, **kw))
 
 
 def coverage_only(credits_by_weight):
@@ -122,7 +131,7 @@ def worked_example():
 
 
 def test_worked_example_numbers_tier_and_confidence():
-    result = score.score(worked_example(), RULES1)
+    result = score.score(worked_example())
     assert result.coverage == F(4, 5) and result.fit == F(4, 5) and result.combined == F(4, 5)
     assert result.tier == Tier.PURSUE
     assert result.caps == ()
@@ -131,7 +140,7 @@ def test_worked_example_numbers_tier_and_confidence():
 
 
 def test_worked_example_action_items_in_the_fixed_order():
-    result = score.score(worked_example(), RULES1)
+    result = score.score(worked_example())
     assert texts(result) == [
         "r2: cannot be derived from memory; ask the user, and add the fact with `careeros memory add` if true",
         "r1: supported only by claimed facts (fct_a); ask the user to confirm them",
@@ -141,7 +150,7 @@ def test_worked_example_action_items_in_the_fixed_order():
 
 
 def test_result_types_are_exact_fractions():
-    result = score.score(worked_example(), RULES1)
+    result = score.score(worked_example())
     for value in (result.coverage, result.fit, result.combined):
         assert type(value) is F
     assert isinstance(result.tier, Tier) and isinstance(result.confidence, Confidence)
@@ -233,7 +242,7 @@ def test_adjacent_is_half_credit_at_each_weight():
 def test_unverifiable_leaves_the_denominator():
     plain = [rq("r1", "must"), rq("r2", "strong", "gap")]
     extra = plain + [rq("r3", "must", "unverifiable")]
-    assert run(plain, count=3).coverage == run(extra).coverage == F(3, 5)
+    assert run(plain).coverage == run(extra).coverage == F(3, 5)
 
 
 # --- caps ----------------------------------------------------------------------------------------
@@ -322,15 +331,34 @@ def test_sponsorship_not_established_never_caps(name):
     assert (item in texts(result)) if item else not any(t.startswith("sponsorship:") for t in texts(result))
 
 
-@pytest.mark.parametrize("verification,fragment", [
-    ("unverified", "sponsorship: the need is not verified by the profile Markets row (cell \"required\")"),
-    ("conflict", "sponsorship: resolve the profile/agent mismatch for the need (the Markets row says \"required\")"),
-])
-def test_unverified_or_conflicting_need_never_caps_and_says_why(verification, fragment):
-    unverified = nine_tenths(sponsor(verification=verification))
-    assert unverified.caps == () and unverified.tier == Tier.PURSUE
-    assert any(t.startswith(fragment) for t in texts(unverified))
+def test_conflicting_need_never_caps_and_says_why():
+    result = nine_tenths(sponsor(verification="conflict"))
+    assert result.caps == () and result.tier == Tier.PURSUE
+    assert 'sponsorship: resolve the profile/agent mismatch for the need (the Markets row says "required")' in texts(result)
     assert nine_tenths(sponsor(verification="verified")).caps != ()          # the same inputs, verified, cap
+
+
+def need_unverified(value, cell):
+    return caps_in(need={"value": value, "verification": "unverified", "source_cell": cell}, listing="not_offered", quote=True)
+
+
+def test_unverified_need_is_always_reported_by_cause_and_never_caps():
+    cases = [
+        (need_unverified(None, "required"),
+         "sponsorship: the Markets row says required but the evaluation gave no value; state it so the cap can be checked"),
+        (need_unverified("yes", "preferred"), "sponsorship: the Markets row is not machine-readable; clarify it in profile.md"),
+        (need_unverified(None, "TBD"), "sponsorship: the Markets row is not machine-readable; clarify it in profile.md"),
+        (need_unverified(None, None), "sponsorship: no market is named; name the profile Markets row so the need can be checked"),
+    ]
+    for cap, text in cases:
+        result = nine_tenths(cap)
+        assert result.caps == () and result.tier == Tier.PURSUE
+        assert text in texts(result)
+
+
+def test_verified_no_need_produces_no_sponsorship_item():
+    assert not any(t.startswith("sponsorship:") for t in texts(nine_tenths(caps_in(listing="not_offered"))))
+    assert not any(t.startswith("sponsorship:") for t in texts(nine_tenths(caps_in(listing="unknown"))))
 
 
 COMP_NO_CAP = {
@@ -360,14 +388,26 @@ def test_established_versions_cap_where_the_unknown_ones_do_not():
 @pytest.mark.parametrize("verification", ["unverified", "conflict"])
 def test_unverified_or_conflicting_floor_never_caps(verification):
     # the agent's own numbers would cap (high 3.0M < floor 3.5M) but the floor is not verified
-    result = nine_tenths(comp(verification=verification))
+    result = nine_tenths(comp(verification=verification, source_cell="TBD" if verification == "unverified" else "INR 3,500,000"))
     assert result.caps == () and result.tier == Tier.PURSUE
     assert nine_tenths(comp(verification="verified")).caps != ()
     items = texts(result)
     if verification == "conflict":
-        assert any(t.startswith("pay: resolve the profile/agent mismatch for the floor") and 'INR 3,500,000' in t for t in items)
+        assert 'pay: resolve the profile/agent mismatch for the floor (the Markets row says "INR 3,500,000")' in items
     else:
-        assert any(t.startswith("pay: the floor is not verified by the profile Markets row") for t in items)
+        assert "pay: the Markets row is not machine-readable; clarify it in profile.md" in items
+
+
+def test_unverified_floor_is_reported_by_cause():
+    cases = [
+        (no_floor(source_cell="SGD 8000"),
+         "pay: the Markets row says SGD 8000 but the evaluation gave no floor; state it so the cap can be checked"),
+        (no_floor(source_cell="TBD"), "pay: the Markets row is not machine-readable; clarify it in profile.md"),
+        (no_floor(source_cell=None), "pay: no market is named; name the profile Markets row so the floor can be checked"),
+    ]
+    for floor, text in cases:
+        result = nine_tenths(caps_in(floor=floor))
+        assert result.caps == () and text in texts(result)
 
 
 def test_a_conflict_is_never_resolved_in_the_favourable_direction():
@@ -378,8 +418,8 @@ def test_a_conflict_is_never_resolved_in_the_favourable_direction():
 
 def test_missing_source_cell_is_reported_without_crashing():
     cap = sponsor(verification="unverified")
-    cap["need"]["source"] = None
-    assert any("no market named" in t for t in texts(nine_tenths(cap)))
+    cap["need"]["source_cell"] = None
+    assert "sponsorship: no market is named; name the profile Markets row so the need can be checked" in texts(nine_tenths(cap))
 
 
 # --- confidence ----------------------------------------------------------------------------------
@@ -421,9 +461,9 @@ def test_unverifiable_share_is_of_must_and_strong_weight_only():
 
 @pytest.mark.parametrize("cap", [
     sponsor(value="yes", listing="unknown", quote=False),
-    caps_in(need={"value": None, "verification": "unverified", "source": "TBD"}, listing="unknown"),
-    caps_in(need={"value": "no", "verification": "unverified", "source": "preferred"}, listing="unknown"),
-    caps_in(need={"value": "yes", "verification": "conflict", "source": "not needed"}, listing="unknown"),
+    caps_in(need={"value": None, "verification": "unverified", "source_cell": "TBD"}, listing="unknown"),
+    caps_in(need={"value": "no", "verification": "unverified", "source_cell": "preferred"}, listing="unknown"),
+    caps_in(need={"value": "yes", "verification": "conflict", "source_cell": "not needed"}, listing="unknown"),
     {**comp(), "range": None},
 ])
 def test_decision_relevant_unknown_costs_one_step(cap):
@@ -435,7 +475,7 @@ def test_decision_relevant_unknown_costs_one_step(cap):
     sponsor(value="yes", listing="not_offered"),                                       # established: a cap, not an unknown
     caps_in(),                                                                         # need verified no
     {**comp(verification="unverified"), "range": None},                                # no verified floor
-    {**caps_in(), "range": None, "floor": None},                                       # no floor at all
+    {**caps_in(), "range": None, "floor": no_floor()},                                  # no floor at all
 ])
 def test_known_inputs_cost_no_confidence_step(cap):
     assert solid_conf(cap=cap).confidence == Confidence.HIGH
@@ -485,7 +525,7 @@ def test_claimed_and_thin_extraction_stack_to_low():
 def test_action_items_follow_the_fixed_order_and_each_names_its_ref():
     reqs = [rq("r1", "must", "gap"), rq("r2", "must", "unverifiable"), rq("r3", "strong", "covered", "claimed"),
             rq("r4", "must", "gap"), rq("r5", "nice", "unverifiable")]
-    cap = merge(sponsor(value="yes", verification="conflict", listing="unknown", quote=False), comp(verification="unverified"))
+    cap = merge(sponsor(value="yes", verification="conflict", listing="unknown", quote=False), comp(verification="unverified", source_cell="TBD"))
     cap["range"] = None
     result = run(reqs, cap=cap)
     got = texts(result)
@@ -496,7 +536,7 @@ def test_action_items_follow_the_fixed_order_and_each_names_its_ref():
     assert got[4] == "r3: supported only by claimed facts (fct_a); ask the user to confirm them"
     assert got[5].startswith("sponsorship: resolve the profile/agent mismatch")
     assert got[6] == "sponsorship: not mentioned in the posting; ask about sponsorship before investing time"
-    assert got[7].startswith("pay: the floor is not verified")
+    assert got[7] == "pay: the Markets row is not machine-readable; clarify it in profile.md"
     assert got[8] == "pay: not disclosed in the posting; ask the recruiter"
 
 
@@ -516,20 +556,20 @@ def test_same_basis_twice_and_reordered_requirements_give_equal_results():
     again = copy.deepcopy(b)
     again["requirements"].reverse()
     again["fit"].reverse()
-    assert score.score(b, RULES1) == score.score(b, RULES1) == score.score(again, RULES1)
+    assert score.score(b) == score.score(b) == score.score(again)
 
 
 def test_scoring_does_not_mutate_the_basis():
     b = worked_example()
     before = canon.canonical_json(b)
-    score.score(b, RULES1)
+    score.score(b)
     assert canon.canonical_json(b) == before
 
 
 def test_scoring_a_basis_rebuilt_from_canonical_json_equals_scoring_the_original():
     for b in (worked_example(), basis(coverage_only({"r1", "r3"}), cap=merge(sponsor(), comp()))):
         rebuilt = json.loads(canon.canonical_json(b))
-        assert score.score(rebuilt, RULES1) == score.score(b, RULES1)
+        assert score.score(rebuilt) == score.score(b)
 
 
 def test_basis_values_are_integers_strings_or_booleans():
@@ -557,18 +597,93 @@ def test_no_float_arithmetic_outside_the_serialiser():
     assert "round(" not in Path(score.__file__).read_text()
 
 
-def test_a_rules_or_basis_version_mismatch_is_an_error_not_a_guess():
+def test_unknown_versions_raise_exactly_unsupported_version():
     b = worked_example()
-    with pytest.raises(ValueError):
-        score.score({**b, "rules_version": "2"}, RULES1)
-    with pytest.raises(UnsupportedVersion):
-        score.score({**b, "basis_version": "9"}, RULES1)
-    with pytest.raises(ValueError):
-        score.score({k: v for k, v in b.items() if k != "cap_inputs"}, RULES1)
-    with pytest.raises(ValueError):
-        score.score(basis([rq("r1", "must", "covered")], [fit_row("a", 3, "maybe")]), RULES1)
-    with pytest.raises(ValueError):
-        score.score(basis([{**rq("r1"), "outcome": "great"}]), RULES1)
+    for bad in ({**b, "rules_version": "2"}, {**b, "basis_version": "9"}, {**b, "rules_version": 1},
+                {**b, "basis_version": ["1"]}):
+        with pytest.raises(UnsupportedVersion) as info:
+            score.score(bad)
+        assert type(info.value) is UnsupportedVersion
+
+
+def test_score_resolves_rules_from_the_registry(monkeypatch):
+    other = dataclasses.replace(RULES1, version="2", tier_pursue=F(9, 10))
+    monkeypatch.setitem(RULES, "2", other)
+    b = {**worked_example(), "rules_version": "2"}
+    assert score.score(b).tier == Tier.STRETCH                      # 4/5 < 9/10 under the registered version
+    assert score.score(worked_example()).tier == Tier.PURSUE
+
+
+def mutate(path, value):
+    b = copy.deepcopy(basis(solid(), SOLID_FIT, cap=merge(sponsor(), comp())))
+    target = b
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    return b
+
+
+MALFORMED = [
+    (("requirement_count",), 2), (("requirement_count",), True), (("requirement_count",), "3"),
+    (("rubric_state",), "great"), (("rubric_state",), None),
+    (("requirements", 0, "class"), "huge"), (("requirements", 0, "outcome"), "great"),
+    (("requirements", 0, "status_floor"), "sure"), (("requirements", 0, "id"), 1),
+    (("requirements", 0, "facts"), "fct_a"), (("requirements", 0, "facts"), [1]),
+    (("fit", 0, "weight"), 4), (("fit", 0, "weight"), True), (("fit", 0, "weight"), "3"), (("fit", 0, "weight"), 1.0),
+    (("fit", 0, "judgement"), "maybe"), (("fit", 0, "row"), 5),
+    (("cap_inputs", "listing"), "maybe"), (("cap_inputs", "quote"), 1), (("cap_inputs", "quote"), "yes"),
+    (("cap_inputs", "confidence"), "great"), (("cap_inputs", "market"), 3), (("cap_inputs", "as_of"), 2026),
+    (("cap_inputs", "need", "value"), "maybe"), (("cap_inputs", "need", "value"), True),
+    (("cap_inputs", "need", "verification"), "sure"), (("cap_inputs", "need", "source_cell"), 3),
+    (("cap_inputs", "floor", "verification"), "sure"), (("cap_inputs", "floor", "amount"), 3.5),
+    (("cap_inputs", "floor", "amount"), True), (("cap_inputs", "floor", "amount"), "3500000"),
+    (("cap_inputs", "floor", "currency"), 5), (("cap_inputs", "floor", "basis"), "gross"),
+    (("cap_inputs", "range", "high"), 3.5), (("cap_inputs", "range", "high"), None), (("cap_inputs", "range", "high"), True),
+    (("cap_inputs", "range", "low"), 1.5), (("cap_inputs", "range", "basis"), "gross"), (("cap_inputs", "range", "currency"), 7),
+    (("cap_inputs", "floor"), None), (("cap_inputs", "need"), None), (("cap_inputs",), None), (("fit",), None),
+    (("requirements",), None), (("requirements", 0), 5),
+]
+
+
+@pytest.mark.parametrize("path,value", MALFORMED, ids=[f"{'.'.join(map(str, p))}={v!r}" for p, v in MALFORMED])
+def test_malformed_basis_is_a_value_error_and_nothing_else(path, value):
+    with pytest.raises(ValueError) as info:
+        score.score(mutate(path, value))
+    assert type(info.value) is ValueError and "malformed basis" in str(info.value)
+
+
+@pytest.mark.parametrize("key", ["requirement_count", "rubric_state", "requirements", "fit", "cap_inputs"])
+def test_missing_top_level_key_is_a_value_error(key):
+    b = mutate(("rubric_state",), "ok")
+    del b[key]
+    with pytest.raises(ValueError) as info:
+        score.score(b)
+    assert type(info.value) is ValueError
+
+
+@pytest.mark.parametrize("key", ["basis_version", "rules_version"])
+def test_missing_version_key_is_a_value_error(key):
+    b = mutate(("rubric_state",), "ok")
+    del b[key]
+    with pytest.raises(ValueError) as info:
+        score.score(b)
+    assert type(info.value) is ValueError
+
+
+def test_extra_keys_anywhere_and_non_mappings_are_value_errors():
+    for b in (mutate(("extra",), 1), mutate(("cap_inputs", "extra"), 1), mutate(("cap_inputs", "floor", "extra"), 1),
+              mutate(("requirements", 0, "extra"), 1), mutate(("fit", 0, "extra"), 1), [], None, "basis"):
+        with pytest.raises(ValueError) as info:
+            score.score(b)
+        assert type(info.value) is ValueError
+
+
+def test_valid_enum_values_are_accepted():
+    for path, value in ((("rubric_state",), "invalid"), (("cap_inputs", "confidence"), None),
+                        (("cap_inputs", "confidence"), "unknown"), (("cap_inputs", "need", "value"), None),
+                        (("requirements", 0, "status_floor"), None), (("cap_inputs", "range"), None),
+                        (("cap_inputs", "floor", "amount"), None), (("cap_inputs", "market"), None)):
+        score.score(mutate(path, value))
 
 
 def test_pinned_cap_codes():
@@ -619,11 +734,11 @@ def test_complete_basis_has_exactly_the_v1_keys_and_no_floats():
     assert out["fit"] == [{"row": "role title matches", "weight": 3, "judgement": "yes"}]     # a row without a judgement is absent
     assert out["cap_inputs"] == {
         "market": "Singapore",
-        "need": {"value": "yes", "verification": "verified", "source": "required"},
+        "need": {"value": "yes", "verification": "verified", "source_cell": "required"},
         "listing": "not_offered",
         "quote": True,
         "range": {"low": 6000, "high": 7500, "currency": "SGD", "basis": "base"},
-        "floor": {"amount": 8000, "currency": "SGD", "basis": "base", "verification": "verified", "source": "SGD 8000"},
+        "floor": {"amount": 8000, "currency": "SGD", "basis": "base", "verification": "verified", "source_cell": "SGD 8000"},
         "confidence": None,
         "as_of": "2026-09",
     }
@@ -636,7 +751,7 @@ def test_complete_basis_scores_and_caps_from_real_market_inputs():
     check = markets.verify_market(facts, MARKETS)
     out = derived_basis(entry("r1"), entry("r2", "strong")).complete(
         judgements(("Role title matches", "yes"), ("Location match", "no")), facts, check, RUBRIC)
-    result = score.score(json.loads(canon.canonical_json(out)), RULES1)
+    result = score.score(json.loads(canon.canonical_json(out)))
     assert result.combined == F(65, 100) + F(35, 100) * F(3, 5)          # 0.86, would be pursue
     assert [c.code for c in result.caps] == ["sponsorship", "compensation"] and result.tier == Tier.WEAK
 
@@ -645,17 +760,19 @@ def test_complete_basis_conflict_and_unverified_states_are_carried():
     facts = JobFacts(market="Atlantis (home)", needed=True, listing=Listing.UNKNOWN, floor_amount=1, floor_currency="INR")
     check = markets.verify_market(facts, MARKETS)
     out = derived_basis(entry()).complete((), facts, check, RUBRIC)["cap_inputs"]
-    assert out["need"] == {"value": "yes", "verification": "conflict", "source": "not needed"}
-    assert out["floor"]["verification"] == "conflict" and out["floor"]["source"] == "₹35,00,000"
+    assert out["need"] == {"value": "yes", "verification": "conflict", "source_cell": "not needed"}
+    assert out["floor"]["verification"] == "conflict" and out["floor"]["source_cell"] == "₹35,00,000"
 
 
 def test_complete_basis_without_a_market_or_facts_is_neutral():
     check = markets.verify_market(JobFacts(), MARKETS)
     out = derived_basis(entry()).complete((), JobFacts(), check, Rubric((), ("rubric missing",), "missing"))
     assert out["rubric_state"] == "missing" and out["fit"] == []
-    assert out["cap_inputs"] == {"market": None, "need": {"value": None, "verification": "unverified", "source": None},
-                                 "listing": "unknown", "quote": False, "range": None, "floor": None,
-                                 "confidence": None, "as_of": None}
+    assert out["cap_inputs"] == {
+        "market": None, "need": {"value": None, "verification": "unverified", "source_cell": None},
+        "listing": "unknown", "quote": False, "range": None,
+        "floor": {"amount": None, "currency": None, "basis": None, "verification": "unverified", "source_cell": None},
+        "confidence": None, "as_of": None}
 
 
 def test_complete_basis_unusable_rubrics_drop_fit_rows():
@@ -687,3 +804,80 @@ def test_complete_basis_requires_both_range_ends_to_be_ints_and_normalises_none_
 
 def test_basis_as_dict_is_unchanged_by_the_extension():
     assert set(derived_basis(entry()).as_dict()) == {"basis_version", "rules_version", "requirement_count", "requirements"}
+
+
+# --- omitted inputs leave a trace (spec 16.1) ----------------------------------------------------------
+
+SG_PROFILE = """# P
+
+## Markets
+| Market | Min base (per year) | Sponsorship | Priority |
+|---|---|---|---|
+| Singapore | SGD 8000 | required | 1 |
+"""
+SG = markets.parse(SG_PROFILE)
+
+
+def singapore(**over):
+    given = dict(market="Singapore", listing=Listing.NOT_OFFERED, sponsorship_quote="no visa support",
+                 range_low=6000, range_high=7500, range_currency="SGD", range_basis=MarketBasis.BASE,
+                 comp_confidence=SourceConfidence.HIGH, as_of="2026-09", needed=True, floor_amount=8000,
+                 floor_currency="SGD")
+    given.update(over)
+    facts = JobFacts(**given)
+    reqs = (entry("r1"), entry("r2", "strong"), entry("r3", "nice"))
+    out = Basis(reqs, 3).complete(judgements(("Role title matches", "yes")), facts, markets.verify_market(facts, SG),
+                                  Rubric((FitRow("Role title matches", 3),), (), "ok"))
+    return out, score.score(json.loads(canon.canonical_json(out)))
+
+
+def test_singapore_agent_states_both_values_both_caps_apply():
+    out, result = singapore()
+    assert [c.code for c in result.caps] == ["sponsorship", "compensation"] and result.tier == Tier.WEAK
+    assert out["cap_inputs"]["need"] == {"value": "yes", "verification": "verified", "source_cell": "required"}
+    assert out["cap_inputs"]["floor"]["source_cell"] == "SGD 8000"
+
+
+def test_singapore_agent_omits_both_values_no_cap_but_both_items_and_cells_stored():
+    out, result = singapore(needed=None, floor_amount=None, floor_currency=None)
+    assert result.caps == () and result.tier == Tier.PURSUE and result.confidence == Confidence.HIGH
+    assert out["cap_inputs"]["need"] == {"value": None, "verification": "unverified", "source_cell": "required"}
+    assert out["cap_inputs"]["floor"] == {"amount": None, "currency": None, "basis": None,
+                                          "verification": "unverified", "source_cell": "SGD 8000"}
+    assert texts(result) == [
+        "sponsorship: the Markets row says required but the evaluation gave no value; state it so the cap can be checked",
+        "pay: the Markets row says SGD 8000 but the evaluation gave no floor; state it so the cap can be checked",
+    ]
+
+
+def test_singapore_favourable_wrong_values_are_conflicts_not_caps_or_relaxations():
+    out, result = singapore(needed=False, floor_amount=7000)
+    assert result.caps == () and result.tier == Tier.PURSUE
+    assert texts(result) == [
+        'sponsorship: resolve the profile/agent mismatch for the need (the Markets row says "required")',
+        'pay: resolve the profile/agent mismatch for the floor (the Markets row says "SGD 8000")',
+    ]
+    assert out["cap_inputs"]["need"]["verification"] == out["cap_inputs"]["floor"]["verification"] == "conflict"
+
+
+# --- natural order, sorted facts, pinned text constants ----------------------------------------------------
+
+def test_requirement_ids_sort_naturally_in_items_and_cap_reasons():
+    reqs = [rq("r10", "must", "gap"), rq("r2", "must", "gap"), rq("r1", "must", "unverifiable"), *many_nice()]
+    result = run(reqs)
+    assert [a.ref for a in result.action_items] == ["r1", "r2", "r10"]
+    assert result.caps[0].reason == "2 must requirements are gaps (r2, r10)"
+
+
+def test_listed_facts_are_sorted_in_claimed_items():
+    a = run([{**rq("r1", "must", "covered", "claimed", ("z_fact", "a_fact")), "facts": ["z_fact", "a_fact"]}])
+    b = run([{**rq("r1", "must", "covered", "claimed", ("a_fact", "z_fact")), "facts": ["a_fact", "z_fact"]}])
+    assert texts(a) == texts(b) and "(a_fact, z_fact)" in texts(a)[0]
+
+
+def test_every_pinned_text_is_a_named_constant():
+    names = [n for n in dir(score) if n.startswith(("REASON_", "ITEM_"))]
+    assert len(names) == 19
+    doc = score.__doc__
+    assert all(f"`{n}`" in doc for n in names)
+    assert "requires a new rules version" in doc

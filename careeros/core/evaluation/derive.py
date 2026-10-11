@@ -22,8 +22,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from careeros.core.evaluation.markets import FieldCheck, MarketCheck, _agent_need
-from careeros.core.evaluation.model import FitJudgement, JobFacts, Kind, MarketBasis, Outcome, Requirement, Verification
+from careeros.core.evaluation.markets import MarketCheck, _agent_need
+from careeros.core.evaluation.model import FitJudgement, JobFacts, Kind, Outcome, Requirement, Verification
 from careeros.core.evaluation.rubric import Rubric, norm_label
 from careeros.core.evaluation.rules import BASIS_VERSION, RULES_VERSION
 from careeros.core.memory import store
@@ -93,30 +93,27 @@ def _currency(value: str | None) -> str | None:
     return value.strip().upper() if isinstance(value, str) and value.strip() else None
 
 
-def _field(check: FieldCheck) -> dict:
-    return {"verification": str(check.state), "source": check.source}
-
-
 def _cap_inputs(facts: JobFacts, check: MarketCheck) -> dict:
-    need = _agent_need(facts.needed)
+    """Need and floor are always stored (even when the agent gave nothing), with the exact Markets source cell."""
     rng = None
     if type(facts.range_high) is int:
         rng = {"low": facts.range_low if type(facts.range_low) is int else None, "high": facts.range_high,
                "currency": _currency(facts.range_currency),
                "basis": str(facts.range_basis) if facts.range_basis else None}
-    floor = None
-    if type(facts.floor_amount) is int:
-        verified = check.floor.state == Verification.VERIFIED
-        basis = check.floor.value.basis if verified else facts.floor_basis
-        floor = {"amount": facts.floor_amount, "currency": _currency(facts.floor_currency),
-                 "basis": str(basis) if basis else None, **_field(check.floor)}
+    given = type(facts.floor_amount) is int
+    verified = check.floor.state == Verification.VERIFIED
+    basis = check.floor.value.basis if verified else facts.floor_basis
     return {
         "market": facts.market.strip() if facts.market and facts.market.strip() else None,
-        "need": {"value": need, **_field(check.need)},
+        "need": {"value": _agent_need(facts.needed), "verification": str(check.need.state),
+                 "source_cell": check.need.source},
         "listing": str(facts.listing),
         "quote": bool(facts.sponsorship_quote and facts.sponsorship_quote.strip()),
         "range": rng,
-        "floor": floor,
+        "floor": {"amount": facts.floor_amount if given else None,
+                  "currency": _currency(facts.floor_currency) if given else None,
+                  "basis": str(basis) if given and basis else None,
+                  "verification": str(check.floor.state), "source_cell": check.floor.source},
         "confidence": str(facts.comp_confidence) if facts.comp_confidence else None,
         "as_of": facts.as_of,
     }
