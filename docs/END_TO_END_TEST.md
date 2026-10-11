@@ -72,3 +72,31 @@ Using the first job directory in alphabetical order ("job-1"):
 An earlier run of this acceptance on the same workspace failed the faithful draft with two CHK009 findings (capitalised words that appear verbatim in the fact's own text were treated as unknown names); that was fixed in 272040d and the run above is after the fix.
 
 Not covered: the skills cannot be run live here; they are covered by the wording tests only. `memory confirm` and `retire` need an interactive terminal and were not run on the copy; they are covered by `tests/test_memory_e2e.py` with a synthetic workspace. The real workspace itself was not migrated or imported; only a copy was.
+
+## Job evaluation (0.5.0)
+
+- Date: 2026-10-11
+- Commit under test: `c403250` (the end-to-end test and this record are added by the commit that follows it)
+- Method: a brand-new invented workspace was generated in a temporary directory with `careeros init`; five invented memory facts were added with `careeros memory add`; one invented job with an invented `jd.md` and an invented profile (markets and rubric) was written by a throwaway script that is not committed. The agent half was filled by the script, since the skills cannot be run live. Every command ran the installed `careeros` with `-w` on that workspace. No real workspace was read, copied or touched, and no real posting, employer, person or figure was used. For each read-only command, a SHA-256 of every file in the workspace (including `ledger.jsonl` and `.careeros/`) was taken before and after.
+
+| # | Command | Exit | Result | Files before/after |
+|---|---|---|---|---|
+| 1 | `validate` (before any evaluation) | 0 | no `EVL` finding | identical |
+| 2 | `evaluate <job> --init` | 0 | skeleton written, no event | n/a |
+| 3 | `evaluate <job>` (agent half filled) | 0 | tier `pursue`, combined 0.8, confidence `low`, 0 caps, 3 action items; one `evaluation.completed` | n/a |
+| 4 | `evaluate <job>` (again) | 0 | same result, no new event | identical |
+| 5 | `validate` | 0 | no `EVL` finding | identical |
+| 6 | hand-edit `result.tier`, then `validate` | 1 | `EVL007` (error) and `EVL009` (warning, the logged hash no longer matches) | identical |
+| 7 | `evaluate <job>` | 0 | `pursue`, 0.8, `low` restored; one `evaluation.result_replaced` and one `evaluation.completed` | n/a |
+| 8 | `validate` | 0 | no `EVL` finding | identical |
+| 9 | change `jd.md` wording, then `validate` | 0 | `EVL008` (warning) | identical |
+| 10 | `evaluate <job>` | 0 | `pursue`, 0.8, `low`; one `evaluation.completed` | n/a |
+| 11 | `validate` | 0 | no `EVL` finding | identical |
+| 12 | `ledger verify` | 0 | chain OK | identical |
+
+- Evaluation events in order: `evaluation.completed`, `evaluation.result_replaced`, `evaluation.completed`, `evaluation.completed`. The job status stayed `DISCOVERED`.
+- Every `validate` also showed one `STR002` warning for a workspace file that the invented workspace never created. It is unrelated to evaluation.
+- Real workspace: not touched.
+- Automated tests: Python 3.14: 1329 passed (150 s); Python 3.11: 1329 passed (146 s). `tests/test_evaluation_e2e.py` walks the same flow plus every staleness cause on its own (`jd`, `memory`, `rubric`, `rules`, `inputs`), a ledger failure, the crash window (`EVL009`, healed by a re-run) and the delivered skills.
+
+Not covered: the `evaluate`, `prep` and `browse` skills cannot be run live here; they are covered by the wording tests only. A real posting and a real workspace were not used, so the quality of an agent's judgements on real text is untested.
