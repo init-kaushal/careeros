@@ -142,7 +142,7 @@ def test_evaluate_forbids_editing_the_result_or_body() -> None:
 def test_prep_checks_freshness_read_only_with_validate() -> None:
     text = skill("prep")
     step2 = text[text.index("## STEP 2"):text.index("## STEP 3")]
-    for phrase in ("careeros validate", "`result:`", "skeleton", "exit 2", "EVL011", "run the `evaluate` skill first",
+    for phrase in ("careeros validate", "`result:`", "skeleton", "(`MEM` codes)", "EVL011", "run the `evaluate` skill first",
                    "**instead of** `EVL008`", "no longer matches"):
         assert phrase in step2, phrase
     for n in range(1, 11):
@@ -150,6 +150,7 @@ def test_prep_checks_freshness_read_only_with_validate() -> None:
     for gone in ("careeros evaluate [job]", "(unchanged)", "read the exit status", "rescored"):
         assert gone not in text, gone
     assert "do not run `careeros evaluate` to test freshness" in step2
+    assert "exit 2" not in step2 and "exiting 2" not in step2      # validate exits 1 for errors, 2 only without a workspace
 
 
 def test_the_docs_and_skill_are_accurate_about_rejections() -> None:
