@@ -292,3 +292,107 @@ def test_conflict_never_selects_the_favourable_value():
     assert check.need.state is Verification.CONFLICT and check.need.value is None
     ok = markets.verify_market(JobFacts(market="Singapore", needed=True), M)
     assert ok.need.value == "yes"
+
+
+# --- fix round 1 -------------------------------------------------------------------------------
+
+FLOOR_TABLE = [
+    # kept parses
+    ("₹35,00,000", (3500000, "INR")), ("35 lakh INR", (3500000, "INR")), ("INR 3500000", (3500000, "INR")),
+    ("€70k", (70000, "EUR")), ("USD 150,000 per year", (150000, "USD")), ("1.5M USD", (1500000, "USD")),
+    ("INR 3.5 crore", (35000000, "INR")), ("£90,000 p.a.", (90000, "GBP")), ("$120k annual base", (120000, "USD")),
+    ("USD 100 thousand per annum", (100000, "USD")), ("minimum SGD 8000 /yr", (8000, "SGD")),
+    ("at least €60k gross", (60000, "EUR")), ("$2M million", None),
+    # new rejections: wrong-amount hazards
+    ("INR 3.5 LPA", None), ("INR 35 lac", None), ("INR 35 lacs", None), ("INR 1 Cr", None), ("INR 35 CTC", None),
+    ("SGD 8000 pm", None), ("SGD 8000 p.m.", None), ("SGD 8000 per mensem", None), ("SGD 8000 monthly", None),
+    ("SGD 8000 hourly", None), ("USD 50 per hour", None), ("EUR 70.000", None), ("EUR 1.250k", None),
+    ("-USD 5000", None), ("USD -5000", None), ("USD (80000)", None), ("(USD 80000)", None), ("USD 80000)", None),
+    ("USD 80000 (approx)", None), ("USD 80000 net", None), ("USD 80000 mm", None),
+]
+
+
+@pytest.mark.parametrize("cell, expected", FLOOR_TABLE)
+def test_floor_cell_table(cell, expected):
+    got = markets.parse_floor(cell)
+    assert got == (None if expected is None else markets.Floor(*expected))
+
+
+@pytest.mark.parametrize("amount", [True, 70000.0, "70000"])
+def test_non_int_agent_amount_is_never_verified(amount):
+    text = "## Markets\n| Market | Min base | Sponsorship |\n|-|-|-|\n| X | USD 70000 | required |\n"
+    m = markets.parse(text)
+    check = markets.verify_market(JobFacts(market="X", floor_amount=amount, floor_currency="USD"), m)
+    assert check.floor.state is Verification.UNVERIFIED
+    ok = markets.verify_market(JobFacts(market="X", floor_amount=70000, floor_currency="USD"), m)
+    assert ok.floor.state is Verification.VERIFIED
+
+
+def test_swapped_rubric_columns_are_found_by_header():
+    r = rubric.parse("## Scoring rubric\n| Weight | Signal |\n|-|-|\n| High | Stack |\n")
+    assert [(x.label, x.weight) for x in r.rows] == [("Stack", 3)] and r.state == "ok"
+
+
+def test_rubric_without_a_weight_column_is_invalid():
+    r = rubric.parse("## Scoring rubric\n| Signal | Notes |\n|-|-|\n| Stack | High |\n")
+    assert r.state == "invalid" and r.rows == () and not r.usable and r.problems
+
+
+def test_html_comment_lines_in_the_table_are_skipped():
+    text = ("## Scoring rubric\n| Signal | Weight |\n|-|-|\n| A | High |\n<!-- note -->\n| B | Low |\n"
+            "<!--\nmulti\nline\n-->\n| C | Medium |\n")
+    assert [x.label for x in rubric.parse(text).rows] == ["A", "B", "C"]
+    m = markets.parse("## Markets\n| Market | Min base | Sponsorship |\n|-|-|-|\n| A | $1 | required |\n"
+                      "<!-- x -->\n| B | $2 | required |\n")
+    assert set(m.rows) == {"a", "b"}
+
+
+def test_headings_inside_code_fences_are_ignored():
+    fenced = "```\n## Scoring rubric\n| Signal | Weight |\n|-|-|\n| A | High |\n```\n"
+    assert rubric.parse(fenced).state == "missing"
+    real = fenced + "## Scoring rubric\n| Signal | Weight |\n|-|-|\n| B | Low |\n"
+    r = rubric.parse(real)
+    assert r.state == "ok" and [x.label for x in r.rows] == ["B"]
+    mfenced = "~~~\n## Markets\n| Market | Min base | Sponsorship |\n|-|-|-|\n| A | $1 | required |\n~~~\n"
+    assert markets.parse(mfenced).rows == {}
+
+
+def test_second_rubric_heading_invalidates():
+    t = "| Signal | Weight |\n|-|-|\n| A | High |\n"
+    r = rubric.parse(f"## Scoring rubric\n{t}\n## Scoring rubric (again)\n{t}")
+    assert r.state == "invalid" and not r.usable and any("heading" in p for p in r.problems)
+
+
+def test_second_markets_heading_makes_all_rows_unverified():
+    t = "| Market | Min base | Sponsorship |\n|-|-|-|\n| A | USD 5 | required |\n"
+    m = markets.parse(f"## Markets\n{t}\n## Markets\n{t}")
+    assert m.unusable and any("heading" in p for p in m.problems)
+    check = markets.verify_market(JobFacts(market="A", needed=True, floor_amount=5, floor_currency="USD"), m)
+    assert check.floor.state is Verification.UNVERIFIED and check.need.state is Verification.UNVERIFIED
+    with pytest.raises(markets.MarketError):
+        markets.verify_market(JobFacts(market="Z"), m)
+
+
+@pytest.mark.parametrize("heading", ["## Markets", "## Markets (where you'd work)", "## Markets *(home first)*",
+                                     "## markets _note_"])
+def test_markets_heading_allows_a_trailing_note(heading):
+    text = f"{heading}\n| Market | Min base | Sponsorship |\n|-|-|-|\n| A | $1 | required |\n"
+    assert set(markets.parse(text).rows) == {"a"}
+    assert markets.parse("## Markets of the world\n| Market | Min base | Sponsorship |\n|-|-|-|\n| A | $1 | x |\n").rows == {}
+
+
+def test_modules_import_in_either_order_in_a_fresh_interpreter():
+    import subprocess
+    import sys
+
+    for first, second in (("careeros.core.validation", "careeros.core.evaluation.rubric"),
+                          ("careeros.core.evaluation.rubric", "careeros.core.validation")):
+        done = subprocess.run([sys.executable, "-c", f"import {first}; import {second}"], capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+
+
+def test_fold_helper_is_a_leaf_and_validation_keeps_its_names():
+    from careeros.core import fold, validation
+
+    assert validation._above_fold is fold.above_fold and validation._FOLD_MARKER == fold.FOLD_MARKER
+    assert fold.above_fold("a\nx do not read past this line\nb\n") == "a\n"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from careeros.core import ids, ledger, models, versions
+from careeros.core import fold, ids, ledger, models, versions
 from careeros.core.memory import store
 from careeros.core.models import Issue, State
 from careeros.core.state_machine import (
@@ -26,17 +26,9 @@ from careeros.core.workspace import (
     split_frontmatter,
 )
 
-_FOLD_MARKER = "do not read past this line"
+_FOLD_MARKER = fold.FOLD_MARKER
 _RESTORE_LEDGER = "restore ledger.jsonl from .careeros/backups or version control"
-
-
-def _above_fold(text: str) -> str:
-    kept: list[str] = []
-    for line in text.splitlines(keepends=True):
-        if _FOLD_MARKER in line:
-            break
-        kept.append(line)
-    return "".join(kept)
+_above_fold = fold.above_fold
 
 
 def _lenient_events(root: Path) -> list[dict]:

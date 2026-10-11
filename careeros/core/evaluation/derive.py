@@ -8,6 +8,13 @@ names an existing active fact) only upgrades `gap` to `adjacent`, whatever its s
 Reuse: whole years come from `check.Memory.months` (the union of active dated experience intervals) and title
 variants from `Memory` records; technologies and certifications use the same canonical forms the evidence check does.
 
+An achievement whose parent experience or project is not active (retired, disputed, or missing) is inactive too: it
+supports nothing and is an invalid link target (EVL005). Technologies compare as exact casefolded canonical strings
+(`C++`, `C` and `C#` are different; `.NET` is not `NET`); no punctuation is dropped.
+
+Known limits: education matching is a word-subset test on `degree` + `field`, so generic words (`in`, `Science`) can
+match; a market label elsewhere must match its table row exactly.
+
 `status_floor` is the weakest status among the (at most five, sorted by id) facts listed for a requirement.
 """
 
@@ -18,7 +25,7 @@ from dataclasses import dataclass, field
 from careeros.core.evaluation.model import Kind, Outcome, Requirement
 from careeros.core.evaluation.rules import BASIS_VERSION, RULES_VERSION
 from careeros.core.memory import store
-from careeros.core.memory.check import Memory
+from careeros.core.memory.check import Memory, _year_month
 from careeros.core.memory.lexicon import Lexicon
 from careeros.core.memory.normalize import norm_text
 from careeros.core.memory.store import Career
@@ -82,18 +89,43 @@ def _norm_cert(lexicon: Lexicon, name: str) -> str:
     return (lexicon.certs.get(name.lower()) or name).lower()
 
 
-def _match(req: Requirement, career: Career, lexicon: Lexicon, memory: Memory) -> set[str]:
+def _usable(career: Career) -> set[str]:
+    """Ids of active facts that may support anything: an achievement also needs an active parent (if it has one)."""
+    by_id = career.by_id()
+    usable: set[str] = set()
+    for fact in career.active():
+        parent = fact.get("parent") if fact.kind == "achievement" else None
+        if parent is not None and (parent not in by_id or by_id[parent].status not in store.ACTIVE):
+            continue
+        usable.add(fact.id)
+    return usable
+
+
+def _contributing(career: Career, memory: Memory) -> set[str]:
+    """Active experiences whose dates add months to `Memory.months`."""
+    out: set[str] = set()
+    for f in career.active():
+        if f.kind == "experience":
+            begin = _year_month(str(f.get("start")), memory.now_year, memory.now_month)
+            finish = _year_month(str(f.get("end")), memory.now_year, memory.now_month)
+            if begin is not None and finish is not None and finish > begin:
+                out.add(f.id)
+    return out
+
+
+def _match(req: Requirement, career: Career, lexicon: Lexicon, memory: Memory, usable: set[str]) -> set[str]:
     """Ids of the active facts that establish `req` deterministically (empty: no match)."""
     term = (req.term or "").strip()
     if req.kind == Kind.TECHNOLOGY and term:
-        want = norm_text(lexicon.canonical_tech(term) or term)
-        return {r.id for r in memory.records if r.kind in _TECH_KINDS and any(norm_text(str(t)) == want for t in r.techs)}
+        want = (lexicon.canonical_tech(term) or term).strip().casefold()
+        return {r.id for r in memory.records if r.id in usable and r.kind in _TECH_KINDS
+                and any(str(t).strip().casefold() == want for t in r.techs)}
     if req.kind == Kind.TITLE and term:
         want = norm_text(term)
-        return {r.id for r in memory.records if r.kind in ("experience", "identity") and want in r.titles}
+        return {r.id for r in memory.records if r.id in usable and r.kind in ("experience", "identity") and want in r.titles}
     if req.kind == Kind.CERTIFICATION and term:
         want = _norm_cert(lexicon, term)
-        return {r.id for r in memory.records if r.kind == "certification" and want in r.certs}
+        return {r.id for r in memory.records if r.id in usable and r.kind == "certification" and want in r.certs}
     if req.kind == Kind.EDUCATION and term:
         words = set(norm_text(term).split())
         if not words:
@@ -115,19 +147,20 @@ def _unverifiable(req: Requirement) -> str | None:
 
 def derive(requirements: tuple[Requirement, ...], career: Career, lexicon: Lexicon, now: str) -> Derived:
     by_id = career.by_id()
-    active = {f.id for f in career.active()}
+    active = _usable(career)
     for req in requirements:
         for link in req.links:
             if link.fact not in active:
-                state = by_id[link.fact].status if link.fact in by_id else "missing"
+                state = ("missing" if link.fact not in by_id else by_id[link.fact].status
+                         if by_id[link.fact].status not in store.ACTIVE else "its parent is not active")
                 raise DeriveError(req.id, f"{req.id}: link to {link.fact!r} is not an active fact ({state})")
     memory = Memory(career, lexicon, now)
-    experience_ids = {f.id for f in career.active() if f.kind == "experience"}
+    experience_ids = _contributing(career, memory)
     items: list[Derivation] = []
     for req in requirements:
         strength = ("direct" if any(str(l.strength) == "direct" for l in req.links) else "adjacent") if req.links else None
         reason = _unverifiable(req)
-        matched = set() if reason else _match(req, career, lexicon, memory)
+        matched = set() if reason else _match(req, career, lexicon, memory, active)
         if req.kind == Kind.YEARS and not reason:
             matched = experience_ids if req.years <= memory.months // 12 else set()
         if reason:

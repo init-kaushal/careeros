@@ -2,7 +2,7 @@
 
 Only the first table under the heading, above the fold, is read. Anything ambiguous degrades rather than guesses:
 an unknown weight word, an empty label or a duplicate label drops that row and flags the rubric `invalid`, in which
-case the fit score is omitted entirely (an ambiguous rubric must not be half-scored). Row identity, used by the agent's
+case the fit score is omitted entirely (an ambiguous rubric must not be half-scored). The label is the first column that is not the Weight column (found by header; no Weight column means invalid). Row identity, used by the agent's
 `fit[].row`, is the normalised label (`norm_label`).
 
 `table_under` is shared with `markets.py`.
@@ -14,7 +14,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from careeros.core.validation import _above_fold
+from careeros.core.fold import above_fold
 
 WEIGHTS = {"high": 3, "medium": 2, "low": 1}
 _HEADING = re.compile(r"^#{1,6}\s")
@@ -35,19 +35,47 @@ def _cells(line: str) -> list[str]:
     return [cell.replace("\\|", "|").strip() for cell in _PIPE.split(body)]
 
 
-def table_under(text: str, heading: re.Pattern) -> list[list[str]] | None:
-    """The cells of the first markdown table under the first heading matching `heading`, above the fold.
-
-    Returns `[header, row, row, ...]` or None when the heading or a table with a separator row is missing. The
-    section ends at the next heading of any level.
-    """
-    lines = _above_fold(text).splitlines()
-    start = next((i for i, line in enumerate(lines) if heading.match(line.strip())), None)
-    if start is None:
-        return None
-    block: list[str] = []
-    for line in lines[start + 1:]:
+def _visible_lines(text: str) -> list[str]:
+    """Lines above the fold with fenced code blocks and HTML comments blanked (so they end nothing, define nothing)."""
+    out: list[str] = []
+    fence = comment = False
+    for line in above_fold(text).splitlines():
         stripped = line.strip()
+        if comment:
+            comment = "-->" not in stripped
+            out.append("<!--")          # marks a skipped line inside a table
+            continue
+        if stripped.startswith(("```", "~~~")):
+            fence = not fence
+            out.append("")
+            continue
+        if fence:
+            out.append("")
+            continue
+        if stripped.startswith("<!--"):
+            comment = "-->" not in stripped
+            out.append("<!--")
+            continue
+        out.append(line)
+    return out
+
+
+def table_under(text: str, heading: re.Pattern) -> tuple[list[list[str]] | None, int]:
+    """The first markdown table under the first heading matching `heading`, above the fold, and the heading count.
+
+    Returns (`[header, row, row, ...]` or None when the heading or a table with a separator row is missing, number
+    of matching headings). Fenced code blocks are ignored, single- and multi-line HTML comments inside the table are
+    skipped, and the section ends at the next heading of any level.
+    """
+    lines = _visible_lines(text)
+    starts = [i for i, line in enumerate(lines) if heading.match(line.strip())]
+    if not starts:
+        return None, 0
+    block: list[str] = []
+    for line in lines[starts[0] + 1:]:
+        stripped = line.strip()
+        if stripped == "<!--":
+            continue
         if _HEADING.match(stripped):
             break
         if stripped.startswith("|"):
@@ -55,8 +83,8 @@ def table_under(text: str, heading: re.Pattern) -> list[list[str]] | None:
         elif block:
             break
     if len(block) < 2 or not _SEPARATOR.match(block[1]):
-        return None
-    return [_cells(block[0]), *(_cells(line) for line in block[2:])]
+        return None, len(starts)
+    return [_cells(block[0]), *(_cells(line) for line in block[2:])], len(starts)
 
 
 @dataclass(frozen=True)
@@ -84,16 +112,21 @@ class Rubric:
 
 
 def parse(profile_text: str) -> Rubric:
-    table = table_under(profile_text, _RUBRIC_HEADING)
+    table, headings = table_under(profile_text, _RUBRIC_HEADING)
     if table is None:
         return Rubric((), ("rubric missing",), "missing")
-    header = [norm_label(c) for c in table[0]]
-    weight_at = header.index("weight") if "weight" in header else 1
-    rows: list[FitRow] = []
     problems: list[str] = []
+    if headings > 1:
+        problems.append("more than one Scoring rubric heading")
+    header = [norm_label(c) for c in table[0]]
+    if "weight" not in header:
+        return Rubric((), (*problems, "rubric table has no Weight column"), "invalid")
+    weight_at = header.index("weight")
+    label_at = next(i for i in range(len(header)) if i != weight_at)  if len(header) > 1 else weight_at
+    rows: list[FitRow] = []
     seen: set[str] = set()
     for number, cells in enumerate(table[1:], start=1):
-        label = cells[0] if cells else ""
+        label = cells[label_at] if label_at < len(cells) else ""
         weight_cell = cells[weight_at] if weight_at < len(cells) else ""
         if not label:
             problems.append(f"row {number}: empty label dropped")

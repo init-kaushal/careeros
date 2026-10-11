@@ -368,3 +368,54 @@ def test_derive_is_pure(career):
     before = {p: p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
     run(root, req(term="Go"), req("r2", kind="title", term="Platform Engineer"))
     assert before == {p: p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+# --- fix round 1 -------------------------------------------------------------------------------
+
+def test_technology_matching_does_not_collapse_punctuation(career):
+    root, ids = career
+    csharp = add(root, "skill", name="C#")
+    dotnet = add(root, "skill", name=".NET")
+    assert one(root, req(term="C#")).outcome is Outcome.COVERED and csharp in one(root, req(term="C#")).facts
+    assert one(root, req(term=".NET")).outcome is Outcome.COVERED and dotnet in one(root, req(term=".NET")).facts
+    for term in ("C++", "C", "NET", "net"):
+        assert one(root, req(term=term)).outcome is Outcome.GAP, term
+
+
+def test_technology_aliases_still_match(career):
+    root, ids = career
+    for term in ("k8s", "golang", "Postgres", "kubernetes"):
+        assert one(root, req(term=term)).outcome is Outcome.COVERED, term
+
+
+def test_achievement_under_inactive_parent_is_inactive(career):
+    root, ids = career
+    ach = add(root, "achievement", parent=ids["globex"], text="Wrote a Scala service for ingest.")
+    assert one(root, req(term="Scala")).outcome is Outcome.COVERED
+    ops.retire_fact(root, ids["globex"], "test")
+    assert one(root, req(term="Scala")).outcome is Outcome.GAP
+    with pytest.raises(derive.DeriveError) as err:
+        run(root, req(kind="domain", links=[link(ach)]))
+    assert err.value.code == "EVL005"
+
+
+def test_achievement_under_disputed_experience_is_inactive(career):
+    root, ids = career
+    add(root, "achievement", parent=ids["acme"], text="Wrote a Scala service for ingest.")
+    ops.dispute_fact(root, ids["acme"], "wrong")
+    assert one(root, req(term="Scala")).outcome is Outcome.GAP
+
+
+def test_summary_achievement_without_parent_stays_active(tmp_path):
+    root = make_workspace(tmp_path / "ws")
+    summary = ops.add_fact(root, "achievement", {"parent": None, "section": "summary", "text": "Wrote Scala tools."},
+                           quote=QUOTE).id
+    assert one(root, req(term="Scala")).facts == (summary,)
+
+
+def test_years_facts_list_only_experiences_that_contributed(tmp_path):
+    root = make_workspace(tmp_path / "ws")
+    a = add(root, "experience", employer="Aco", title="Engineer", start="2020-01", end="2023-01")
+    add(root, "experience", employer="Bco", title="Engineer", start="2024-05", end="2024-05")   # zero months
+    d = one(root, req(kind="years", years=3))
+    assert d.outcome is Outcome.COVERED and d.facts == (a,)
