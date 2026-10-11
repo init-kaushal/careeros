@@ -93,6 +93,13 @@ def _currency(value: str | None) -> str | None:
     return value.strip().upper() if isinstance(value, str) and value.strip() else None
 
 
+def _row_state(check: MarketCheck, parsed) -> str:
+    """Whether the Markets row gave the parser something to read, recorded so the scorer never re-parses a cell."""
+    if check.row is None:
+        return "no_market"
+    return "parseable" if parsed is not None else "unreadable"
+
+
 def _cap_inputs(facts: JobFacts, check: MarketCheck) -> dict:
     """Need and floor are always stored (even when the agent gave nothing), with the exact Markets source cell."""
     rng = None
@@ -106,14 +113,16 @@ def _cap_inputs(facts: JobFacts, check: MarketCheck) -> dict:
     return {
         "market": facts.market.strip() if facts.market and facts.market.strip() else None,
         "need": {"value": _agent_need(facts.needed), "verification": str(check.need.state),
-                 "source_cell": check.need.source},
+                 "source_cell": check.need.source,
+                 "row_state": _row_state(check, check.row.need if check.row else None)},
         "listing": str(facts.listing),
         "quote": bool(facts.sponsorship_quote and facts.sponsorship_quote.strip()),
         "range": rng,
         "floor": {"amount": facts.floor_amount if given else None,
                   "currency": _currency(facts.floor_currency) if given else None,
                   "basis": str(basis) if given and basis else None,
-                  "verification": str(check.floor.state), "source_cell": check.floor.source},
+                  "verification": str(check.floor.state), "source_cell": check.floor.source,
+                  "row_state": _row_state(check, check.row.floor if check.row else None)},
         "confidence": str(facts.comp_confidence) if facts.comp_confidence else None,
         "as_of": facts.as_of,
     }

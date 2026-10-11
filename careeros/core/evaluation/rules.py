@@ -88,7 +88,13 @@ class RulesV1(Rules):
 
 @dataclass(frozen=True)
 class BasisSchema:
-    """The layout of `result.basis` for one basis version: its top-level keys, in canonical documentation order."""
+    """The layout of `result.basis` for one basis version: its top-level keys, in canonical documentation order.
+
+    v1 `cap_inputs`: `{market, need: {value, verification, source_cell, row_state}, listing, quote, range: {low, high,
+    currency, basis} | null, floor: {amount, currency, basis, verification, source_cell, row_state}, confidence,
+    as_of}`; `row_state` is `parseable | unreadable | no_market` (whether the Markets row gave the parser a value,
+    recorded at build time so scoring never re-parses a cell).
+    """
 
     version: str
     keys: tuple[str, ...]

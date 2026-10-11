@@ -10,8 +10,8 @@ Basis v1 keys read here (Task B's `Basis.complete` writes them):
 * `requirements`: `[{id, class, outcome, facts, status_floor}]`; `requirement_count` (all of them, including
   unverifiable ones); `rubric_state` (`ok | missing | invalid`);
 * `fit`: `[{row, weight, judgement}]` (integer weights; `row` is the normalised rubric label, audit only);
-* `cap_inputs`: `{market, need: {value, verification, source_cell}, listing, quote, range: {low, high, currency, basis} | null,
-  floor: {amount, currency, basis, verification, source_cell}, confidence, as_of}`. `need` and `floor` are always present:
+* `cap_inputs`: `{market, need: {value, verification, source_cell, row_state}, listing, quote, range: {low, high, currency, basis} | null,
+  floor: {amount, currency, basis, verification, source_cell, row_state}, confidence, as_of}`. `need` and `floor` are always present:
   an input the agent omitted has `value`/`amount` null and verification `unverified`, with the Markets cell kept in
   `source_cell` (null only when no market was named).
 
@@ -53,7 +53,6 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 from careeros.core.evaluation.canon import fixed4
-from careeros.core.evaluation.markets import parse_floor, parse_need
 from careeros.core.evaluation.model import ActionItem, Cap, Confidence, Tier
 from careeros.core.evaluation.rules import RULES, RULES_VERSION, Rules, basis_schema_for, rules_for
 
@@ -94,6 +93,7 @@ _RUBRIC_STATES = ("ok", "missing", "invalid")
 _LISTINGS = ("offered", "not_offered", "unknown")
 _CONFIDENCES = ("high", "medium", "low", "unknown", None)
 _BASES = ("base", "total", None)
+_ROW_STATES = ("parseable", "unreadable", "no_market")
 _NATURAL = re.compile(r"([A-Za-z_]*)(\d+)")
 
 
@@ -198,16 +198,18 @@ def _validate(basis: dict, keys: tuple[str, ...], rules: Rules) -> None:
     if type(cap["quote"]) is not bool:
         _bad(f"quote {cap['quote']!r} is not a boolean")
     _one_of(cap["confidence"], _CONFIDENCES, "compensation confidence")
-    _keys(cap["need"], ("value", "verification", "source_cell"), "need")
+    _keys(cap["need"], ("value", "verification", "source_cell", "row_state"), "need")
     _one_of(cap["need"]["value"], ("yes", "no", None), "need value")
     _one_of(cap["need"]["verification"], _VERIFICATION, "need verification")
     _str_or_none(cap["need"]["source_cell"], "need source_cell")
-    _keys(cap["floor"], ("amount", "currency", "basis", "verification", "source_cell"), "floor")
+    _one_of(cap["need"]["row_state"], _ROW_STATES, "need row_state")
+    _keys(cap["floor"], ("amount", "currency", "basis", "verification", "source_cell", "row_state"), "floor")
     _int_or_none(cap["floor"]["amount"], "floor amount")
     _str_or_none(cap["floor"]["currency"], "floor currency")
     _one_of(cap["floor"]["basis"], _BASES, "floor basis")
     _one_of(cap["floor"]["verification"], _VERIFICATION, "floor verification")
     _str_or_none(cap["floor"]["source_cell"], "floor source_cell")
+    _one_of(cap["floor"]["row_state"], _ROW_STATES, "floor row_state")
     if cap["range"] is not None:
         _keys(cap["range"], ("low", "high", "currency", "basis"), "range")
         _int_or_none(cap["range"]["low"], "range low")
@@ -313,12 +315,12 @@ def _confidence(basis: dict, reqs: list[dict], rules: Rules, coverage: Fraction 
 
 # --- action items -------------------------------------------------------------------------------
 
-def _unverified_input(ref: str, field: dict, value, parseable, no_value: str, unreadable: str, no_market: str) -> ActionItem:
-    cell = field["source_cell"]
-    if cell is None:
+def _unverified_input(ref: str, field: dict, value, no_value: str, unreadable: str, no_market: str) -> ActionItem:
+    """The cause-specific item for an unverified input, from the stored `row_state` and `value` only."""
+    if field["row_state"] == "no_market":
         return ActionItem(ref, no_market)
-    if value is None and parseable(cell) is not None:
-        return ActionItem(ref, no_value.format(cell=cell))
+    if value is None and field["row_state"] == "parseable":
+        return ActionItem(ref, no_value.format(cell=field["source_cell"]))
     return ActionItem(ref, unreadable)
 
 
@@ -332,14 +334,14 @@ def _action_items(reqs: list[dict], cap_inputs: dict, caps: tuple[Cap, ...]) -> 
     if need["verification"] == "conflict":
         items.append(ActionItem("sponsorship", ITEM_NEED_CONFLICT.format(cell=need["source_cell"])))
     elif need["verification"] == "unverified":
-        items.append(_unverified_input("sponsorship", need, need["value"], parse_need, ITEM_NEED_NO_VALUE,
+        items.append(_unverified_input("sponsorship", need, need["value"], ITEM_NEED_NO_VALUE,
                                        ITEM_NEED_UNREADABLE, ITEM_NEED_NO_MARKET))
     if cap_inputs["listing"] == "unknown" and not (need["verification"] == "verified" and need["value"] == "no"):
         items.append(ActionItem("sponsorship", ITEM_LISTING_UNKNOWN))
     if floor["verification"] == "conflict":
         items.append(ActionItem("pay", ITEM_FLOOR_CONFLICT.format(cell=floor["source_cell"])))
     elif floor["verification"] == "unverified":
-        items.append(_unverified_input("pay", floor, floor["amount"], parse_floor, ITEM_FLOOR_NO_VALUE,
+        items.append(_unverified_input("pay", floor, floor["amount"], ITEM_FLOOR_NO_VALUE,
                                        ITEM_FLOOR_UNREADABLE, ITEM_FLOOR_NO_MARKET))
     if rng is None:
         items.append(ActionItem("pay", ITEM_RANGE_UNDISCLOSED))
