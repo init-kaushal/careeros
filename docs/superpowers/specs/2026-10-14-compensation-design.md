@@ -82,12 +82,14 @@ Field rules:
 
 | Reason | When |
 |---|---|
-| `FLOOR_UNVERIFIED` | the `## Markets` row is missing, unparseable, ambiguous or the table is unusable |
+| `FLOOR_UNVERIFIED` | the record's `market` is `null`, its `## Markets` row has no machine-readable floor (for example `TBD`), or the Markets table is unusable (more than one `## Markets` heading) |
 | `BASIS_MISMATCH` | the observation's `basis` differs from the floor's (total pay against a base floor); never compared as equivalent |
 | `FX_CONVERSION_MISSING` | the currencies differ and no `(from, to)` conversion exists |
 | `FX_RATE_OUTSIDE_WINDOW` | the conversion's `as_of` is after the observation's `as_of`, or more than 30 days before it (`0 <= obs.as_of - rate.as_of <= 30` days passes) |
 
 A missing conversion is an information gap, not a schema error: the record stays valid.
+
+**Market contract (one rule, used by `comp`, `validate` and `evaluate`).** The `market` label is resolved in this order, the same order evaluation's `verify_market` uses: (1) `null` ⇒ floor unverified, no error; (2) a label listed more than once ⇒ `CMP007` (error); (3) a label naming no row ⇒ `CMP007` (error); (4) the table is unusable ⇒ floor unverified (`FLOOR_UNVERIFIED`); (5) the row has no machine-readable floor ⇒ floor unverified (`FLOOR_UNVERIFIED`); (6) otherwise verified. A wrong or ambiguous label is a mistake in the record, so it is an error that rejects the run; a missing or unreadable floor is an information gap, so the record stays valid and the observations are merely not comparable.
 
 ### 5.2 Effective range
 
@@ -125,7 +127,7 @@ With a floor present and **no effective range** (no observations, all incomparab
   - `compensation.recorded` `{file_sha256, observations}` when the record validates and its canonical hash differs from the latest **valid** `compensation.recorded` event **for that job**. A missing or malformed prior event counts as no baseline.
   - `compensation.rejected` (needs a reason) when the record is invalid, carrying the sorted CMP codes and the SHA-256 of the file's raw bytes. It is deduplicated on exactly (raw-bytes hash, sorted code set), so a changed invalid file is never suppressed by an earlier rejection.
   - If the ledger append fails the command reports it and never claims the event was recorded.
-- **Exit codes:** 0 valid; 1 invalid record, an unknown `market` row, or ledger failure; 2 usage / no workspace.
+- **Exit codes:** 0 valid; 1 invalid record (including a `market` label that is unknown or ambiguous, `CMP007`) or ledger failure; 2 usage / no workspace.
 - `--init` refuses if the file exists (exit 1) and never writes an event.
 
 ## 8. Validation
@@ -140,7 +142,7 @@ With a floor present and **no effective range** (no observations, all incomparab
 | `CMP004` | error | a `posted` quote is missing, or not found verbatim in `jd.md`, or `jd.md` is absent |
 | `CMP005` | error | duplicate observation `id`, or two conversions for the same `(from, to)` pair |
 | `CMP006` | error | missing `source` or `as_of` (observation or conversion), or missing/invalid `rate` |
-| `CMP007` | error | `market` names no row of the Markets table, or an ambiguous one |
+| `CMP007` | error | a non-null `market` names no row of the Markets table, or names a row that is listed more than once (ambiguous). Checked whenever `market` is non-null, even with no observations; `null` is never `CMP007` |
 | `CMP100` | warning | an observation's `as_of` is older than the freshness threshold (rules constant, 90 days) relative to today; informational, never changes a score |
 
 Malformed records produce these stable codes without modifying any file. Final code numbering is fixed in the plan.
@@ -158,11 +160,24 @@ Malformed records produce these stable codes without modifying any file. Final c
 
 - **`browse`:** when it saves a job it also runs `careeros comp <job> --init` and records the pay it gathered as observations (kind, source, as_of, confidence), or leaves `observations: []` when it found nothing. Its comp-check rules (a source and a confidence for every figure; "unknown" is a valid answer) stand. The results table keeps its Comp column.
 - **`evaluate`:** no longer asks for pay. It runs `careeros comp <job>`, reads the derivation, presents comparability reasons, conflicts and the cap outcome from the evaluation, and performs the **migration** below when it finds a version 1 record.
-- **Migration (skill step, never part of the scorer; the scorer never writes files).**
-  - Only for a version 1 evaluation whose agent half has `job_facts.compensation`, in a job with **no** `compensation.md`. It never overwrites an existing `compensation.md`.
-  - It maps `range`, `currency`, `basis`, `source` and `as_of` to one observation and preserves the original figures and provenance. Version 1 recorded no `kind` and no `period`: it asks the user for the kind (suggesting `estimate`; `posted` also needs a verbatim quote) and for the period if it cannot tell. It never invents a missing source, `as_of`, confidence, currency or basis; anything it cannot map is left unresolved and asked about.
-  - It is visible: it shows the proposed file and writes it only after the user agrees, then removes the old block from the agent half and re-evaluates **only after** the new record validates.
-  - **Idempotent:** a repeat run finds the existing `compensation.md` and does nothing; unchanged inputs after a successful migration are a `(unchanged)` evaluation.
+- **Migration (skill step, never part of the scorer; the scorer never writes files).** It applies to a version 1 evaluation whose agent half still has `job_facts.compensation`. It is a **resumable sequence of four steps**. The skill re-detects the state from the files on every run and performs only the steps whose precondition holds, so an interruption at any point is recovered by simply running it again. No step ever overwrites `compensation.md`, and the legacy block is never removed before a valid `compensation.md` exists.
+  1. **Write.** Precondition: no `compensation.md`. Map `range`, `currency`, `basis`, `source` and `as_of` to one observation. Version 1 recorded no `kind` and no `period`: ask the user for the kind (suggesting `estimate`; `posted` also needs a verbatim quote) and for the period if it cannot tell. Never invent a missing source, `as_of`, confidence, currency or basis; leave anything unmappable unresolved and ask. Show the proposed file and write it only after the user agrees. The notes body of the new file records the legacy block verbatim under the heading `Migrated from evaluation.md (0.5.0)`, so the original figures and provenance survive even if later steps are interrupted.
+  2. **Validate.** Run `careeros comp <job>`. On any `CMP` error, show it and ask the user to fix the file; stop.
+  3. **Remove.** Precondition: `compensation.md` exists, validates, and the legacy block is still present. Show the legacy block beside the observations and ask the user to confirm the record covers it; only then remove the block from the agent half (the agent half is agent-owned).
+  4. **Re-evaluate.** Precondition: the block is removed and the record validates. Run `careeros evaluate <job>`.
+  **Recovery by state** (what the skill does when it finds each state):
+
+  | State found | Action |
+  |---|---|
+  | legacy block, no `compensation.md` | step 1 |
+  | legacy block, `compensation.md` present and valid | resume at step 3; the file is not rewritten |
+  | legacy block, `compensation.md` present but invalid (for example a truncated write) | step 2: show the `CMP` errors and ask; never overwrite; if the user wants to start over they delete the file and the skill restarts at step 1 |
+  | no legacy block, valid non-empty `compensation.md`, evaluation stale | step 4 |
+  | no legacy block, no or empty `compensation.md`, a stale version 1 result | the figures left the agent half but the stored `result.basis.cap_inputs` still holds the range, currency, basis and `as_of` until a re-evaluation replaces it: offer to rebuild the observation from those, ask for the kind, period and source, then continue at step 1's confirmation; if the user says the job has no pay information, continue at step 4 with the empty record |
+  | no legacy block, valid non-empty record, evaluation current | nothing to do |
+
+  `evaluate`'s refusal on a version 1 record (`EVL003`) names the situation: with no `compensation.md` it says to migrate; with an existing valid one it says to confirm the record covers the legacy block and remove the block.
+- **Idempotent:** a repeat run in any state above performs only the steps whose preconditions hold; it never duplicates an observation (step 1 runs only when there is no `compensation.md`) and never rewrites an existing file; unchanged inputs after a completed migration are an `(unchanged)` evaluation.
 - `prep`, `offer`, the GPT workspace and the Career Memory evidence gate are unchanged.
 
 ## 11. Docs and release
@@ -181,9 +196,9 @@ Written first (RED), pure-function tests need no workspace:
 - **Cap grid:** parity with today's single-figure behaviour (one `posted`/`recruiter` figure below a verified floor, medium/high confidence ⇒ the same `weak` cap as 0.5.0), plus: equality does not cap; null `high` never caps; estimate-only never caps; any `low` confidence in the kind prevents the cap; a conflict prevents the cap and adds an action item; missing or unverified floor prevents the cap; an incomparable observation in the kind prevents the cap.
 - **Unknown stays unknown:** empty record, all-incomparable and conflict keep today's unknown deduction.
 - **Ledger:** `recorded` dedupes against the latest valid event for that job (malformed/missing prior ⇒ appended); `rejected` dedupes on (raw hash, sorted codes) and a changed invalid file is recorded again; failed append reports and claims nothing.
-- **Read-only:** `validate` and invalid `comp` runs leave every workspace file byte-identical; `comp` never edits or normalises `compensation.md`.
+- **Read-only and write scope:** `validate` leaves every workspace file, including `ledger.jsonl`, byte-identical. `comp` leaves `compensation.md` and every file except `ledger.jsonl` byte-identical (it never edits or normalises `compensation.md`), and `ledger.jsonl` only gains the documented events: its old bytes are an exact prefix of the new bytes and the appended events are exactly the expected types and count (`compensation.recorded` or `compensation.rejected`, none on a duplicate or a failed append).
 - **Evaluation:** basis v2 reproduces the cap; the `compensation` stamp marks an evaluation stale; v1 records stay verifiable and report stale, never tamper; `job_facts.compensation` rejected in new records; market mismatch `EVL006`.
-- **Skills:** wording tests pin the migration rules (never overwrite, ask for kind, idempotent, no scorer writes) and the unchanged evidence gate.
+- **Skills:** wording tests pin the migration rules (never overwrite, ask for kind, idempotent, no scorer writes), the four steps and every row of the recovery table, and the unchanged evidence gate; the end-to-end test interrupts the migration after each step and shows it resumes to the same result.
 - **End to end** on invented data, and an **acceptance run in a disposable workspace** recording commands, exit codes and codes/counts only (no real postings, employers or figures; the real workspace is never touched).
 
 ## 13. Out of scope and known limits
@@ -204,4 +219,4 @@ Each task is one commit (plus fix commits), reviewed before the next.
 
 ## 15. Acceptance
 
-A disposable invented workspace: create a job and `jd.md`, `comp --init`, record a `posted` figure below a verified floor, `evaluate` ⇒ `weak` via the compensation cap; change the figure above the floor ⇒ stale, re-evaluate ⇒ cap gone; foreign-currency figure with and without a conversion; a conflicting pair ⇒ no cap and an action item; a version 1 record ⇒ stale, migrated through the skill steps; `validate` and invalid `comp` leave the workspace byte-identical. Full suite green on Python 3.14 and 3.11, `mkdocs build --strict`, wheel contents, `git diff --check`.
+A disposable invented workspace: create a job and `jd.md`, `comp --init`, record a `posted` figure below a verified floor, `evaluate` ⇒ `weak` via the compensation cap; change the figure above the floor ⇒ stale, re-evaluate ⇒ cap gone; foreign-currency figure with and without a conversion; a conflicting pair ⇒ no cap and an action item; a version 1 record ⇒ stale, migrated through the skill steps; `validate` leaves the whole workspace byte-identical (ledger included); an invalid `comp` run leaves every file except `ledger.jsonl` byte-identical and appends exactly one `compensation.rejected` (none when repeated unchanged). Full suite green on Python 3.14 and 3.11, `mkdocs build --strict`, wheel contents, `git diff --check`.
