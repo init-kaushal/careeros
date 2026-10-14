@@ -12,7 +12,10 @@ from typer.testing import CliRunner
 
 from careeros.cli.main import app
 from careeros.core import ledger
+from fractions import Fraction
+
 from careeros.core.compensation import record, service
+from careeros.core.compensation.derive import FloorInfo, cap_applies, derive_compensation, to_basis
 from careeros.core.evaluation import markets as markets_mod
 from careeros.core.validation import validate_workspace
 
@@ -460,3 +463,115 @@ def test_is_duplicate_rejection() -> None:
     assert service.is_duplicate_rejection([ev("compensation.recorded"), rej()], "job_a", h, ["CMP001", "CMP003"])
     assert not service.is_duplicate_rejection([rej(), "junk", {"type": None}, ev("job.imported")][:3] + [rej(hh="d" * 64)],
                                               "job_a", h, ["CMP001", "CMP003"])
+
+
+# --- one cap decision --------------------------------------------------------------------------
+
+def comp_basis(status="effective", kind="posted", low=1, high=10, complete=True, confident=True) -> dict:
+    return {"status": status, "kind": kind, "low": low, "high": high, "kind_complete": complete, "kind_confident": confident}
+
+
+CAP_TABLE = [
+    ("below floor caps", comp_basis(), 11, True, True),
+    ("recruiter caps", comp_basis(kind="recruiter"), 11, True, True),
+    ("exact string high", comp_basis(high="21/2"), 11, True, True),
+    ("equality does not cap", comp_basis(), 10, True, False),
+    ("above floor", comp_basis(), 9, True, False),
+    ("null high", comp_basis(high=None), 11, True, False),
+    ("low confidence", comp_basis(confident=False), 11, True, False),
+    ("incomplete kind", comp_basis(complete=False), 11, True, False),
+    ("unverified floor", comp_basis(), 11, False, False),
+    ("no floor amount", comp_basis(), None, True, False),
+    ("estimate only", comp_basis(kind="estimate"), 11, True, False),
+    ("conflict", comp_basis(status="conflict"), 11, True, False),
+    ("none", comp_basis(status="none"), 11, True, False),
+    ("no kind", comp_basis(kind=None), 11, True, False),
+]
+
+
+@pytest.mark.parametrize("case", CAP_TABLE, ids=[c[0] for c in CAP_TABLE])
+def test_cap_applies_table(case) -> None:
+    _, basis, floor, verified, expected = case
+    assert cap_applies(basis, None if floor is None else Fraction(floor), verified) is expected
+
+
+def test_comp_display_agrees_with_cap_applies(ws) -> None:
+    root, job = ws
+    texts = [doc(observations=(obs(low="2000000", high="3000000"),)),                     # caps
+             doc(observations=(obs(low="2000000", high="3500000"),)),                     # equality
+             doc(observations=(obs(low="2000000", high="3000000", confidence="low"),)),   # low confidence
+             doc(observations=(obs(kind="estimate", quote=None, low="1", high="2"),)),    # estimate only
+             doc(observations=(obs(low="2000000", high="3000000"), obs("c2", low="5000000", high="6000000")))]  # conflict
+    expected = []
+    for text in texts:
+        job["comp"].write_text(text, encoding="utf-8")
+        out = json.loads(comp(root, job, "--json").output)
+        rec, _ = record.parse(record.load(job["comp"], root))
+        floor = FloorInfo(3500000, "INR", "base", True)
+        want = cap_applies(to_basis(derive_compensation(rec, floor)), Fraction(3500000), True)
+        assert out["cap_fires"] is want
+        expected.append(want)
+        assert ("WOULD fire" in comp(root, job).output) is want
+    assert expected == [True, False, False, False, False]
+
+
+# --- failure paths -----------------------------------------------------------------------------
+
+def test_init_is_atomic(ws, monkeypatch) -> None:
+    root, job = ws
+
+    def boom(path, data):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(service, "atomic_write_bytes", boom)
+    before = state(root)
+    res = comp(root, job, "--init")
+    assert res.exit_code == 1 and not job["comp"].exists() and state(root) == before
+
+
+def test_rejection_reason_is_sorted_not_scan_order(ws) -> None:
+    root, job = ws
+    bad = doc(observations=(obs("c1", low="5", high="1"), obs("c2").replace("kind: posted", "kind: bogus")))
+    job["comp"].write_text(bad, encoding="utf-8")
+    scan = [i.code for i in service.check_job(job["comp"].parent, JD, markets_mod.parse(PROFILE))[1]]
+    assert scan == ["CMP003", "CMP002"]                                        # scan order is not sorted order
+    run_checked(root, job, 1, ["compensation.rejected"])
+    assert events(root)[0]["reason"] == "CMP002,CMP003"
+
+
+def test_malformed_last_ledger_line_is_a_ledger_failure(ws) -> None:
+    root, job = ws
+    job["comp"].write_text(GOOD(), encoding="utf-8")
+    with (root / "ledger.jsonl").open("ab") as f:
+        f.write(b'{"type":"x"}\n')                                             # valid JSON, no seq
+    for args in ((), ("--json",)):
+        before = state(root)
+        res = comp(root, job, *args)
+        assert res.exit_code == 1 and state(root) == before
+        if args:
+            out = json.loads(res.output)
+            assert out["recorded"] is False and out["ledger_error"]
+        else:
+            assert "nothing was recorded" in res.output
+
+
+def test_rejection_hash_is_of_the_bytes_that_were_parsed(ws, monkeypatch) -> None:
+    root, job = ws
+    job["comp"].write_text(BAD_A(), encoding="utf-8")
+    first = job["comp"].read_bytes()
+    real = Path.read_bytes
+    calls = {"n": 0}
+
+    def flaky(self):
+        data = real(self)
+        if self.name == "compensation.md":
+            calls["n"] += 1
+            if calls["n"] > 1:
+                return b"changed after the first read"
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", flaky)
+    comp(root, job)
+    monkeypatch.undo()
+    assert calls["n"] == 1
+    assert events(root)[0]["artifacts"][1] == f"sha256:{hashlib.sha256(first).hexdigest()}"

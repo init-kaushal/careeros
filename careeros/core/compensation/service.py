@@ -14,11 +14,12 @@ import hashlib
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
+from fractions import Fraction
 from pathlib import Path
 
 from careeros.core import ledger, models
 from careeros.core.compensation import record, rules
-from careeros.core.compensation.derive import Derivation, FloorInfo, derive_compensation
+from careeros.core.compensation.derive import Derivation, FloorInfo, cap_applies, derive_compensation, to_basis
 from careeros.core.compensation.model import CompRecord
 from careeros.core.evaluation import canon
 from careeros.core.evaluation.markets import MarketError, Markets, MarketRow
@@ -31,7 +32,6 @@ JD_FILE = "jd.md"
 UNVERIFIED = FloorInfo(None, None, None, False)
 EMPTY = CompRecord(None, (), (), "")
 _HASH = re.compile(r"sha256:([0-9a-f]{64})")
-_CAP_KINDS = ("posted", "recruiter")
 
 
 class InvalidInputs(WorkspaceError):
@@ -110,9 +110,9 @@ def floor_for(markets: Markets, label: str | None) -> tuple[MarketRow | None, Fl
 
 
 def cap_fires(d: Derivation, floor: FloorInfo) -> bool:
-    """Whether the compensation cap would fire (spec 5.3), for display; the scorer owns the real decision."""
-    return bool(floor.verified and floor.amount is not None and d.status == "effective" and d.kind in _CAP_KINDS
-                and d.kind_complete and d.kind_confident and d.high is not None and d.high < floor.amount)
+    """Whether the compensation cap would fire, for display: a call to the one decision, `derive.cap_applies`."""
+    amount = None if floor.amount is None else Fraction(floor.amount)
+    return cap_applies(to_basis(d), amount, floor.verified)
 
 
 # --- per-job check --------------------------------------------------------------------------------------
@@ -124,19 +124,30 @@ def _text(path: Path) -> str | None:
         return None
 
 
-def check_job(job_dir: Path, jd_text: str | None, markets: Markets) -> tuple[CompRecord | None, list[Issue]]:
-    """Load, parse and validate a job's `compensation.md` (CMP001-CMP006 incl. CMP004 against `jd_text`), then check the
-    `market` label (CMP007). An absent file is the empty record with no issues. The record is returned whenever it
-    parsed, even when CMP004 or CMP007 were raised; it is None only when the file could not be parsed. Callers must look
-    at the issues. Read-only; never raises on a bad file."""
-    job_dir = Path(job_dir)
-    path = job_dir / rules.COMPENSATION_FILE
-    if not path.is_file():
-        return EMPTY, []
-    root = job_dir.parents[2]
-    rel = path.relative_to(root).as_posix()
+def _read(path: Path) -> bytes | OSError | None:
+    """The file's bytes, None when absent, or the `OSError` that stopped the read. The one read `run` works from."""
     try:
-        loaded = record.load(path, root)
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return exc
+
+
+def _check(job_dir: Path, source: bytes | OSError | None, jd_text: str | None,
+           markets: Markets) -> tuple[CompRecord | None, list[Issue]]:
+    path = job_dir / rules.COMPENSATION_FILE
+    if source is None:
+        return EMPTY, []
+    rel = path.relative_to(job_dir.parents[2]).as_posix()
+    try:
+        if isinstance(source, OSError):
+            raise record.RecordError(f"{rel} cannot be read: {source}")
+        try:
+            text = source.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise record.RecordError(f"{rel} cannot be read: {exc}") from None
+        loaded = record.from_text(text, rel, source)
     except record.RecordError as exc:
         return None, [record.error_issue(exc, rel)]
     rec, _ = record.parse(loaded)
@@ -145,9 +156,24 @@ def check_job(job_dir: Path, jd_text: str | None, markets: Markets) -> tuple[Com
         try:
             floor_for(markets, rec.market)
         except MarketError as exc:
-            issues.append(Issue("error", "CMP007", loaded.rel, str(exc),
+            issues.append(Issue("error", "CMP007", rel, str(exc),
                                 "set `market` to the exact `## Markets` row label in profile.md (listed once), or `null`"))
     return rec, issues
+
+
+def check_job(job_dir: Path, jd_text: str | None, markets: Markets) -> tuple[CompRecord | None, list[Issue]]:
+    """Load, parse and validate a job's `compensation.md` (CMP001-CMP006 incl. CMP004 against `jd_text`), then check the
+    `market` label (CMP007). The file is read once.
+
+    An absent file is the empty record: valid, no issues, and `comp` records no event for it (so deleting a file that
+    was recorded earlier appends nothing). The record is returned whenever it parsed, even when CMP004 or CMP007 were
+    raised; it is None only when the file could not be parsed, so callers must look at the issues. Never raises on a
+    bad file.
+
+    `job_dir` must be `<workspace>/jobs/<group>/<slug>` (the layout `resolve_job` and `validate` use): the workspace
+    root, for workspace-relative paths in issues, is taken as `job_dir.parents[2]`."""
+    job_dir = Path(job_dir)
+    return _check(job_dir, _read(job_dir / rules.COMPENSATION_FILE), jd_text, markets)
 
 
 def stale_warnings(rec: CompRecord | None, rel: str, today: date) -> list[Issue]:
@@ -239,7 +265,7 @@ def init(root: Path, ref: str) -> str:
 def _append(root: Path, spec: dict) -> str | None:
     try:
         ledger.append_events(root, [spec])
-    except (OSError, WorkspaceError) as exc:
+    except Exception as exc:        # a malformed ledger can raise anything; report it, claim nothing
         return str(exc) or type(exc).__name__
     return None
 
@@ -254,8 +280,9 @@ def run(root: Path, ref: str, actor: str) -> Report:
         path = job_dir / rules.COMPENSATION_FILE
         rel = path.relative_to(root).as_posix()
         markets = parse_markets(_text(root / "profile.md") or "")
-        rec, issues = check_job(job_dir, _text(job_dir / JD_FILE), markets)
-        exists = path.is_file()
+        source = _read(path)
+        rec, issues = _check(job_dir, source, _text(job_dir / JD_FILE), markets)
+        exists = source is not None
         floor = UNVERIFIED
         errors = [i for i in issues if i.severity == "error"]
         derivation = None
@@ -266,7 +293,7 @@ def run(root: Path, ref: str, actor: str) -> Report:
                 issues = issues + stale_warnings(rec, rel, _today(None))
         try:
             events = ledger.read_events(root)
-        except (OSError, WorkspaceError) as exc:
+        except Exception as exc:
             return Report(job.id, rel, rec, derivation, issues, False, floor, exists, "not_recorded",
                           f"could not read the ledger: {exc}")
 
@@ -288,11 +315,7 @@ def run(root: Path, ref: str, actor: str) -> Report:
                 "artifacts": [rel, f"sha256:{digest}"],
                 "action": f"recorded compensation: {count} observation{'' if count == 1 else 's'}"})
         codes = sorted({i.code for i in errors})
-        try:
-            raw = path.read_bytes()
-        except OSError:
-            raw = b""
-        raw_hash = hashlib.sha256(raw).hexdigest()
+        raw_hash = hashlib.sha256(source if isinstance(source, bytes) else b"").hexdigest()
         if is_duplicate_rejection(events, job.id, raw_hash, codes):
             return finish("rejection_repeated", None)
         return finish("rejected", {

@@ -164,3 +164,21 @@ def to_basis(d: Derivation) -> dict:
                          for r in d.observations],
         "notes": [{"code": n.code, "ref": n.ref, "detail": n.detail} for n in d.notes],
     }
+
+
+def cap_applies(compensation: dict, floor_amount: Fraction | None, floor_verified: bool) -> bool:
+    """The compensation cap decision (spec 5.3), on the stored `to_basis` shape. This is the ONE implementation: the
+    evaluation scorer (which sees only the stored basis) and the `comp` display must both call it, never re-derive it.
+
+    It fires only when the status is `effective`, the kind is `posted` or `recruiter`, every observation of that kind is
+    comparable (`kind_complete`) and none has `low` confidence (`kind_confident`), the effective `high` is not null and
+    strictly below the verified floor amount. Equality, an open upper bound, an estimate, a conflict and an unverified
+    or missing floor never cap."""
+    if not floor_verified or floor_amount is None:
+        return False
+    if compensation.get("status") != "effective" or compensation.get("kind") not in ("posted", "recruiter"):
+        return False
+    if compensation.get("kind_complete") is not True or compensation.get("kind_confident") is not True:
+        return False
+    high = compensation.get("high")
+    return high is not None and canon.parse_exact(high) < floor_amount
