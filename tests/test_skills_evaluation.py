@@ -185,6 +185,7 @@ def example_blocks() -> dict[str, str]:
     return blocks
 
 
+@pytest.mark.xfail(strict=True, reason="the evaluate skill example still carries job_facts.compensation, rejected since basis v2 (EVL003); Task F rewrites the skill and must remove this marker")
 def test_the_skills_complete_example_is_accepted_by_careeros_evaluate(career) -> None:
     root, ids = career
     blocks = example_blocks()

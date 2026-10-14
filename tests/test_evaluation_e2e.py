@@ -108,7 +108,7 @@ def test_evaluation_end_to_end(career, monkeypatch, tmp_path: Path) -> None:
     evaluate_clears_staleness()
 
     with monkeypatch.context() as m:                                           # the rules version
-        m.setattr(rules, "RULES_VERSION", "2")
+        m.setattr(rules, "RULES_VERSION", "3")
         assert stale_stamps() == ["rules"]
     assert codes(root) == []
 

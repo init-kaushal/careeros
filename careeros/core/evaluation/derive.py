@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from careeros.core.compensation.derive import FloorInfo
 from careeros.core.evaluation.markets import MarketCheck, _agent_need, norm_basis, norm_currency
 from careeros.core.evaluation.model import FitJudgement, JobFacts, Kind, Outcome, Requirement, Verification
 from careeros.core.evaluation.rubric import Rubric, norm_label
@@ -74,19 +75,32 @@ class Basis:
             "requirements": [dict(r, facts=list(r["facts"])) for r in self.requirements],
         }
 
-    def complete(self, fit: tuple[FitJudgement, ...], facts: JobFacts, check: MarketCheck, rubric: Rubric) -> dict:
-        """The full BasisSchema-v1 basis: `as_dict()` plus `rubric_state`, `fit` and `cap_inputs`.
+    def complete(self, fit: tuple[FitJudgement, ...], facts: JobFacts, check: MarketCheck, rubric: Rubric,
+                 compensation: dict | None = None, floor: FloorInfo | None = None) -> dict:
+        """The full basis: `as_dict()` plus `rubric_state`, `fit` and `cap_inputs`.
 
         Fit rows are the usable rubric's rows that have a judgement, sorted by normalised label (a judgement naming no
         rubric row is ignored here; the record validator rejects it). An unusable rubric gives `fit: []` and state
-        `missing` or `invalid`. Cap inputs hold the agent's values (display only unless `verified`) with the
-        verification states and exact source cells from `check`; a range needs an integer `high`.
+        `missing` or `invalid`.
+
+        With `compensation` (the `compensation.derive.to_basis` object) and `floor` (the `FloorInfo` of the Markets row
+        named by `job_facts.market`): the BasisSchema-v2 layout under this basis' versions; the floor is the row's own,
+        `verified` or `unverified` (`_cap_inputs_v2`). Without them: the BasisSchema-v1 layout, stamped basis/rules
+        version "1" whatever this basis says (the layout decides the version; kept for the v1 layout tests and the
+        scorer's v1 path): the agent's values (display only unless `verified`) with the verification states and exact
+        source cells from `check`; a range needs an integer `high`.
         """
         by_row = {norm_label(j.row): j for j in fit}
         rows = sorted(({"row": r.key, "weight": r.weight, "judgement": str(by_row[r.key].judgement)}
                        for r in rubric.rows if r.key in by_row), key=lambda r: r["row"]) if rubric.usable else []
-        return {**self.as_dict(), "rubric_state": rubric.state if rubric.usable or rubric.state != "ok" else "missing",
-                "fit": rows, "cap_inputs": _cap_inputs(facts, check)}
+        head = self.as_dict()
+        if compensation is None:
+            head.update(basis_version="1", rules_version="1")
+            cap_inputs = _cap_inputs(facts, check)
+        else:
+            cap_inputs = _cap_inputs_v2(facts, check, floor or FloorInfo(None, None, None, False), compensation)
+        return {**head, "rubric_state": rubric.state if rubric.usable or rubric.state != "ok" else "missing",
+                "fit": rows, "cap_inputs": cap_inputs}
 
 
 _CONFIDENCES = ("high", "medium", "low", "unknown")
@@ -125,6 +139,24 @@ def _cap_inputs(facts: JobFacts, check: MarketCheck) -> dict:
                   "row_state": _row_state(check, check.row.floor if check.row else None)},
         "confidence": str(facts.comp_confidence) if str(facts.comp_confidence) in _CONFIDENCES else None,
         "as_of": facts.as_of if isinstance(facts.as_of, str) else None,
+    }
+
+
+def _cap_inputs_v2(facts: JobFacts, check: MarketCheck, floor: FloorInfo, compensation: dict) -> dict:
+    """BasisSchema-v2 cap inputs: need, listing and quote as in v1; the floor taken from the Markets row by code (no
+    agent copy, so `verified` or `unverified`, never `conflict`; an unverified floor stores no amount, currency or
+    basis); `compensation` is stored as given (`compensation.derive.to_basis`)."""
+    v1 = _cap_inputs(facts, check)
+    row = check.row
+    verified = floor.verified and row is not None
+    return {
+        "market": v1["market"], "need": v1["need"], "listing": v1["listing"], "quote": v1["quote"],
+        "floor": {"amount": floor.amount if verified else None, "currency": floor.currency if verified else None,
+                  "basis": floor.basis if verified else None,
+                  "verification": str(Verification.VERIFIED if verified else Verification.UNVERIFIED),
+                  "source_cell": row.floor_cell if row is not None else None,
+                  "row_state": "no_market" if row is None else "parseable" if verified else "unreadable"},
+        "compensation": compensation,
     }
 
 

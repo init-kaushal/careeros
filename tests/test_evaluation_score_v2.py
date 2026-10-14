@@ -77,9 +77,9 @@ def test_rules_v2_carries_every_v1_constant_plus_the_fx_window() -> None:
     assert BASIS_VERSIONS["2"].version == "2" and BASIS_VERSIONS["2"].keys == BASIS_VERSIONS["1"].keys
 
 
-def test_new_evaluations_still_default_to_version_1_until_the_wiring() -> None:
+def test_new_evaluations_default_to_version_2_and_version_1_stays_registered() -> None:
     from careeros.core.evaluation import rules
-    assert (rules.RULES_VERSION, rules.BASIS_VERSION) == ("1", "1") and set(RULES) == {"1", "2"}
+    assert (rules.RULES_VERSION, rules.BASIS_VERSION) == ("2", "2") and set(RULES) == {"1", "2"}
 
 
 # --- parity grid -----------------------------------------------------------------------------------

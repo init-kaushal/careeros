@@ -159,10 +159,14 @@ class ActionItem:
 
 @dataclass(frozen=True)
 class Stamps:
-    """Freshness stamps: hashes (rules: the version) of the inputs the result was computed from."""
+    """Freshness stamps: hashes (rules: the version) of the inputs the result was computed from.
+
+    `compensation` (the job's compensation.md) is a stamp of basis version 2 only; a basis-v1 result has the other
+    five (`record.STAMP_KEYS` maps a basis version to its names), so it is None when not computed."""
 
     jd: str
     memory: str
     rubric: str
     rules: str
     inputs: str
+    compensation: str | None = None

@@ -7,22 +7,27 @@ clarification 7). Read-only.
    "cannot be verified"): steps 2 and 4 are skipped and it is never `EVL007`. A tampered result under such a version is
    therefore not detected (documented limit).
 1. **Structure.** `record.validate_agent` (`EVL001`-`EVL006`); any error stops the check here.
-2. **Self-consistency (tamper, stored data only).** The result has exactly its keys and five string stamps;
+2. **Self-consistency (tamper, stored data only).** The result has exactly its keys and the string stamps of its basis
+   version (`record.STAMP_KEYS`: five for v1, six for v2);
    `sha256(canonical(basis)) == basis_sha256`; `basis.rules_version == stamps.rules`; `score(basis)` (with the rules of
    the version the basis declares) reproduces the stored scores, tier, caps, confidence and action items, and
    `result.requirements` agrees with the basis; `render_body(result)` equals the stored body. Every comparison is on
    exact types or canonical JSON, never Python `==` on YAML values (`True == 1`). Each failing part is one `EVL007`
    naming it (`result`, `basis`, `scores`, `body`).
-3. **Freshness.** Each stamp against today's value (`rules` against the current `RULES_VERSION`) -> `EVL008` (warning)
-   listing them. **Decided here:** a stored `basis_version` other than the current one adds `basis` to the stale list
+3. **Freshness.** Each stamp the record's basis version has (an unknown version: the names it stores) against today's
+   value (`rules` against the current `RULES_VERSION`) -> `EVL008` (warning) listing them. A v1 result is never
+   re-keyed: it has no `compensation` stamp and reads stale through `rules` and `basis`. **Decided here:** a stored
+   `basis_version` other than the current one adds `basis` to the stale list
    (spec 16.3 has `evaluate` replace such a record), so an unsupported basis version is also reported stale.
-4. **Derivation (only when the `memory`, `rubric` and `inputs` stamps are current, the versions are supported, the
-   stored basis is well-formed and uses the current basis layout, and the memory has no errors).** The basis derived
+4. **Derivation (only when the `memory`, `rubric`, `inputs` and `compensation` stamps are current, the versions are
+   supported, the stored basis is well-formed and uses the current basis layout, and the memory has no errors).** The basis derived
    today from the agent half and memory, with the stored `rules_version`, must equal the stored basis, and the stored
    `result.requirements` (with reasons) must equal today's; otherwise `EVL007` ("basis": the stored basis was altered).
+   For a v2 basis this re-derives `cap_inputs.compensation` from the current compensation.md and compares the whole
+   object (including `kind_confident`, which the stored observations cannot cross-check).
 
-`EVL011` (warning) lists every `unverified` or `conflict` floor or need in a well-formed stored basis, with the source
-cell. Staleness and tampering are reported separately and can both be present.
+`EVL011` (warning) lists every `unverified` or `conflict` floor or need in a well-formed stored basis (either layout),
+with the source cell. Staleness and tampering are reported separately and can both be present.
 
 By-design limits (EVL009, the file-vs-ledger check, is the backstop for both): an unsupported `basis_version` or
 `rules_version` suppresses the tamper checks (EVL010 says "cannot be verified"); and editing `stamps.memory`,
@@ -46,7 +51,7 @@ from pathlib import Path
 from careeros.core.evaluation import ledgercheck, record, rules, score
 from careeros.core.evaluation.canon import canonical_json, sha256_hex
 from careeros.core.evaluation.markets import MarketError
-from careeros.core.evaluation.record import RESULT_KEYS, STAMP_KEYS, Inputs, Record, RecordError
+from careeros.core.evaluation.record import RESULT_KEYS, STAMP_KEYS, Inputs, Record, RecordError, stamp_keys
 from careeros.core.evaluation.rules import UnsupportedVersion
 from careeros.core.models import Issue
 from careeros.core.workspace import WorkspaceError
@@ -56,6 +61,9 @@ _FIX_STALE = "run `careeros evaluate <job>` to refresh the evaluation"
 _FIX_VERSION = "run `careeros evaluate <job>`: it recomputes with this CareerOS's versions"
 _FIX_MARKET = "make the profile `## Markets` row state the floor as one amount with a currency and the sponsorship as " \
               "`required` or `not needed`, and give the same values in `job_facts`; then run `careeros evaluate <job>`"
+_FIX_MARKET_V2 = "make the profile `## Markets` row state the floor as one amount with a currency and the sponsorship " \
+                 "as `required` or `not needed`, and give the sponsorship need in `job_facts` (the floor comes from " \
+                 "the row itself); then run `careeros evaluate <job>`"
 
 
 @dataclass(frozen=True)
@@ -133,10 +141,14 @@ def _self_consistency(rec: Record, result: dict) -> tuple[list[tuple[str, str]],
         found.append(("result", f"result: keys differ (missing: {', '.join(missing) or 'none'}; "
                                 f"unexpected: {', '.join(extra) or 'none'})"))
     stamps = result.get("stamps")
-    if not (isinstance(stamps, dict) and set(stamps) == set(STAMP_KEYS) and all(type(v) is str for v in stamps.values())):
-        found.append(("result", "result.stamps is not the five stamp strings"))
-        stamps = None
     basis = result.get("basis")
+    version = basis.get("basis_version") if isinstance(basis, dict) else None
+    names = stamp_keys(version)
+    allowed = [set(names)] if names else [set(k) for k in STAMP_KEYS.values()]   # a version without its own: any set
+    if not (isinstance(stamps, dict) and set(stamps) in allowed and all(type(v) is str for v in stamps.values())):
+        found.append(("result", f"result.stamps is not the stamp strings of basis version {version!r} "
+                                f"({', '.join(names or STAMP_KEYS[rules.BASIS_VERSION])})"))
+        stamps = None
     try:
         digest = sha256_hex(canonical_json(basis))
     except (TypeError, ValueError):
@@ -182,15 +194,18 @@ def _self_consistency(rec: Record, result: dict) -> tuple[list[tuple[str, str]],
 def _freshness(rec: Record, result: dict, inputs: Inputs) -> list[str]:
     stored = result.get("stamps") if isinstance(result.get("stamps"), dict) else {}
     current = record.stamps(inputs.jd_text, inputs.career, inputs.rubric, rules.RULES_VERSION, rec.fm.get("agent"),
-                            lexicon=inputs.lexicon, markets=inputs.markets, now=inputs.now)
+                            lexicon=inputs.lexicon, markets=inputs.markets, now=inputs.now,
+                            compensation=record.compensation_stamp(inputs))
     basis = result.get("basis")
+    names = stamp_keys(basis.get("basis_version") if isinstance(basis, dict) else None) or tuple(
+        k for k in STAMP_KEYS[rules.BASIS_VERSION] if k in stored)        # an unknown version: the names it stores
     unsupported_rules = False
     if isinstance(basis, dict):
         try:
             rules.rules_for(basis.get("rules_version"))
         except UnsupportedVersion:
             unsupported_rules = True
-    stale = [name for name in STAMP_KEYS
+    stale = [name for name in names
              if (name == "rules" and unsupported_rules)
              or not (type(stored.get(name)) is str and stored[name] == getattr(current, name))]
     basis = result.get("basis")
@@ -207,7 +222,7 @@ def _derivation(rec: Record, result: dict, inputs: Inputs) -> str | None:
         return None
     try:
         basis, derived = record.derive_basis(agent, inputs)
-    except (WorkspaceError, MarketError):
+    except (WorkspaceError, MarketError, UnsupportedVersion):     # also: a current RULES_VERSION this code lacks
         return None
     stored = result["basis"]
     basis["rules_version"] = stored["rules_version"]
@@ -221,6 +236,7 @@ def _derivation(rec: Record, result: dict, inputs: Inputs) -> str | None:
 def market_issues(rec: Record) -> list[Issue]:
     """EVL011: every unverified or conflicting floor or need in the stored (well-formed) basis, with its source cell."""
     cap = rec.result["basis"]["cap_inputs"]
+    fix = _FIX_MARKET_V2 if "compensation" in cap else _FIX_MARKET
     out = []
     for name, label in (("need", "sponsorship need"), ("floor", "floor")):
         field = cap[name]
@@ -231,7 +247,7 @@ def market_issues(rec: Record) -> list[Issue]:
             where = "no Markets row: job_facts.market is not named"
         else:
             where = f'the Markets row {cap["market"]!r} (cell "{field["source_cell"]}")'
-        out.append(Issue("warning", "EVL011", rec.rel, f"{label} is {state} against {where}", _FIX_MARKET))
+        out.append(Issue("warning", "EVL011", rec.rel, f"{label} is {state} against {where}", fix))
     return out
 
 
@@ -240,7 +256,8 @@ def check(rec: Record, inputs: Inputs) -> IntegrityReport:
     result = rec.result
     unsupported = _unsupported(result)
     version_issues = [Issue("warning", "EVL010", rec.rel, unsupported, _FIX_VERSION)] if unsupported else []
-    structure = record.validate_agent(rec, inputs.jd_text, inputs.career, inputs.rubric, inputs.markets, inputs.job_id)
+    structure = record.validate_agent(rec, inputs.jd_text, inputs.career, inputs.rubric, inputs.markets, inputs.job_id,
+                                      compensation=inputs.compensation)
     if result is not None:
         structure += record.no_requirements(rec)
     if structure or result is None:
@@ -250,7 +267,7 @@ def check(rec: Record, inputs: Inputs) -> IntegrityReport:
     if not unsupported:
         found, basis_ok = _self_consistency(rec, result)
     stale = _freshness(rec, result, inputs)
-    if (basis_ok and not {"memory", "rubric", "inputs", "basis"} & set(stale) and not inputs.career.errors):
+    if (basis_ok and not {"memory", "rubric", "inputs", "compensation", "basis"} & set(stale) and not inputs.career.errors):
         detail = _derivation(rec, result, inputs)
         if detail:
             found.append(("basis", detail))

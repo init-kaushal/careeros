@@ -108,7 +108,8 @@ def test_case_is_kept():
 # --- rules and basis registries ---------------------------------------------------------------
 
 def test_rules_for_current_version():
-    assert RULES_VERSION == "1"
+    assert RULES_VERSION == "2"
+    assert rules_for("2") is RULES["2"] and rules_for("2").version == "2"
     r = rules_for("1")
     assert r is RULES["1"]
     assert r.version == "1"
@@ -390,7 +391,8 @@ def test_model_dataclasses_are_frozen_and_construct():
         field = dataclasses.fields(obj)[0].name
         with pytest.raises(dataclasses.FrozenInstanceError):
             setattr(obj, field, "x")
-    assert [f.name for f in dataclasses.fields(stamps)] == ["jd", "memory", "rubric", "rules", "inputs"]
+    assert [f.name for f in dataclasses.fields(stamps)] == ["jd", "memory", "rubric", "rules", "inputs", "compensation"]
+    assert stamps.compensation is None                     # optional: a basis-v1 result has five stamps
 
 
 def test_evaluation_id_shape_is_the_shared_one():

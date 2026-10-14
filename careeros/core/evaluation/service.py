@@ -3,7 +3,11 @@
 The file and the ledger are changed together: the file is written first, then one batch of events is appended; any
 exception puts the previous file back (`append_events` restores the ledger itself). A process that dies between the two
 steps leaves a file without its `evaluation.completed` event, which `validate` reports as EVL009 and a re-run repairs.
-`evaluate` never touches the job's state, `jd.md` or `career/`.
+`evaluate` never touches the job's state, `jd.md`, `compensation.md` or `career/`.
+
+Pay comes from the job's compensation.md (`record.Inputs.compensation`): any CMP error in it is a rejection carrying
+the CMP codes, and a basis-v1 record that still has the legacy `job_facts.compensation` block is refused (EVL003, worded
+by the state of compensation.md) until the block is migrated. Both go through the one deduplicated `evaluation.rejected`.
 """
 
 from __future__ import annotations
@@ -99,17 +103,22 @@ def evaluate(root: Path, ref: str, actor: str) -> Summary:
             rec = record.load(path, root)
         except record.RecordError as exc:
             _rejected(root, job, actor, [Issue("error", exc.code, path.relative_to(root).as_posix(), str(exc), "")], events)
-        issues = record.validate_agent(rec, inputs.jd_text, inputs.career, inputs.rubric, inputs.markets, inputs.job_id)
+        issues = record.validate_agent(rec, inputs.jd_text, inputs.career, inputs.rubric, inputs.markets, inputs.job_id,
+                                       compensation=inputs.compensation)
         if inputs.jd_text is None and not any(i.code == "EVL004" for i in issues):
             issues.append(Issue("error", "EVL004", rec.rel, f"{record.JD_FILE} is missing or unreadable", ""))
         issues += record.no_requirements(rec)
+        refusal = record.legacy_refusal(rec, inputs)
+        if refusal is not None:
+            issues.insert(0, refusal)
+        issues += [i for i in inputs.compensation_issues if i.severity == "error"]
         if issues:
             _rejected(root, job, actor, issues, events)
         try:
             result = record.compute(rec, inputs)
         except WorkspaceError as exc:         # a derivation or market problem validate_agent could not foresee
             code = getattr(exc, "code", "")
-            code = code if isinstance(code, str) and code.startswith("EVL") else "EVL003"
+            code = code if isinstance(code, str) and code.startswith(("EVL", "CMP")) else "EVL003"
             _rejected(root, job, actor, [Issue("error", code, rec.rel, str(exc), "")], events)
         records = _all_records(root)
         twin = next((r for r in records if r.id == rec.id and r.rel != rec.rel), None)

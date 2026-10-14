@@ -26,8 +26,8 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 from types import MappingProxyType
 
-RULES_VERSION = "1"
-BASIS_VERSION = "1"
+RULES_VERSION = "2"
+BASIS_VERSION = "2"
 
 
 class UnsupportedVersion(LookupError):

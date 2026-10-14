@@ -355,7 +355,7 @@ def test_basis_is_exact_and_independent_of_requirement_order(career):
     first, second = run(root, a, b, c), run(root, c, a, b)
     assert canonical_json(first.basis.as_dict()) == canonical_json(second.basis.as_dict())
     data = first.basis.as_dict()
-    assert data["basis_version"] == "1" and data["rules_version"] == "1" and data["requirement_count"] == 3
+    assert data["basis_version"] == "2" and data["rules_version"] == "2" and data["requirement_count"] == 3
     assert [r["id"] for r in data["requirements"]] == ["r1", "r2", "r3"]
     r1 = data["requirements"][0]
     assert set(r1) == {"id", "class", "outcome", "facts", "status_floor"}
