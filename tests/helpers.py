@@ -159,3 +159,25 @@ def make_career(root: Path) -> dict[str, str]:
     made["cka"] = add("certification", name="Certified Kubernetes Administrator", year="2023")
     made["kubewatch"] = add("project", name="kubewatch", text="Open-source tool that streams Kubernetes events, used by 300+ teams.")
     return made
+
+
+# --- write-scope checks -----------------------------------------------------------------
+
+def state(root: Path) -> dict[str, bytes]:
+    """`snapshot(root)` plus the ledger bytes under `ledger.jsonl` (empty when there is no ledger)."""
+    out = snapshot(root)
+    path = root / "ledger.jsonl"
+    out["ledger.jsonl"] = path.read_bytes() if path.exists() else b""
+    return out
+
+
+def assert_only_ledger_appended(before: dict[str, bytes], after: dict[str, bytes], expected_types: list[str]) -> None:
+    """Every file except `ledger.jsonl` is byte-identical, the old ledger bytes are an exact prefix of the new, and the
+    appended events have exactly `expected_types`, in order. Both arguments come from `state(root)`."""
+    import json
+
+    assert {k: v for k, v in before.items() if k != "ledger.jsonl"} == {k: v for k, v in after.items() if k != "ledger.jsonl"}
+    old, new = before["ledger.jsonl"], after["ledger.jsonl"]
+    assert new.startswith(old), "the old ledger bytes are not a prefix of the new ledger"
+    appended = [json.loads(line)["type"] for line in new[len(old):].splitlines()]
+    assert appended == list(expected_types)

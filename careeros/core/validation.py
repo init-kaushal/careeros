@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from careeros.core import fold, ids, ledger, models, versions
+from careeros.core.compensation import service as compensation_service
 from careeros.core.evaluation import integrity as evaluation_integrity
 from careeros.core.memory import store
 from careeros.core.models import Issue, State
@@ -61,7 +62,7 @@ def _evaluation_ids(root: Path) -> set[str]:
     return found
 
 
-def validate_workspace(root: Path) -> list[Issue]:
+def validate_workspace(root: Path, now: str | None = None) -> list[Issue]:
     root = Path(root)
     issues: list[Issue] = []
 
@@ -187,6 +188,7 @@ def validate_workspace(root: Path) -> list[Issue]:
 
     # --- evaluations ---
     issues.extend(evaluation_integrity.validate_workspace(root, events))
+    issues.extend(compensation_service.validate_workspace(root, now))
     evaluation_ids = _evaluation_ids(root)
     reported: set[str] = set()
     memory_ids = store.known_ids(root)
