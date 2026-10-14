@@ -208,9 +208,38 @@ def test_conflict_with_a_verified_floor_also_counts_as_unknown() -> None:
     assert run2(derived(obs("a", low=1, high=2), obs("b", low=3, high=4))).confidence.value == "medium"
 
 
-def test_effective_but_not_confident_estimate_gets_no_low_confidence_item() -> None:
-    result = run2(derived(obs(kind="estimate", high=1, conf="low")))
-    assert not any("confidence" in t for t in texts(result))
+def test_effective_low_confidence_estimate_gets_only_the_estimate_item() -> None:
+    result = run2(derived(obs(kind="estimate", low=1, high=2, conf="low")))
+    pay = [a.message for a in result.action_items if a.ref == "pay"]
+    assert pay == ["pay is estimated only (estimate); ask the recruiter for a range"]
+
+
+def test_only_incomparable_observations_do_not_say_undisclosed() -> None:
+    result = run2(derived(obs("a", currency="USD"), obs("b", currency="EUR")))
+    assert result.confidence.value == "medium"
+    pay = [a.message for a in result.action_items if a.ref == "pay"]
+    assert pay == [
+        "pay observation a cannot be compared with the floor (FX_CONVERSION_MISSING); resolve it before relying on pay",
+        "pay observation b cannot be compared with the floor (FX_CONVERSION_MISSING); resolve it before relying on pay",
+    ]
+    assert [a.message for a in run2(derived()).action_items if a.ref == "pay"] == [
+        "not disclosed in the posting; ask the recruiter"]
+
+
+def test_the_pay_texts_are_pinned_literally() -> None:
+    assert score.ITEM_PAY_ESTIMATE_ONLY == "pay is estimated only ({kind}); ask the recruiter for a range"
+    assert score.ITEM_PAY_CONFLICT == "resolve conflicting {kind} pay figures"
+    assert score.ITEM_PAY_INCOMPARABLE == ("pay observation {ref} cannot be compared with the floor ({reason}); "
+                                           "resolve it before relying on pay")
+    assert score.ITEM_PAY_LOW_CONFIDENCE == "a {kind} pay figure has low source confidence; confirm it with the recruiter"
+    assert score.REASON_COMPENSATION_V2 == ("the {kind} range tops out at {high} {currency} ({basis}), "
+                                            "below the verified floor of {amount} {currency} ({basis})")
+    assert texts(run2(derived(obs("a", low=1, high=2), obs("b", low=3, high=4)))) [-1] == (
+        "pay: resolve conflicting posted pay figures")
+    assert "pay: a posted pay figure has low source confidence; confirm it with the recruiter" in texts(
+        run2(derived(obs(high=FLOOR_AMOUNT + 5, conf="low"))))
+    assert run2(derived(obs(kind="recruiter", high=3_000_000))).caps[0].reason == (
+        "the recruiter range tops out at 3000000 INR (base), below the verified floor of 3500000 INR (base)")
 
 
 def test_floor_items_and_pay_items_come_after_the_sponsorship_items_in_order() -> None:
@@ -310,9 +339,23 @@ def test_a_v1_layout_under_basis_2_and_a_v2_layout_under_basis_1_are_malformed()
         score.score(v1)
 
 
-def test_v2_basis_may_pair_with_rules_1_and_the_input_is_not_mutated() -> None:
+def test_mismatched_basis_and_rules_versions_are_malformed_in_both_directions() -> None:
+    for basis_version, rules_version in (("2", "1"), ("1", "2")):
+        b = basis2(caps2(derived(obs())))
+        b["basis_version"], b["rules_version"] = basis_version, rules_version
+        with pytest.raises(ValueError, match="malformed basis"):
+            score.score(b)
     b = basis2(caps2(derived(obs())))
-    b["rules_version"] = "1"
+    b["rules_version"] = "9"                                                # unknown still wins, and is not ValueError
+    with pytest.raises(UnsupportedVersion):
+        score.score(b)
+    b["rules_version"], b["basis_version"] = "1", "9"
+    with pytest.raises(UnsupportedVersion):
+        score.score(b)
+
+
+def test_the_input_is_not_mutated() -> None:
+    b = basis2(caps2(derived(obs())))
     before = copy.deepcopy(b)
     assert codes(score.score(b)) == ["compensation"] and b == before
 
@@ -321,3 +364,126 @@ def test_sponsorship_cap_still_works_under_v2() -> None:
     need = {"value": "yes", "verification": "verified", "source_cell": "required", "row_state": "parseable"}
     result = run2(derived(obs(high=FLOOR_AMOUNT + 1)), need=need, listing="not_offered", quote=True)
     assert codes(result) == ["sponsorship"]
+
+
+# --- cross-field validation ---------------------------------------------------------------------------------
+
+def two_incomparable():
+    return derived(obs("a", high=3_000_000), obs("b", high=3_100_000, currency="USD"))
+
+
+def ok(cap):
+    assert score.score(basis2(cap)).tier is not None
+
+
+def malformed(cap):
+    with pytest.raises(ValueError, match="malformed basis"):
+        score.score(basis2(cap))
+
+
+def with_comp(comp, **changes):
+    comp = copy.deepcopy(comp)
+    comp.update(changes)
+    return caps2(comp)
+
+
+def test_cross_field_rules_each_have_a_positive_and_a_negative_case() -> None:
+    eff = derived(obs("a", low=1, high=2))
+    none_inc = derived(obs("a", currency="USD"))
+    conflict = derived(obs("a", low=1, high=2), obs("b", low=3, high=4))
+    est = derived(obs("a", kind="estimate", low=1, high=2))
+    inc = two_incomparable()
+    for good in (eff, none_inc, conflict, est, inc, derived()):
+        ok(caps2(good))
+    # effective needs a kind and an observation of it
+    malformed(with_comp(eff, kind=None))
+    malformed(with_comp(eff, observations=[]))
+    malformed(with_comp(eff, kind="recruiter"))
+    # none / conflict carry no range
+    malformed(with_comp(none_inc, low=1))
+    malformed(with_comp(none_inc, high=5))
+    malformed(with_comp(conflict, high=5))
+    # bounds
+    ok(with_comp(eff, low=0, high=0))
+    malformed(with_comp(eff, low=-1))
+    malformed(with_comp(eff, high=-1))
+    malformed(with_comp(eff, low=3, high=2))
+    ok(with_comp(eff, low=2, high=2))
+    ok(with_comp(eff, low=None, high=2))
+    # unique ids
+    dup = copy.deepcopy(inc)
+    dup["observations"][1]["id"] = "a"
+    malformed(caps2(dup))
+    # incomparable notes
+    for mutate in (lambda c: c["notes"][0].update(ref="zzz"), lambda c: c["notes"][0].update(ref="a"),
+                   lambda c: c["notes"][0].update(detail="BASIS_MISMATCH"), lambda c: c["notes"].clear(),
+                   lambda c: c["notes"].append(dict(c["notes"][0]))):
+        c = copy.deepcopy(inc)
+        mutate(c)
+        malformed(caps2(c))
+    # a comparable observation marked incomparable without a note / a note for a comparable one
+    c = copy.deepcopy(eff)
+    c["observations"][0].update(comparable=False, reason="BASIS_MISMATCH")
+    malformed(caps2(c))
+    # conflict / estimate_only notes
+    for note in (dict(code="conflict", ref="a", detail="posted"), dict(code="conflict", ref=None, detail="recruiter")):
+        c = copy.deepcopy(conflict)
+        c["notes"] = [note]
+        malformed(caps2(c))
+    malformed(with_comp(conflict, notes=[]))
+    malformed(with_comp(conflict, notes=conflict["notes"] * 2))
+    malformed(with_comp(eff, notes=[dict(code="conflict", ref=None, detail="posted")]))
+    malformed(with_comp(eff, notes=[dict(code="estimate_only", ref=None, detail="posted")]))
+    malformed(with_comp(est, notes=[]))
+    ok(with_comp(est, notes=est["notes"]))
+    # kind_complete
+    malformed(with_comp(eff, kind_complete=False))
+    malformed(with_comp(inc, kind_complete=True))
+    malformed(with_comp(derived(), kind_complete=True))
+    ok(with_comp(inc, kind_complete=False))
+
+
+def test_floor_cross_field_rules() -> None:
+    comp = derived(obs())
+    ok(caps2(comp, floor_in(FLOOR_AMOUNT, row_state="parseable")))
+    malformed(caps2(comp, floor_in(FLOOR_AMOUNT, row_state="unreadable")))                   # verified needs a parseable row
+    malformed(caps2(comp, floor_in(None, None, "base", "verified", "x", "parseable")))      # verified needs amount and currency
+    malformed(caps2(comp, floor_in(FLOOR_AMOUNT, basis=None)))                               # ... and a basis
+    ok(caps2(comp, floor_in(FLOOR_AMOUNT, verification="unverified", row_state="unreadable")))
+    ok(caps2(comp, no_floor("unverified", None, "no_market")))
+    ok(caps2(comp, floor_in(None, None, None, "unverified", "INR", "parseable")))            # incomplete value: allowed
+    malformed(caps2(comp, floor_in(FLOOR_AMOUNT, verification="unverified", row_state="parseable")))
+
+
+def test_v1_still_words_the_unreachable_v2_floor_items() -> None:
+    assert score.ITEM_FLOOR_NO_VALUE and score.ITEM_FLOOR_INCOMPLETE
+
+
+def _random_record(rng):
+    kinds = ("posted", "recruiter", "estimate")
+    obs_list = []
+    for i in range(rng.randint(0, 4)):
+        low = rng.choice((None, rng.randint(0, 40)))
+        high = rng.choice((None, rng.randint(low or 0, 60)))
+        obs_list.append(Observation(
+            f"o{i}", rng.choice(kinds), low, high, rng.choice(("INR", "USD")), MarketBasis(rng.choice(("base", "total"))),
+            rng.choice(("year", "month")), "jd", None, date(2026, 6, rng.randint(1, 28)), rng.choice(("high", "medium", "low"))))
+    conv = ()
+    if rng.random() < 0.6:
+        conv = (Conversion("USD", "INR", F(rng.randint(1, 100), rng.randint(1, 7)), "rbi", date(2026, 6, rng.randint(1, 28))),)
+    return obs_list, conv
+
+
+def test_every_to_basis_output_over_random_records_passes_the_validator() -> None:
+    import random
+    rng = random.Random(20261014)
+    statuses = set()
+    for _ in range(1500):
+        obs_list, conv = _random_record(rng)
+        verified = rng.random() < 0.8
+        info = FloorInfo(30, "INR", "base", True) if verified else FloorInfo(None, None, None, False)
+        comp = derived(*obs_list, floor=info, conversions=conv)
+        statuses.add(comp["status"])
+        floor = floor_in(30, source_cell="INR 30") if verified else no_floor("unverified", "TBD", "unreadable")
+        score.score(basis2(caps2(comp, floor)))
+    assert statuses == {"effective", "none", "conflict"}

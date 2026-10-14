@@ -22,6 +22,9 @@ source_cell, row_state}, compensation}` where `compensation` is `careeros.core.c
 `compensation.derive.cap_applies` (the one cap decision), the unknown-pay confidence step applies when the floor is
 verified and `compensation.status != "effective"`, and pay items come from the notes. The v1 paths are unchanged.
 
+An effective estimate with low confidence gets only the estimate-only item (no low-confidence item: that one is for
+`posted` and `recruiter`). The released pairs are (basis, rules) = (1, 1) and (2, 2); a mixed pair is malformed.
+
 Errors: `score` takes only the basis and resolves `basis_schema_for(basis_version)` then `rules_for(rules_version)`
 itself. Callers catch `UnsupportedVersion` first (cannot verify, EVL010), then `ValueError` (malformed, EVL007). An
 unknown version is always `UnsupportedVersion`, never `ValueError`; every other defect (missing or extra keys, wrong
@@ -116,6 +119,7 @@ _VERIFICATION_V2 = ("verified", "unverified")
 _COMP_STATUS = ("effective", "none", "conflict")
 _COMP_KINDS = ("posted", "recruiter", "estimate")
 _COMP_REASONS = ("FLOOR_UNVERIFIED", "BASIS_MISMATCH", "FX_CONVERSION_MISSING", "FX_RATE_OUTSIDE_WINDOW")
+_PAIRED = ("1", "2")        # released basis/rules versions, which are only ever used as the same number on both
 _NOTE_CODES = ("estimate_only", "conflict", "incomparable")
 _NATURAL = re.compile(r"([A-Za-z_]*)(\d+)")
 
@@ -284,13 +288,14 @@ def _validate_cap_v2(cap: dict) -> None:
            floor["amount"] is None and floor["currency"] is None)
     if floor["verification"] == "verified" and floor["basis"] is None:
         _bad("floor is verified but has no basis")
+    if (floor["verification"] == "unverified" and floor["row_state"] == "parseable"
+            and floor["amount"] is not None and floor["currency"] is not None):
+        _bad("floor is unverified although its Markets row is readable and complete")
     comp = cap["compensation"]
     _keys(comp, ("status", "kind", "low", "high", "kind_complete", "kind_confident", "observations", "notes"),
           "compensation")
     _one_of(comp["status"], _COMP_STATUS, "compensation status")
     _one_of(comp["kind"], (*_COMP_KINDS, None), "compensation kind")
-    if comp["status"] == "effective" and comp["kind"] is None:
-        _bad("compensation is effective but has no kind")
     _exact_or_none(comp["low"], "compensation low")
     _exact_or_none(comp["high"], "compensation high")
     for flag in ("kind_complete", "kind_confident"):
@@ -316,6 +321,44 @@ def _validate_cap_v2(cap: dict) -> None:
         _str_or_none(n["ref"], "compensation note ref")
         if type(n["detail"]) is not str:
             _bad(f"compensation note detail {n['detail']!r} is not a string")
+    _validate_compensation_fields(comp)
+
+
+def _validate_compensation_fields(comp: dict) -> None:
+    """Cross-field rules: shapes `compensation.derive.to_basis` can never produce are malformed."""
+    status, kind, obs = comp["status"], comp["kind"], comp["observations"]
+    ids = [o["id"] for o in obs]
+    if len(set(ids)) != len(ids):
+        _bad("compensation observation ids are not unique")
+    same = [o for o in obs if o["kind"] == kind]
+    if status == "effective" and (kind is None or not same):
+        _bad("compensation is effective without a kind or an observation of that kind")
+    low = None if comp["low"] is None else parse_exact(comp["low"])
+    high = None if comp["high"] is None else parse_exact(comp["high"])
+    if status != "effective" and (low is not None or high is not None):
+        _bad(f"compensation is {status} but carries a range")
+    if (low is not None and low < 0) or (high is not None and high < 0):
+        _bad("compensation bounds are negative")
+    if low is not None and high is not None and low > high:
+        _bad("compensation low exceeds high")
+    if comp["kind_complete"] != (kind is not None and bool(same) and all(o["comparable"] for o in same)):
+        _bad("compensation kind_complete disagrees with the observations of the kind")
+    incomparable = {o["id"]: o["reason"] for o in obs if not o["comparable"]}
+    seen: list[str] = []
+    for n in comp["notes"]:
+        if n["code"] == "incomparable":
+            if n["ref"] not in incomparable or n["detail"] != incomparable[n["ref"]]:
+                _bad(f"incomparable note {n['ref']!r} does not match an incomparable observation and its reason")
+            seen.append(n["ref"])
+        elif n["ref"] is not None or kind is None or n["detail"] != kind:
+            _bad(f"{n['code']} note must have a null ref and the kind as detail")
+    if sorted(seen) != sorted(incomparable):
+        _bad("every incomparable observation needs exactly one incomparable note")
+    codes = [n["code"] for n in comp["notes"]]
+    if codes.count("estimate_only") != (1 if status == "effective" and kind == "estimate" else 0):
+        _bad("an estimate_only note exists exactly when an estimate is the effective kind")
+    if codes.count("conflict") != (1 if status == "conflict" else 0):
+        _bad("a conflict note exists exactly when the status is conflict")
 
 
 def _state(name: str, field: dict, complete: bool, empty: bool) -> None:
@@ -416,7 +459,8 @@ def _share(part: Fraction, whole: Fraction) -> Fraction:
     return part / whole if whole else Fraction(0)
 
 
-def _confidence(basis: dict, reqs: list[dict], rules: Rules, coverage: Fraction | None, fit: Fraction | None) -> Confidence:
+def _confidence(basis: dict, reqs: list[dict], rules: Rules, coverage: Fraction | None, fit: Fraction | None,
+                v2: bool = False) -> Confidence:
     if coverage is None:
         return Confidence.LOW
     cap_inputs = basis["cap_inputs"]
@@ -435,7 +479,7 @@ def _confidence(basis: dict, reqs: list[dict], rules: Rules, coverage: Fraction 
         steps += 1
     need, floor = cap_inputs["need"], cap_inputs["floor"]
     need_is_no = need["verification"] == "verified" and need["value"] == "no"
-    if basis["basis_version"] == "2":
+    if v2:
         pay_unknown = cap_inputs["compensation"]["status"] != "effective"
     else:
         pay_unknown = cap_inputs["range"] is None
@@ -530,6 +574,8 @@ def _score(basis: dict) -> ScoreResult:
         _bad("a mapping with basis_version and rules_version is required")
     schema = basis_schema_for(basis["basis_version"])
     rules = rules_for(basis["rules_version"])
+    if basis["basis_version"] in _PAIRED and basis["rules_version"] in _PAIRED and basis["basis_version"] != basis["rules_version"]:
+        _bad(f"basis_version {basis['basis_version']!r} and rules_version {basis['rules_version']!r} move together")
     _validate(basis, schema.keys, rules)
     reqs = _requirements(basis)
     coverage, fit = _coverage(reqs, rules), _fit(basis, rules)
@@ -541,5 +587,5 @@ def _score(basis: dict) -> ScoreResult:
         combined = coverage if fit is None else rules.coverage_share * coverage + rules.fit_share * fit
         tier = _lowest(tier_for(combined, rules), [c.ceiling for c in caps])
     return ScoreResult(coverage, fit, combined, tier, caps,
-                       _confidence(basis, reqs, rules, coverage, fit),
+                       _confidence(basis, reqs, rules, coverage, fit, v2),
                        _action_items(reqs, basis["cap_inputs"], caps, v2))
