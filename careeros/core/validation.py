@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from careeros.core import ids, ledger, models, versions
+from careeros.core import fold, ids, ledger, models, versions
+from careeros.core.evaluation import integrity as evaluation_integrity
 from careeros.core.memory import store
 from careeros.core.models import Issue, State
 from careeros.core.state_machine import (
@@ -26,17 +27,9 @@ from careeros.core.workspace import (
     split_frontmatter,
 )
 
-_FOLD_MARKER = "do not read past this line"
+_FOLD_MARKER = fold.FOLD_MARKER
 _RESTORE_LEDGER = "restore ledger.jsonl from .careeros/backups or version control"
-
-
-def _above_fold(text: str) -> str:
-    kept: list[str] = []
-    for line in text.splitlines(keepends=True):
-        if _FOLD_MARKER in line:
-            break
-        kept.append(line)
-    return "".join(kept)
+_above_fold = fold.above_fold
 
 
 def _lenient_events(root: Path) -> list[dict]:
@@ -54,6 +47,18 @@ def _lenient_events(root: Path) -> list[dict]:
         if isinstance(event, dict):
             events.append(event)
     return events
+
+
+def _evaluation_ids(root: Path) -> set[str]:
+    found: set[str] = set()
+    for path in sorted((root / "jobs" / "discovered").glob("*/evaluation.md")):
+        try:
+            frontmatter, _ = split_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, WorkspaceError, RecursionError, MemoryError):
+            continue
+        if frontmatter and isinstance(frontmatter.get("id"), str):
+            found.add(frontmatter["id"])
+    return found
 
 
 def validate_workspace(root: Path) -> list[Issue]:
@@ -179,6 +184,10 @@ def validate_workspace(root: Path) -> list[Issue]:
     # --- ledger ---
     issues.extend(ledger.verify_chain(root))
     events = _lenient_events(root)
+
+    # --- evaluations ---
+    issues.extend(evaluation_integrity.validate_workspace(root, events))
+    evaluation_ids = _evaluation_ids(root)
     reported: set[str] = set()
     memory_ids = store.known_ids(root)
     for event in events:
@@ -195,6 +204,11 @@ def validate_workspace(root: Path) -> list[Issue]:
             add("error", "LED003", "ledger.jsonl",
                 f"event {event.get('seq')} refers to {entity}, but no career file has that id",
                 "restore the file from .careeros/backups or version control; retire facts with `careeros memory retire` instead of deleting them")
+        elif entity.startswith("evl_") and entity not in evaluation_ids:
+            reported.add(entity)
+            add("error", "LED003", "ledger.jsonl",
+                f"event {event.get('seq')} refers to {entity}, but no evaluation.md has that id",
+                "restore the evaluation.md from .careeros/backups or version control; evaluations are replaced with `careeros evaluate`, not deleted")
     for event in events:
         if event.get("type") != "job.status_changed":
             continue

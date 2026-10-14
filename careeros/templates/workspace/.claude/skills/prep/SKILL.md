@@ -40,6 +40,18 @@ If the job file exists but has no JD text, navigate to the job URL and extract t
 
 ## STEP 2 — ANALYSE THE JOB
 
+**First, check for a fresh evaluation** of this job. This check only reads; do not run `careeros evaluate` to test freshness, because it rewrites the stored result. The evaluation is **fresh** only when all three hold:
+
+1. `jobs/discovered/[job-slug]/evaluation.md` exists;
+2. it has a `result:` in its frontmatter (open the file and look: a skeleton made by `--init` has none, and `careeros validate` prints nothing for a skeleton);
+3. `careeros validate` reports **no** finding from `EVL001` through `EVL010` for that path. `EVL008` means stale (the posting, the career memory, the rubric or Markets table, or the judgements changed); `EVL004` appears **instead of** `EVL008` when the posting changed so that a quote no longer matches `jd.md`; `EVL007` means the result was edited; `EVL009` means the file and the ledger disagree; `EVL010` means it cannot be verified; `EVL001`, `EVL002`, `EVL003`, `EVL005` and `EVL006` mean the record is invalid.
+
+Anything else is not fresh: no file, a skeleton, any finding from `EVL001` through `EVL010`, or `careeros validate` reports errors in the career memory (`MEM` codes). Then run the `evaluate` skill first (it re-reads `jd.md`, re-extracts and runs `careeros evaluate` itself), and come back here. Never analyse from a stale evaluation. If `careeros validate` cannot find a workspace, tell the user and stop.
+
+`EVL011` is only a notice about the profile's Markets data, not staleness: mention it to the user and carry on.
+
+When it is fresh, use its requirement list (`requirements`, with the `id`, `outcome` and `facts` of each) as the starting point below instead of extracting the requirements again, and add only what the evaluation does not hold (company and role signals, ATS keywords).
+
 From the JD, extract:
 
 **Must-haves** — hard requirements (years of exp, specific tech, certifications)
@@ -55,6 +67,7 @@ From the JD, extract:
 For each must-have and strong signal:
 - Find the closest match in your profile (skills, experience, projects)
 - Rate the fit: **direct** / **adjacent** / **gap**
+- When there is a fresh evaluation, take the outcome of each requirement from it: lead with the facts of the `covered` requirements, and state `adjacent`, `gap` and `unverifiable` honestly as what they are (related experience, not a match; not in the memory; cannot be derived from dates). The verdict is never proof of a claim: every sentence you draft still goes through the EVIDENCE GATE above.
 
 Gaps to flag honestly — don't paper over them, but note if they can be addressed with context (e.g. "used Kafka in adjacent tech X").
 
