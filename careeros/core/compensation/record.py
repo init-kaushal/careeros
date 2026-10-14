@@ -5,7 +5,13 @@ the clock or touches a workspace. `skeleton` returns bytes for the caller (`care
 Reading (`load` / `from_text`): the frontmatter is read by a strict YAML loader that, unlike `workspace.split_frontmatter`,
 refuses duplicate mapping keys, merge keys and aliases, so a hand-edited file cannot say two things. Anything that cannot
 be read (bad bytes, no frontmatter, invalid or duplicate-key YAML, tabs, a non-mapping root, nesting too deep) raises
-`RecordError` with code `CMP001`; no other exception escapes. `Loaded.fm` is the frontmatter exactly as YAML read it.
+`RecordError` with code `CMP001`; no other exception escapes. CRLF and lone CR line endings are read as LF (the
+frontmatter parses identically; `Loaded.raw` keeps the original bytes for hashing, and the `invalid:` stamp normalises
+whitespace so CRLF and LF give the same value). Two YAML 1.1 hazards are closed in the loader: an unquoted impossible
+date (`2026-02-30`) is kept as its text so the field reports `CMP002` instead of failing the whole file, and an integer
+written in any spelling other than plain decimal digits (`010`, `0x10`, `1_000`, `1:30`) is kept as text so an amount
+reports `CMP003` instead of silently changing value. Strings that cannot be encoded as UTF-8 (a lone surrogate from
+`"\\ud800"`) are `CMP002`. `Loaded.fm` is the frontmatter exactly as YAML read it.
 
 Codes (every problem is collected, none stops the scan):
 
@@ -22,8 +28,9 @@ Codes (every problem is collected, none stops the scan):
 the record is otherwise valid). `CMP007` (Markets table) and `CMP100` (age) need the profile and today's date and belong
 to `compensation.service`.
 
-Currencies are stripped and upper-cased on parse (the same normalisation `evaluation.markets.norm_currency` applies), so
-`usd` and `USD` are one currency. Dates may be YAML dates or `YYYY-MM-DD` strings; a datetime with a time is `CMP002`.
+Currencies are normalised by `evaluation.markets.norm_currency` itself (stripped, upper-cased; the parity is by
+construction), so `usd` and `USD` are one currency. A currency is NOT validated against ISO-4217: any non-empty text is
+accepted, and look-alike strings (a Cyrillic `USD`) are distinct codes; the conversion pairing then simply finds no match. Dates may be YAML dates or `YYYY-MM-DD` strings; a datetime with a time is `CMP002`.
 
 Stamp (`stamp`): the SHA-256 of the canonical form of the parsed record. An absent file, the `--init` skeleton and any
 record with `observations: []` share one value (market and conversions are ignored when there are no observations, so
@@ -33,6 +40,7 @@ under an `invalid:` prefix, so editing it still changes the stamp.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import date
 from fractions import Fraction
@@ -43,6 +51,7 @@ import yaml
 from careeros.core.compensation import rules
 from careeros.core.compensation.model import CompRecord, Conversion, Observation
 from careeros.core.evaluation.canon import canonical_json, normalize_text, sha256_hex
+from careeros.core.evaluation.markets import norm_currency
 from careeros.core.evaluation.model import MarketBasis
 from careeros.core.models import Issue
 from careeros.core.workspace import _FENCE_LINE, WorkspaceError, join_frontmatter
@@ -79,8 +88,22 @@ class Loaded:
         self.rel, self.raw, self.text, self.fm, self.body = rel, raw, text, fm, body
 
 
+_PLAIN_INT = re.compile(r"[-+]?(0|[1-9][0-9]*)")
+
+
 class _Strict(yaml.SafeLoader):
-    """SafeLoader that rejects aliases, merge keys and duplicate mapping keys."""
+    """SafeLoader that rejects aliases, merge keys and duplicate mapping keys, keeps an impossible date as its text and
+    keeps an integer that is not plain decimal digits as its text (so the field validators report it)."""
+
+    def construct_yaml_timestamp(self, node):
+        try:
+            return super().construct_yaml_timestamp(node)
+        except ValueError:
+            return self.construct_scalar(node)
+
+    def construct_yaml_int(self, node):
+        text = self.construct_scalar(node)
+        return super().construct_yaml_int(node) if _PLAIN_INT.fullmatch(text) else text
 
     def compose_node(self, parent, index):
         if self.check_event(yaml.AliasEvent):
@@ -103,6 +126,10 @@ class _Strict(yaml.SafeLoader):
         return super().construct_mapping(node, deep)
 
 
+_Strict.add_constructor("tag:yaml.org,2002:timestamp", _Strict.construct_yaml_timestamp)
+_Strict.add_constructor("tag:yaml.org,2002:int", _Strict.construct_yaml_int)
+
+
 def _rel(path: Path, root: Path | None) -> str:
     if root is not None:
         try:
@@ -115,6 +142,7 @@ def _rel(path: Path, root: Path | None) -> str:
 def from_text(text: str, rel: str = rules.COMPENSATION_FILE, raw: bytes | None = None) -> Loaded:
     """Parse the frontmatter of `text`. `RecordError` (CMP001) when there is none or it is unusable; nothing else is raised."""
     raw = text.encode("utf-8", "surrogatepass") if raw is None else raw
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     if not text.startswith("---\n"):
         raise RecordError(f"{rel} has no --- frontmatter block")
     match = _FENCE_LINE.search(text, 4)
@@ -166,8 +194,24 @@ class _Scan:
         self.issues.append(Issue("error", code, self.rel, f"{where}: {message}" if where else message, fix))
 
 
-def _text(value: object) -> str | None:
-    return value.strip() if isinstance(value, str) and value.strip() else None
+def _unencodable(value: object) -> list[str]:
+    """Paths of every string (key or value) in `value` that cannot be encoded as UTF-8; iterative, so depth is no issue."""
+    found, stack = [], [("", value)]
+    while stack:
+        path, item = stack.pop()
+        if isinstance(item, str):
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError:
+                found.append(path or "(top level)")
+        elif isinstance(item, dict):
+            for k, v in item.items():
+                stack.append((f"{path}.{k}" if path else str(k) if isinstance(k, str) else repr(k), v))
+                if isinstance(k, str):
+                    stack.append((f"{path}.{k} (key)" if path else f"{k} (key)", k))
+        elif isinstance(item, list):
+            stack.extend((f"{path}[{i}]", v) for i, v in enumerate(item))
+    return sorted(found, key=repr)
 
 
 def _date(value: object) -> date | None:
@@ -191,7 +235,8 @@ def _amount(scan: _Scan, where: str, item: dict, key: str) -> tuple[bool, int | 
         return True, None
     if type(value) is not int:
         scan.add("CMP003", where, f"`{key}` is {value!r}, not a whole number or null",
-                 f"write `{key}` as a whole integer in whole currency units (ten lakh is 1000000), or `null`")
+                 f"write `{key}` as a plain whole number in whole currency units (ten lakh is 1000000): digits only, no leading "
+                 "zero, underscore, 0x or colon; or `null`")
         return False, None
     return True, value
 
@@ -251,7 +296,7 @@ def _observation(scan: _Scan, index: int, item: object) -> Observation | None:
     basis = _enum(scan, where, item, "basis", _BASES)
     period = _enum(scan, where, item, "period", rules.PERIODS)
     confidence = _enum(scan, where, item, "confidence", rules.CONFIDENCES)
-    currency = _text(item.get("currency"))
+    currency = norm_currency(item.get("currency"))
     if currency is None:
         scan.add("CMP002", where, f"`currency` is {item.get('currency')!r}; it must be a currency code such as INR", "set `currency`")
     low_ok, low = _amount(scan, where, item, "low")
@@ -278,17 +323,17 @@ def _observation(scan: _Scan, index: int, item: object) -> Observation | None:
     complete = all(v is not None for v in (kind, basis, period, confidence, currency, source, as_of)) and low_ok and high_ok
     if not (ok and complete):
         return None
-    return Observation(ident, kind, low, high, currency.upper(), MarketBasis(basis), period, source, quote, as_of, confidence)
+    return Observation(ident, kind, low, high, currency, MarketBasis(basis), period, source, quote, as_of, confidence)
 
 
 def _currency(scan: _Scan, where: str, item: dict, key: str) -> str | None:
     value = item.get(key)
-    text = _text(value)
+    text = norm_currency(value)
     if text is None:
         scan.add("CMP002", where, f"`{key}` is {value!r}; it must be a currency code such as USD" if key in item
                  else f"`{key}` is missing", f"set `{key}` to a currency code")
         return None
-    return text.upper()
+    return text
 
 
 def _conversion(scan: _Scan, index: int, item: object) -> Conversion | None:
@@ -318,6 +363,12 @@ def parse(loaded: Loaded) -> tuple[CompRecord | None, list[Issue]]:
     """The record and `[]`, or `(None, issues)` with every problem found (all errors)."""
     scan = _Scan(loaded.rel)
     fm = loaded.fm
+    bad = _unencodable(fm)
+    if bad:
+        for where in bad:
+            scan.add("CMP002", where, "text contains a character that cannot be stored (a lone surrogate)",
+                     "remove the character or rewrite the text")
+        return None, scan.issues
     _unknown(scan, "", fm, _TOP_KEYS)
     for key in _REQUIRED_TOP:
         if key not in fm:
@@ -414,6 +465,15 @@ def canonical(rec: CompRecord) -> dict:
     return out
 
 
+def _hash_canonical(obj: dict) -> str:
+    """`canonical_json` hash; a record built by hand with an unencodable string falls back to the ASCII-escaped form
+    instead of raising (a parsed record never has one)."""
+    try:
+        return sha256_hex(canonical_json(obj))
+    except UnicodeEncodeError:
+        return sha256_hex(json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii"))
+
+
 EMPTY_STAMP = sha256_hex(canonical_json({"schema": rules.SCHEMA, "observations": [], "conversions": []}))
 
 
@@ -422,7 +482,7 @@ def stamp(rec: CompRecord | None, raw_text: str | None) -> str:
     observations). `rec` None and `raw_text` None (no file): `EMPTY_STAMP`. `rec` None and `raw_text` given (the file
     does not parse): the hash of `invalid:` plus the normalised text."""
     if rec is not None:
-        return sha256_hex(canonical_json(canonical(rec))) if rec.observations else EMPTY_STAMP
+        return _hash_canonical(canonical(rec)) if rec.observations else EMPTY_STAMP
     if raw_text is None:
         return EMPTY_STAMP
     return sha256_hex(("invalid:" + normalize_text(raw_text)).encode("utf-8", "surrogatepass"))

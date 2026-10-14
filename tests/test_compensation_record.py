@@ -535,3 +535,124 @@ def test_importing_the_package_pulls_in_no_evaluation_record_or_validation():
             "print(bad); sys.exit(1 if bad else 0)")
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+# --- fix round 1 -----------------------------------------------------------------------------------
+
+def _doc_with(old, new):
+    text = doc()
+    assert old in text, old
+    return text.replace(old, new)
+
+
+@pytest.mark.parametrize("old,field", [
+    ("source: call", "source"), ("id: c1", "id"), ("currency: USD", "currency"), ("market: India (home)", "market"),
+])
+def test_lone_surrogate_in_observation_text_is_cmp002(old, field):
+    text = _doc_with(old, f'{old.split(":")[0]}: "\\ud800"')
+    issues = record.validate(record.from_text(text), JD)
+    assert {i.code for i in issues} == {"CMP002"}
+    assert any(field in i.message for i in issues)
+
+
+def test_lone_surrogate_in_quote_and_conversion_fields():
+    assert codes(doc(observations=[obs(kind="posted", quote="a\ud800b")]), JD) == ["CMP002"]
+    for key in ("source", "from", "to"):
+        assert codes(doc(conversions=[conv(**{key: "x\udfff"})])) == ["CMP002"]
+
+
+def test_stamp_and_canonical_never_raise():
+    assert record.stamp(None, "raw \ud800 text")
+    assert record.stamp(None, "raw \ud800 text") != record.stamp(None, "raw \udc00 text")
+    bad = CompRecord("m\ud800", (Observation("a\ud800", "recruiter", 1, 2, "USD", MarketBasis.BASE, "year", "s", None,
+                                             datetime.date(2026, 1, 1), "high"),), (), "")
+    assert record.stamp(bad, None)
+    assert record.canonical(bad)
+
+
+def test_crlf_file_parses_like_lf():
+    lf = SPEC_EXAMPLE
+    crlf = lf.replace("\n", "\r\n")
+    cr = lf.replace("\n", "\r")
+    a = record.from_text(lf)
+    for variant in (crlf, cr):
+        b = record.from_text(variant, raw=variant.encode())
+        assert b.raw == variant.encode()
+        ra, ia = record.parse(a)
+        rb, ib = record.parse(b)
+        assert ib == [] and record.canonical(ra) == record.canonical(rb)
+        assert record.stamp(ra, None) == record.stamp(rb, None)
+    bad = "---\nschema: 1\nmarket: x\nobservations: 5\n---\nnotes\n"
+    assert record.stamp(None, bad) == record.stamp(None, bad.replace("\n", "\r\n"))
+
+
+def test_crlf_file_via_load(tmp_path):
+    p = tmp_path / "compensation.md"
+    p.write_bytes(SPEC_EXAMPLE.replace("\n", "\r\n").encode())
+    loaded = record.load(p, tmp_path)
+    assert loaded.raw == SPEC_EXAMPLE.replace("\n", "\r\n").encode()
+    rec, issues = record.parse(loaded)
+    assert issues == [] and rec is not None
+
+
+@pytest.mark.parametrize("value", ["2026-02-30", "0000-01-01", "2026-13-45", "2026-02-30 10:00:00"])
+@pytest.mark.parametrize("quoted", [False, True])
+def test_impossible_dates_are_cmp002_not_cmp001(value, quoted):
+    shown = f'"{value}"' if quoted else value
+    obs_text = _doc_with("as_of: '2026-10-12'", f"as_of: {shown}")
+    assert codes(obs_text) == ["CMP002"]
+    conv_text = doc(conversions=[conv()]).replace("as_of: '2026-10-10'", f"as_of: {shown}")
+    assert "as_of: " + shown in conv_text
+    assert codes(conv_text) == ["CMP002"]
+
+
+@pytest.mark.parametrize("spelling", ["010", "0500", "1:30", "0x10", "1_000", "0b11", "0o7", "00", "-010"])
+def test_odd_integer_spellings_are_cmp003(spelling):
+    for key in ("low", "high"):
+        text = join_frontmatter({"schema": 1, "market": "m", "observations": [obs(low=None, high=None)],
+                                 "conversions": []}, "").replace(f"{key}: null", f"{key}: {spelling}")
+        issues = record.validate(record.from_text(text), None)
+        assert {i.code for i in issues} == {"CMP003"}, spelling
+        assert "plain" in issues[0].fix
+
+
+@pytest.mark.parametrize("spelling,value", [("0", 0), ("7", 7), ("+7", 7), ("3000000", 3000000)])
+def test_plain_integer_spellings_are_accepted(spelling, value):
+    text = join_frontmatter({"schema": 1, "market": "m", "observations": [obs(low=None, high=None)],
+                             "conversions": []}, "").replace("low: null", f"low: {spelling}")
+    rec, issues = record.parse(record.from_text(text))
+    assert issues == [] and rec.observations[0].low == value
+
+
+def test_currency_uses_the_evaluation_normalisation_and_accepts_odd_codes():
+    from careeros.core.evaluation.markets import norm_currency
+    for raw in (" usd ", "Rs.", "уsd", "US D", "₹", "1234"):
+        rec, issues = parse(doc(observations=[obs(currency=raw)]))
+        assert issues == [] and rec.observations[0].currency == norm_currency(raw)
+    cyr, _ = parse(doc(observations=[obs(currency="уsd")]))
+    lat, _ = parse(doc(observations=[obs(currency="usd")]))
+    assert cyr.observations[0].currency != lat.observations[0].currency       # not validated against ISO-4217
+
+
+def test_invalid_stamp_is_pinned():
+    import hashlib
+    from careeros.core.evaluation.canon import normalize_text
+    text = "---\nschema: 1\nobservations: 5\n---\nbody  here\n"
+    norm = normalize_text(text)
+    assert record.stamp(None, text) == hashlib.sha256(("invalid:" + norm).encode()).hexdigest()
+    assert record.stamp(None, text) != hashlib.sha256(norm.encode()).hexdigest()
+
+
+def test_unparseable_file_through_stamp():
+    text = "---\nschema: 1\nschema: 2\n---\n"
+    with pytest.raises(record.RecordError):
+        record.from_text(text)
+    assert record.stamp(None, text) != record.stamp(None, None)
+    assert record.stamp(None, text) != record.stamp(None, text + "x")
+
+
+def test_valid_alias_is_rejected():
+    text = "---\nschema: 1\nmarket: null\nobservations: []\nconversions: []\nx: &a 1\ny: *a\n---\n"
+    with pytest.raises(record.RecordError) as err:
+        record.from_text(text)
+    assert err.value.code == "CMP001"
