@@ -87,6 +87,14 @@ class RulesV1(Rules):
 
 
 @dataclass(frozen=True)
+class RulesV2(RulesV1):
+    """Rules version 2: every v1 constant unchanged, plus the compensation constants (versioned with the rules)."""
+
+    version: str = "2"
+    fx_window_days: int = 30            # an exchange rate counts for observations at most this many days after its date
+
+
+@dataclass(frozen=True)
 class BasisSchema:
     """The layout of `result.basis` for one basis version: its top-level keys, in canonical documentation order.
 
@@ -94,17 +102,27 @@ class BasisSchema:
     currency, basis} | null, floor: {amount, currency, basis, verification, source_cell, row_state}, confidence,
     as_of}`; `row_state` is `parseable | unreadable | no_market` (whether the Markets row gave the parser a value,
     recorded at build time so scoring never re-parses a cell).
+
+    v2 has the same top-level keys; only `cap_inputs` differs: `{market, need: {value, verification, source_cell,
+    row_state}, listing, quote, floor: {amount, currency, basis, verification, source_cell, row_state}, compensation:
+    {status, kind, low, high, kind_complete, kind_confident, observations, notes}}` (the `compensation` object is
+    `careeros.core.compensation.derive.to_basis`). `range`, `confidence` and `as_of` are gone; the floor comes from the
+    Markets row alone, so its verification is `verified` or `unverified` (never `conflict`).
     """
 
     version: str
     keys: tuple[str, ...]
 
 
-RULES: dict[str, Rules] = {"1": RulesV1()}
+RULES: dict[str, Rules] = {"1": RulesV1(), "2": RulesV2()}
 
 BASIS_VERSIONS: dict[str, BasisSchema] = {
     "1": BasisSchema(
         version="1",
+        keys=("basis_version", "rules_version", "requirement_count", "rubric_state", "requirements", "fit", "cap_inputs"),
+    ),
+    "2": BasisSchema(
+        version="2",
         keys=("basis_version", "rules_version", "requirement_count", "rubric_state", "requirements", "fit", "cap_inputs"),
     ),
 }

@@ -602,7 +602,7 @@ def test_no_float_arithmetic_outside_the_serialiser():
 
 def test_unknown_versions_raise_exactly_unsupported_version():
     b = worked_example()
-    for bad in ({**b, "rules_version": "2"}, {**b, "basis_version": "9"}, {**b, "rules_version": 1},
+    for bad in ({**b, "rules_version": "9"}, {**b, "basis_version": "9"}, {**b, "rules_version": 1},
                 {**b, "basis_version": ["1"]}):
         with pytest.raises(UnsupportedVersion) as info:
             score.score(bad)
@@ -610,9 +610,9 @@ def test_unknown_versions_raise_exactly_unsupported_version():
 
 
 def test_score_resolves_rules_from_the_registry(monkeypatch):
-    other = dataclasses.replace(RULES1, version="2", tier_pursue=F(9, 10))
-    monkeypatch.setitem(RULES, "2", other)
-    b = {**worked_example(), "rules_version": "2"}
+    other = dataclasses.replace(RULES1, version="9", tier_pursue=F(9, 10))
+    monkeypatch.setitem(RULES, "9", other)
+    b = {**worked_example(), "rules_version": "9"}
     assert score.score(b).tier == Tier.STRETCH                      # 4/5 < 9/10 under the registered version
     assert score.score(worked_example()).tier == Tier.PURSUE
 
@@ -900,7 +900,7 @@ def test_listed_facts_are_sorted_in_claimed_items():
 
 def test_every_pinned_text_is_a_named_constant():
     names = [n for n in dir(score) if n.startswith(("REASON_", "ITEM_"))]
-    assert len(names) == 20
+    assert len(names) == 25
     doc = score.__doc__
     assert all(f"`{n}`" in doc for n in names)
     assert "requires a new rules version" in doc

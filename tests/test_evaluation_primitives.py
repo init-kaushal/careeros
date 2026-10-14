@@ -184,12 +184,12 @@ def test_basis_schema_current_version():
 
 
 def test_rules_and_basis_versions_are_independent(monkeypatch):
-    v2 = BasisSchema(version="2", keys=("requirements",))
-    monkeypatch.setitem(BASIS_VERSIONS, "2", v2)
-    assert basis_schema_for("2") is v2
+    v9 = BasisSchema(version="9", keys=("requirements",))
+    monkeypatch.setitem(BASIS_VERSIONS, "9", v9)
+    assert basis_schema_for("9") is v9
     assert rules_for("1").version == "1"
     with pytest.raises(UnsupportedVersion):
-        rules_for("2")
+        rules_for("9")
 
 
 # --- result_canonical / result_sha256 -----------------------------------------------------------
