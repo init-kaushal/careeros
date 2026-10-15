@@ -109,13 +109,13 @@ Confidence starts at `high` and drops one step for each of these (never below `l
 
 - more than half of the weight of the supported requirements is claimed-only (a requirement counts as claimed-only when the weakest of its supporting facts, its status floor, is `claimed`);
 - more than a quarter of the `must` and `strong` weight is `unverifiable` (two steps if more than half);
-- the sponsorship listing is unknown while the need is not established as `no`, or the range is not disclosed while a verified floor exists;
+- the sponsorship listing is unknown while the need is not established as `no`, or there is no effective pay range (no observations, none comparable, or a conflict) while a verified floor exists;
 - fewer than three requirements, or no `must` requirement;
 - there is no fit score.
 
 ### Action items
 
-`result.action_items` lists what would change the result, in a fixed order: unverifiable requirements, `must` gaps, requirements whose weakest supporting fact is only claimed, sponsorship questions, then pay questions (conflict, unverified, range not disclosed, currency or basis mismatch, low source confidence). Each tells you the next step, usually to add or confirm a fact with the `memory` skill.
+`result.action_items` lists what would change the result, in a fixed order: unverifiable requirements, `must` gaps, requirements whose weakest supporting fact is only claimed, sponsorship questions, then pay questions: a floor that is unverified or unreadable, no pay information, pay estimated only, conflicting figures of one kind, an observation that cannot be compared (with its reason code) and low source confidence. Each tells you the next step, usually to add or confirm a fact with the `memory` skill.
 
 ## Freshness: stale versus tampered
 

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from helpers import add_job
-from test_skills_evaluation import BROWSE_BEFORE, BROWSE_HINT, COMP_BROWSE_ADDITIONS, PREP_GATE_BEFORE, example_blocks, sha, skill
+from test_skills_evaluation import SKILLS, BROWSE_BEFORE, BROWSE_HINT, COMP_BROWSE_ADDITIONS, PREP_GATE_BEFORE, example_blocks, sha, skill
 from typer.testing import CliRunner
 
 from careeros.cli.main import app
@@ -30,6 +30,13 @@ BROWSE_PHRASES = (
     "copied verbatim",
     "Never invent a figure, a source or a date",
     "careeros comp [job-slug]",
+    "`null` is valid only with `observations: []`",
+    "Record `posted` ONLY when you read the full description on the job page",
+    "Never write `jd.md` from a listing snippet",
+    "never paste a band into it to satisfy `CMP004`",
+    "otherwise record the figure as `estimate`",
+    "record `low` for a weak source or omit the figure",
+    "never choose a confidence just to clear a `CMP` error",
 )
 
 
@@ -88,11 +95,16 @@ def migration() -> str:
 
 
 MIGRATION_RULES = (
-    "never overwrite",
-    "`compensation.md` that exists",
+    "never replace or rewrite a `compensation.md` that exists",
+    "the only edit allowed is filling an empty skeleton",
+    "Only after they confirm, remove the `compensation:` block",
     "Migrated from evaluation.md (0.5.0)",
     "verbatim",
-    "Show the proposed file",
+    "Show the proposed file and write nothing yet",
+    "ask for a full ISO date and never invent a day",
+    "ask for high, medium or low and never choose one",
+    "an `estimate` never caps, while `recruiter` or `posted` can",
+    "first ask whether it was a posted band",
     "only after the user agrees",
     "suggest `estimate`",
     "`posted` also needs a verbatim quote",
@@ -119,6 +131,8 @@ def test_migration_has_the_four_ordered_steps_with_preconditions() -> None:
     assert positions == sorted(positions)
     write, validate, remove, reeval = (text[a:b] for a, b in zip(positions, positions[1:] + [len(text)]))
     assert "Precondition: there is no `compensation.md`" in write
+    assert write.index("only after the user agrees") < write.index("careeros comp <job> --init")
+    assert write.index("Show the proposed file") < write.index("careeros comp <job> --init")
     assert "careeros comp <job>" in validate and "CMP" in validate and "stop" in validate.lower()
     assert "Precondition: `compensation.md` exists, validates and the legacy block is still present" in remove
     assert "beside the observations" in remove and "confirm" in remove
@@ -128,43 +142,65 @@ def test_migration_has_the_four_ordered_steps_with_preconditions() -> None:
 
 RECOVERY_ROWS = (
     ("legacy block, no `compensation.md`", "step 1"),
-    ("legacy block, `compensation.md` present and valid", "resume at step 3"),
+    ("legacy block, `compensation.md` present, valid and non-empty", "resume at step 3; the file is not rewritten"),
     ("legacy block, `compensation.md` present but invalid", "step 2"),
     ("no legacy block, valid non-empty `compensation.md`, evaluation stale", "step 4"),
     ("no legacy block, no or empty `compensation.md`, a stale version 1 result", "result.basis.cap_inputs"),
     ("no legacy block, valid non-empty record, evaluation current", "nothing to do"),
+    ("legacy block, valid but empty `compensation.md`", "never go to step 3 with an empty record"),
 )
 
 
-def test_the_recovery_table_has_all_six_rows() -> None:
+def test_the_recovery_table_has_all_seven_rows() -> None:
     text = migration()
     table = [line for line in text.splitlines() if line.startswith("| ") and "State found" not in line and "---" not in line]
-    assert len(table) == 6
+    assert len(table) == 7
     for (state, action), line in zip(RECOVERY_ROWS, table):
         assert line.startswith(f"| {state}"), line
         assert action in line, line
     row5 = table[4]
     for phrase in ("range, currency, basis and `as_of`", "ask for the kind, the period and the source",
-                   "no pay information", "step 4 with the empty record"):
+                   "no pay information", "step 4 with the empty record", "ask for an ISO date `as_of` (never invent a day",
+                   "offer the stored one unless it is `unknown`", "then ask for high, medium or low, never choose one",
+                   "the kind decides whether the old cap survives", "record the `cap_inputs` values used verbatim under the provenance heading"):
         assert phrase in row5, phrase
+    row7 = table[6]
+    for phrase in ("do step 1's mapping and questions", "after the user agrees ADD the observation and `market` to that file",
+                   "append the provenance heading to its notes body", "keep the existing body",
+                   "the only permitted edit of an existing `compensation.md` (never replace the file)"):
+        assert phrase in row7, phrase
     assert "never overwrite" in table[2].lower() and "delete the file" in table[2]
 
 
 def test_migration_explains_the_four_evl003_refusals() -> None:
     text = migration()
-    for phrase in ("there is no compensation.md yet", "compensation.md has errors", "compensation.md is empty",
-                   "compensation.md exists and is valid"):
-        assert phrase in text, phrase
+    bullets = [b for b in text.split("\n") if b.startswith('- **"')]
+    meanings = (("there is no compensation.md yet", "Migrate (step 1)"),
+                ("compensation.md has errors", "Fix them first (step 2); never overwrite the file"),
+                ("compensation.md is empty", "Never remove the block on an empty record: use the empty-skeleton row of the recovery table"),
+                ("compensation.md exists and is valid", "confirm the record covers the legacy block, then remove the block (step 3) and re-evaluate (step 4)"))
+    assert len(bullets) == 4
+    for bullet, (label, meaning) in zip(bullets, meanings):
+        assert label in bullet and meaning in bullet, bullet
     assert "EVL003" in text
 
 
-@pytest.mark.parametrize("name", ["browse", "evaluate"])
-def test_no_skill_instructs_an_unconditional_transition(name: str) -> None:
-    text = skill(name)
-    for m in re.finditer(r"careeros transition", text):
-        before = text[:m.start()]
-        paragraph = before[before.rfind("\n\n"):]
-        assert re.search(r"only if the user (says|agrees|confirms)", paragraph, re.I), name
+def test_every_transition_sentence_in_every_skill_is_conditional() -> None:
+    seen = 0
+    for path in sorted(SKILLS.glob("*/SKILL.md")):
+        text = path.read_text(encoding="utf-8")
+        for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
+            if "careeros transition" in sentence:
+                seen += 1
+                assert re.match(r"[-* ]*(Only if the user|Ask)\b", sentence), (path.parent.name, sentence)
+    assert seen >= 2
+
+
+def test_the_example_prose_matches_the_derivation() -> None:
+    text = skill("evaluate")
+    for phrase in ("a `posted` range of 3,000,000 to 4,200,000, whose top is above the 3,500,000 floor, so the pay cap does not fire",
+                   "`r1` comes back `covered`", "`r4` `gap`", "does not trigger a cap"):
+        assert phrase in text, phrase
 
 
 def test_the_migration_never_transitions() -> None:
@@ -193,6 +229,7 @@ def test_the_workspace_layout_names_compensation_md() -> None:
     claude = (ROOT / "careeros" / "templates" / "workspace" / "CLAUDE.md").read_text(encoding="utf-8")
     assert "compensation.md" in claude
     assert claude.index("compensation.md") > claude.index("evaluation.md")
+    assert "the posting, saved verbatim (from evaluate or browse)" in claude
 
 
 # --- the worked example --------------------------------------------------------------------------
@@ -236,6 +273,8 @@ COMPENSATION_DOC_PHRASES = (
     "CMP100", "`compensation.recorded`", "`compensation.rejected`", "careeros comp <job> --init", "EVL009",
     "Migrated from evaluation.md (0.5.0)", "read once as stale", "version 2", "touch at one point", "30–40",
     "equality does not cap", "never edits `compensation.md`",
+    "or `market: null` while there are observations", "sha256:<canonical record stamp>", "the first that applies",
+    "A job with no `compensation.md` appends nothing",
 )
 
 
@@ -260,3 +299,30 @@ def test_nav_readme_changelog_and_version() -> None:
     for phrase in ("careeros upgrade", "read as stale once", "explicit re-evaluation", "version 2"):
         assert phrase in head, phrase
     assert tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"] == "0.6.0"
+
+
+def test_every_window_number_in_the_doc_is_a_code_constant() -> None:
+    text = doc("compensation.md")
+    fx, stale = rules.FX_WINDOW_DAYS, rules.OBSERVATION_STALE_DAYS
+    assert f"more than {fx} days before" in text and f"more than {stale} days old" in text
+    assert {int(n) for n in re.findall(r"(\d+) days", text)} == {fx, stale}
+    assert {int(n) for n in re.findall(r"<= (\d+)` days", text)} == {fx}
+    assert not re.findall(r"(?<!<= )\b(?:30|90)\b(?! days)", text.replace("30–40", "").replace("35–45", "").replace("42–50", ""))
+
+
+def test_the_doc_code_table_matches_the_code(tmp_path: Path) -> None:
+    from helpers import make_workspace
+    from careeros.core.validation import validate_workspace
+
+    table = dict(re.findall(r"^\| `(CMP\d{3})` \| (error|warning) \|", doc("compensation.md"), re.M))
+    assert table == {**{f"CMP00{n}": "error" for n in range(1, 8)}, "CMP100": "warning"}
+    root = make_workspace(tmp_path / "ws")
+    (root / "profile.md").write_text("# P\n\n## Markets\n| Market | Min base (per year) | Sponsorship | Priority |\n|---|---|---|---|\n"
+                                    "| Atlantis (home) | ₹35,00,000 | not needed | 1 |\n", encoding="utf-8")
+    old = ("---\nschema: 1\nmarket: %s\nobservations:\n  - {id: c1, kind: estimate, low: 1, high: 2, currency: INR, basis: base, "
+           "period: year, source: s, as_of: 2000-01-01, confidence: low}\nconversions: []\n---\n")
+    for slug, market in (("a", '"Atlantis (home)"'), ("b", "null")):
+        job = add_job(root, slug)
+        (job["path"].parent / "compensation.md").write_text(old % market, encoding="utf-8")
+    found = {i.code: i.severity for i in validate_workspace(root) if i.code.startswith("CMP")}
+    assert found == {"CMP100": table["CMP100"], "CMP002": table["CMP002"]}

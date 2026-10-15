@@ -68,7 +68,7 @@ jobs/
     [job-slug]/
       company.md        — company info + comp research
       people.md         — hiring manager, recruiter, peers, interviewers
-      jd.md             — the posting, saved verbatim (from evaluate)
+      jd.md             — the posting, saved verbatim (from evaluate or browse)
       evaluation.md     — fit evaluation against your career memory (from evaluate)
       compensation.md   — the job's pay observations and currency conversions (from browse; checked by `careeros comp`)
       prep.md           — tailoring brief (skills to highlight, ATS keywords)

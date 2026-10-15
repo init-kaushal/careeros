@@ -66,6 +66,7 @@ Field rules:
 - **Dates** are ISO `YYYY-MM-DD`. **Enums** are closed sets. Unknown keys anywhere are an error.
 - **Evidence by kind.** Every observation needs a non-empty `source` and a valid `as_of`. `posted` also needs a `quote` found verbatim (after the evaluation's text normalisation) in `jd.md`. `recruiter` and `estimate` need no quote. `confidence` is the agent's assessment of how reliable the source is; nothing treats it as proof that the numbers are right.
 - **Conversions:** `from`/`to` are currency codes, `rate` a positive decimal string, `source` non-empty, `as_of` a valid date. Two conversions for the same `(from, to)` pair are an error even if the rates match.
+- **Market:** `market` may be `null` only when `observations` is empty (`null` with observations is `CMP002`).
 - **Empty record:** `observations: []` is valid and honest ("no pay information"). A job with **no** `compensation.md` is treated as the empty record.
 - **Creation:** `careeros comp <job> --init` writes the skeleton and refuses if the file exists. `browse` and the `evaluate` skill fill it.
 
@@ -82,7 +83,7 @@ Field rules:
 
 | Reason | When |
 |---|---|
-| `FLOOR_UNVERIFIED` | the record's `market` is `null`, its `## Markets` row has no machine-readable floor (for example `TBD`), or the Markets table is unusable (more than one `## Markets` heading) |
+| `FLOOR_UNVERIFIED` | the record's `market` is `null` (an empty record only: `null` with observations is `CMP002`), its `## Markets` row has no machine-readable floor (for example `TBD`), or the Markets table is unusable (more than one `## Markets` heading) |
 | `BASIS_MISMATCH` | the observation's `basis` differs from the floor's (total pay against a base floor); never compared as equivalent |
 | `FX_CONVERSION_MISSING` | the currencies differ and no `(from, to)` conversion exists |
 | `FX_RATE_OUTSIDE_WINDOW` | the conversion's `as_of` is after the observation's `as_of`, or more than 30 days before it (`0 <= obs.as_of - rate.as_of <= 30` days passes) |
@@ -160,8 +161,8 @@ Malformed records produce these stable codes without modifying any file. Final c
 
 - **`browse`:** when it saves a job it also runs `careeros comp <job> --init` and records the pay it gathered as observations (kind, source, as_of, confidence), or leaves `observations: []` when it found nothing. Its comp-check rules (a source and a confidence for every figure; "unknown" is a valid answer) stand. The results table keeps its Comp column.
 - **`evaluate`:** no longer asks for pay. It runs `careeros comp <job>`, reads the derivation, presents comparability reasons, conflicts and the cap outcome from the evaluation, and performs the **migration** below when it finds a version 1 record.
-- **Migration (skill step, never part of the scorer; the scorer never writes files).** It applies to a version 1 evaluation whose agent half still has `job_facts.compensation`. It is a **resumable sequence of four steps**. The skill re-detects the state from the files on every run and performs only the steps whose precondition holds, so an interruption at any point is recovered by simply running it again. No step ever overwrites `compensation.md`, and the legacy block is never removed before a valid `compensation.md` exists.
-  1. **Write.** Precondition: no `compensation.md`. Map `range`, `currency`, `basis`, `source` and `as_of` to one observation. Version 1 recorded no `kind` and no `period`: ask the user for the kind (suggesting `estimate`; `posted` also needs a verbatim quote) and for the period if it cannot tell. Never invent a missing source, `as_of`, confidence, currency or basis; leave anything unmappable unresolved and ask. Show the proposed file and write it only after the user agrees. The notes body of the new file records the legacy block verbatim under the heading `Migrated from evaluation.md (0.5.0)`, so the original figures and provenance survive even if later steps are interrupted.
+- **Migration (skill step, never part of the scorer; the scorer never writes files).** It applies to a version 1 evaluation whose agent half still has `job_facts.compensation`. It is a **resumable sequence of four steps**. The skill re-detects the state from the files on every run and performs only the steps whose precondition holds, so an interruption at any point is recovered by simply running it again. No step ever replaces or rewrites an existing `compensation.md` (the only edit is filling an empty skeleton, see the last row), and the legacy block is never removed before a valid `compensation.md` exists.
+  1. **Write.** Precondition: no `compensation.md`. Map `range`, `currency`, `basis`, `source` and `as_of` to one observation. Version 1 recorded no `kind` and no `period`: ask the user for the kind (suggesting `estimate`; `posted` also needs a verbatim quote) and for the period if it cannot tell. Never invent a missing source, `as_of`, confidence, currency or basis; leave anything unmappable unresolved and ask. Map and show the proposed file first; only after the user agrees run `careeros comp <job> --init` and fill it. The notes body of the new file records the legacy block verbatim under the heading `Migrated from evaluation.md (0.5.0)`, so the original figures and provenance survive even if later steps are interrupted.
   2. **Validate.** Run `careeros comp <job>`. On any `CMP` error, show it and ask the user to fix the file; stop.
   3. **Remove.** Precondition: `compensation.md` exists, validates, and the legacy block is still present. Show the legacy block beside the observations and ask the user to confirm the record covers it; only then remove the block from the agent half (the agent half is agent-owned).
   4. **Re-evaluate.** Precondition: the block is removed and the record validates. Run `careeros evaluate <job>`.
@@ -170,11 +171,12 @@ Malformed records produce these stable codes without modifying any file. Final c
   | State found | Action |
   |---|---|
   | legacy block, no `compensation.md` | step 1 |
-  | legacy block, `compensation.md` present and valid | resume at step 3; the file is not rewritten |
+  | legacy block, `compensation.md` present, valid and non-empty | resume at step 3; the file is not rewritten |
   | legacy block, `compensation.md` present but invalid (for example a truncated write) | step 2: show the `CMP` errors and ask; never overwrite; if the user wants to start over they delete the file and the skill restarts at step 1 |
   | no legacy block, valid non-empty `compensation.md`, evaluation stale | step 4 |
   | no legacy block, no or empty `compensation.md`, a stale version 1 result | the figures left the agent half but the stored `result.basis.cap_inputs` still holds the range, currency, basis and `as_of` until a re-evaluation replaces it: offer to rebuild the observation from those, ask for the kind, period and source, then continue at step 1's confirmation; if the user says the job has no pay information, continue at step 4 with the empty record |
   | no legacy block, valid non-empty record, evaluation current | nothing to do |
+  | legacy block, valid but empty `compensation.md` (a skeleton, for example from an interrupted or declined step 1) | do step 1's mapping and questions; after the user agrees ADD the observation and `market` to that file and append the provenance heading to its notes body; keep the existing body; this is the only permitted edit of an existing `compensation.md` (never replace the file); never go to step 3 with an empty record |
 
   `evaluate`'s refusal on a version 1 record (`EVL003`) names the situation: with no `compensation.md` it says to migrate; with an existing valid one it says to confirm the record covers the legacy block and remove the block.
 - **Idempotent:** a repeat run in any state above performs only the steps whose preconditions hold; it never duplicates an observation (step 1 runs only when there is no `compensation.md`) and never rewrites an existing file; unchanged inputs after a completed migration are an `(unchanged)` evaluation.

@@ -4,7 +4,7 @@
 
 ### Added
 
-- `compensation.md` per saved job: dated pay observations (`posted`, `recruiter`, `estimate`) with range, base or total, currency, period, source, `as_of`, confidence and a verbatim quote for `posted`, plus recorded currency conversions. `careeros comp <job>` validates it and shows the derivation (`--init` writes the skeleton, `--json` is machine-readable). Exit 0 valid, 1 invalid or ledger failure, 2 usage. New ledger events `compensation.recorded` and `compensation.rejected`; the type prefix `compensation.*` is reserved.
+- `compensation.md` per saved job: dated pay observations (`posted`, `recruiter`, `estimate`) with range, base or total, currency, period, source, `as_of`, confidence and a verbatim quote for `posted`, plus recorded currency conversions. `careeros comp <job>` validates it and shows the derivation (`--init` writes the skeleton, `--json` is machine-readable). Exit 0 valid, 1 invalid record, ledger failure or `--init` on an existing file, 2 usage. New ledger events `compensation.recorded` and `compensation.rejected`; the type prefix `compensation.*` is reserved.
 - `careeros validate` reports `CMP001`-`CMP007` (errors) and `CMP100` (warning, an observation older than 90 days) for every `compensation.md`.
 - The `browse` skill records pay in `compensation.md` when it saves a job; the `evaluate` skill reads the derivation and migrates a 0.5.0 evaluation in four resumable steps.
 - `docs/compensation.md`.

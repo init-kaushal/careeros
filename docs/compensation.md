@@ -48,7 +48,7 @@ Free notes.
 | Field | Meaning |
 |---|---|
 | `schema` | `1` |
-| `market` | the exact label of the profile's `## Markets` row (including a `(home)` suffix), or `null` when the job has no row; it must equal the evaluation's `job_facts.market` once there are observations |
+| `market` | the exact label of the profile's `## Markets` row (including a `(home)` suffix), or `null` only when `observations` is empty; it must equal the evaluation's `job_facts.market` once there are observations |
 | `observations` | the pay figures, possibly `[]` |
 | `conversions` | dated exchange rates, `{from, to, rate, source, as_of}`, only for a currency that differs from the floor's |
 
@@ -87,11 +87,11 @@ The ranking is fixed by the rules, not by the agent's confidence. An estimate is
 2. **Convert.** When the currency differs from the floor's, use the one conversion whose `from` and `to` are exactly the observation's currency and the floor's. No inverse rates, no chaining through a third currency.
 3. The original amount, currency, period and source are always kept beside the converted figure.
 
-Each observation is then comparable or carries one reason code, and a not-comparable observation never contributes to a comparison or a cap:
+Each observation is then comparable or carries one reason code (the first that applies, in the order of this table), and a not-comparable observation never contributes to a comparison or a cap:
 
 | Reason | When |
 |---|---|
-| `FLOOR_UNVERIFIED` | the record's `market` is `null`, its row has no machine-readable floor (for example `TBD`), or the Markets table is unusable |
+| `FLOOR_UNVERIFIED` | the record's `market` row has no machine-readable floor (for example `TBD`), or the Markets table is unusable |
 | `BASIS_MISMATCH` | the observation's `basis` differs from the floor's (total pay against a base floor) |
 | `FX_CONVERSION_MISSING` | the currencies differ and there is no matching conversion |
 | `FX_RATE_OUTSIDE_WINDOW` | the conversion is dated after the observation or more than 30 days before it |
@@ -135,7 +135,7 @@ Because the union uses the highest top, the cap fires only if even the best case
 | Code | Severity | Meaning |
 |---|---|---|
 | `CMP001` | error | unreadable file, no or invalid frontmatter or YAML, unsupported `schema`, a missing or unknown key |
-| `CMP002` | error | wrong type, unsupported enum value, bad ISO date, empty required text |
+| `CMP002` | error | wrong type, unsupported enum value, bad ISO date, empty required text, or `market: null` while there are observations |
 | `CMP003` | error | range rule broken: a missing bound, a non-integer or boolean amount, `low` below zero, `high` below `low` |
 | `CMP004` | error | a `posted` quote is missing, not found verbatim in `jd.md`, or `jd.md` is absent |
 | `CMP005` | error | a duplicate observation `id`, or two conversions for one pair |
@@ -143,7 +143,7 @@ Because the union uses the highest top, the cap fires only if even the best case
 | `CMP007` | error | a non-null `market` names no row of the Markets table, or a row listed more than once |
 | `CMP100` | warning | an observation's `as_of` is more than 90 days old; informational, it never changes a score |
 
-A `market` of `null`, a Markets row without a machine-readable floor and an unusable table are not errors: the floor is unverified and the observations are simply not compared.
+A `market` of `null` is valid only with `observations: []`. A Markets row without a machine-readable floor and an unusable table are not errors: the floor is unverified and the observations are simply not compared.
 
 ## The `comp` command
 
@@ -151,8 +151,8 @@ A `market` of `null`, a Markets row without a machine-readable floor and an unus
 
 It never edits `compensation.md`. Its only writes are ledger events:
 
-- `compensation.recorded` `{file_sha256, observations}`, when the record is valid and its canonical hash differs from the latest valid `compensation.recorded` event for that job. A missing or malformed earlier event counts as no baseline, so the event is appended.
-- `compensation.rejected`, when the record is invalid. It carries the sorted `CMP` codes and the SHA-256 of the file's bytes, and is deduplicated on exactly that pair, so a changed invalid file is recorded again.
+- `compensation.recorded`, when the record is valid and its canonical hash differs from the latest valid `compensation.recorded` event for that job. It carries `artifacts: [path, "sha256:<canonical record stamp>"]` and an action with the observation count. A missing or malformed earlier event counts as no baseline, so the event is appended.
+- `compensation.rejected`, when the record is invalid. It carries the sorted `CMP` codes and the SHA-256 of the file's bytes, and is skipped only when the job's latest `compensation.*` event is a rejection with exactly that pair, so a changed invalid file is recorded again. A job with no `compensation.md` appends nothing.
 
 If the ledger cannot be written the command says so and never claims the event was recorded.
 
