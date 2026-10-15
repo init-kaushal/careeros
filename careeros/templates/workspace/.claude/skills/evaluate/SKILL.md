@@ -2,7 +2,7 @@
 
 **Trigger:** "evaluate [job]" / "should I apply to [job]?" / "how well do I fit [job]?" / "score [job]" / "is [job] worth it?"
 
-Judges one saved job against the user's career memory and writes the result to `jobs/discovered/[job-slug]/evaluation.md`. You do the reading: you pull the requirements out of the posting and record how the posting answers the user's scoring rubric. The command `careeros evaluate` does the judging: it matches each requirement against the career memory, scores, applies the sponsorship and pay caps, and writes the result. You never score anything yourself.
+Judges one saved job against the user's career memory and writes the result to `jobs/discovered/[job-slug]/evaluation.md`. You do the reading: you pull the requirements out of the posting and record how the posting answers the user's scoring rubric. The command `careeros evaluate` does the judging: it matches each requirement against the career memory, reads the job's pay from `compensation.md`, scores, applies the sponsorship and pay caps, and writes the result. You never score anything yourself.
 
 ---
 
@@ -10,7 +10,8 @@ Judges one saved job against the user's career memory and writes the result to `
 
 - Every quote is **verbatim** from `jd.md`. Capitalisation and wording must match; only the spacing and line breaks may differ.
 - Judge every fit row of the scoring rubric, even when the posting says nothing about it (`judgement: "no"` and `quote: null`).
-- Record sponsorship and pay exactly as the `browse` skill does: what the posting shows, the source, a confidence and an `as_of` date. Never guess a figure or fill a field to make a cap go away.
+- Sponsorship is recorded under `job_facts` as the posting shows it. Pay is **not** recorded here: it lives in the job's `compensation.md`, which `browse` fills with sources, confidence and `as_of` for every figure. Never guess a figure or fill a field to make a cap go away.
+- You never edit `compensation.md` beyond what the user's data (or a source they cite) says. Never invent a conversion rate, a source or a date, and use a conversion only if the user or a cited source gave one.
 - Never edit `result:` or the body of `evaluation.md`. They are written by `careeros evaluate`; a hand edit is reported as tampering (EVL007).
 - Say a requirement is met only as far as its outcome allows, and never say a requirement is met on `adjacent`, `gap` or `unverifiable`. `covered` means the career memory has a matching fact. `adjacent` means related experience, not a match. `gap` and `unverifiable` mean the memory does not show it.
 - Never add or change a career fact from this skill, and never edit `career/`. To record something the user tells you, use the `memory` skill.
@@ -89,12 +90,19 @@ Under `agent.job_facts`:
 - `sponsorship`:
   - `needed`: `"yes"` or `"no"`, copied from the market row (`required` is `"yes"`, `not needed` is `"no"`). If the row says anything else, leave it out.
   - `listing`: `offered`, `not_offered` or `unknown` (the common case: the posting is silent). Anything but `unknown` needs `quote`, a verbatim phrase from `jd.md` (EVL006 if missing).
-- `compensation`:
-  - `range`: `low`, `high`, `currency` and `basis` (`base` or `total`) as the posting or your research shows it. Leave it out if the pay is not disclosed; do not estimate.
-  - `floor`: `amount`, `currency` and `basis: base`, copied from the market row's minimum. If the row's floor is `TBD` or not a single amount with a currency, leave `floor` out and tell the user the market floor needs setting (the `market` skill's floor derivation).
-  - `source`, `confidence` (`high`, `medium`, `low` or `unknown`) and `as_of` (for example `2026-09`): sources, confidence and `as_of` are required whenever `compensation` is present. Use the sources and confidence scale from the `browse` skill's comp check; state `unknown` rather than guessing.
 
-The command compares your floor and need with the market row. A mismatch is recorded as a conflict and shows up in the action items; it is never resolved in your favour.
+Pay is no longer part of the agent half. A `job_facts.compensation` block is rejected (EVL003); the market floor comes from the `## Markets` row by code, and the figures come from `compensation.md`. `job_facts.market` must name the same row as the `market` in `compensation.md` once that file has observations (EVL006).
+
+### Read the pay
+
+Run `careeros comp <job>` and read the derivation it prints. It never edits `compensation.md` and appends only a ledger event. A job with no `compensation.md` is the empty record: no pay information, and the evaluation keeps its unknown-pay confidence deduction; an empty record never counts as pay below the floor. If the user gives you pay for such a job, run `careeros comp <job> --init` and record it as the `browse` skill does (kind, range, `basis`, `period`, currency, source, `as_of`, confidence, and a verbatim quote for `posted`), only from what the user or the posting shows.
+
+- **Exit 0:** the record is valid. **Exit 1:** it has `CMP` errors (or the ledger could not be written). Show them and ask the user to fix the file; do not fix them by guessing. `careeros evaluate` stops on the same errors.
+- Each observation is comparable or carries a reason code: `FLOOR_UNVERIFIED` (no verified floor in the Markets row), `BASIS_MISMATCH` (total pay against a base floor), `FX_CONVERSION_MISSING` (the currency differs and no conversion is recorded) or `FX_RATE_OUTSIDE_WINDOW` (the rate is dated after the observation or more than 30 days before it). A missing conversion is a gap, not an error. Add a `conversions` entry only if the user or a cited source gave a rate; otherwise tell the user what is missing.
+- The effective kind is the highest present (`posted`, then `recruiter`, then `estimate`). Conflicting figures of one kind give no effective range and an action item.
+- The cap fires only when the effective kind is `posted` or `recruiter`, every observation of that kind is comparable and none has `low` confidence, the figures do not conflict, the floor is verified and even the highest top is strictly below the floor. An estimate alone never caps.
+
+The command compares your sponsorship need with the market row. A mismatch is recorded as a conflict and shows up in the action items; it is never resolved in your favour.
 
 ---
 
@@ -110,13 +118,15 @@ Run `careeros evaluate <job>` (add `--json` if you want to read the fields).
 |---|---|---|
 | EVL001 | `evaluation.md` cannot be read: bad YAML, no header, no `agent:` | repair the file, or move it aside and run `--init` again |
 | EVL002 | a requirement has no id or repeats one; the record belongs to another job, or the agent half lists no requirements | give each requirement its own id (`r1`, `r2`, ...); an empty `requirements` list is also EVL002, so extract the requirements first |
-| EVL003 | a required text field is missing, a field has the wrong type or is not an allowed value, a `fit` row is not in the rubric, or a `fit` row is judged twice | use the values in the tables above; copy fit labels exactly |
+| EVL003 | a required text field is missing, a field has the wrong type or is not an allowed value, a `fit` row is not in the rubric, or a `fit` row is judged twice; or the agent half still has the removed `job_facts.compensation` block | use the values in the tables above; copy fit labels exactly; for the pay block follow the migration below |
 | EVL004 | a quote is not found in `jd.md`, a required quote is missing, or `jd.md` is missing | copy the words from `jd.md`; save `jd.md` first |
 | EVL005 | a link names a fact that is missing or not active | find the right id with `careeros memory list`, or remove the link |
-| EVL006 | `market` is not a `## Markets` row, a floor or need has no market, or a pay or sponsorship field is incomplete | copy the row label; give `source`, `confidence`, `as_of` and any needed quote |
+| EVL006 | `market` is not a `## Markets` row, differs from the `market` in `compensation.md`, a need has no market, or a sponsorship field is incomplete | copy the row label (the same one in both files); give any needed quote |
 | EVL007 | someone edited `result:` or the body | do not edit them; re-running replaces the stored result and logs it as `evaluation.result_replaced` (reasons: `tampered`, `stale`, `ledger_mismatch`) |
-| EVL008 | the evaluation is stale: `jd.md`, the career memory, the rubric or Markets table, or your judgements changed since it was scored | re-read `jd.md`, check the judgements still hold, and run `careeros evaluate <job>` again |
+| EVL008 | the evaluation is stale: `jd.md`, the career memory, the rubric or Markets table, `compensation.md`, or your judgements changed since it was scored (every 0.5.0 evaluation reads as stale once) | re-read `jd.md`, check the judgements still hold, and run `careeros evaluate <job>` again |
 | EVL009 | the file and the ledger disagree (a run was interrupted, or the file was copied or restored) | re-running heals it; for a copied file, delete the copy and `--init` a fresh one |
+
+A `CMP` error in `compensation.md` also stops `careeros evaluate` (exit 1) and names the code; run `careeros comp <job>`, show the errors and ask the user to fix the file.
 
 EVL010 and EVL011 are warnings from `careeros validate`: EVL010 means the record was scored by a version of CareerOS this one cannot verify (re-run to refresh it); EVL011 lists a floor or sponsorship need that the market row could not confirm. Tell the user about them; neither stops you.
 
@@ -130,6 +140,7 @@ Show the user, from the command output and `evaluation.md`, the tier, scores, co
 
 - the **tier** (`pursue`, `stretch`, `weak`, `skip` or `unrated`), the combined, coverage and fit scores, and the **confidence** (`high`, `medium` or `low`), saying plainly when confidence is low and why;
 - the **caps**, if any: a sponsorship or pay cap, or a cap for unmet `must` requirements, and the tier it limits the job to;
+- the **pay**, from `careeros comp <job>` and the result: the comparability of each observation with its reason code, any conflict, and the cap outcome (fired or not, and why). Say "pay unknown" when there is no effective range; an estimate alone is context, never a cap;
 - a table of the requirements with the outcome of each (`covered`, `adjacent`, `gap`, `unverifiable`) and the fact ids behind it;
 - the **gaps** and **action items** in the file's own words (what the user could confirm, add or check to change the result).
 
@@ -144,6 +155,40 @@ The score is a triage tool, not proof of anything. It does not prove a resume cl
 Ask the user what they want to do: prep and tailor (the `prep` skill), look at the gaps first, or drop the job. Evaluating does not move the job anywhere.
 
 Only if the user says yes to recording the evaluation in the pipeline, run `careeros transition <job> --to EVALUATED`. Only if the user says they want to pursue it, run `careeros transition <job> --to SHORTLISTED`. If they want to drop it, ask what to record before running anything. Never run a transition because the tier looks good or bad.
+
+---
+
+## MIGRATING A 0.5.0 EVALUATION
+
+A 0.5.0 evaluation recorded pay in `job_facts.compensation`. That block is gone: `careeros evaluate` refuses a record that still carries it (EVL003), with one of four wordings:
+
+- **"there is no compensation.md yet"**: nothing holds the pay yet. Migrate (step 1).
+- **"compensation.md has errors"**: the file exists but has `CMP` errors. Fix them first (step 2); never overwrite the file.
+- **"compensation.md is empty"**: the file is valid but has no observations, so it cannot cover the block. Record the legacy pay in it, or confirm with the user that the job has no pay information, before the block is removed.
+- **"compensation.md exists and is valid"**: confirm the record covers the legacy block, then remove the block (step 3) and re-evaluate (step 4).
+
+The migration is a skill step with no scorer writes: the scorer never writes a file, and `careeros evaluate` and `careeros comp` never edit `compensation.md` or the agent half. It is a resumable sequence of four steps. Re-detect the state from the files on every run and perform only the steps whose precondition holds, so an interruption at any point is recovered by running it again. You never overwrite a `compensation.md` that exists, and you never remove the legacy block before a valid `compensation.md` exists.
+
+**1. Write.** Precondition: there is no `compensation.md`. Run `careeros comp <job> --init`, then map the legacy block's range, currency, basis and source to one observation, with `market` set to the `job_facts.market` label. Version 1 recorded no `kind` and no `period`: ask for the `kind` (suggest `estimate`; `posted` also needs a verbatim quote from `jd.md`) and ask for the `period` if you cannot tell from the posting. The legacy `as_of` may be only a month (`2026-09`) and the legacy confidence may be `unknown`; neither fits the new record, so ask. Never invent a source, an `as_of`, a confidence, a currency or a basis; leave anything unmappable unresolved and ask. Show the proposed file and write it only after the user agrees. Record the legacy block verbatim in the notes below the frontmatter, under the heading `Migrated from evaluation.md (0.5.0)`, so the original figures and provenance survive even if later steps are interrupted.
+
+**2. Validate.** Run `careeros comp <job>`. On any `CMP` error, show it, ask the user to fix the file, and stop.
+
+**3. Remove.** Precondition: `compensation.md` exists, validates and the legacy block is still present. Show the legacy block beside the observations and ask the user to confirm the record covers it. Only after they confirm, remove the `compensation:` block from `agent.job_facts` (the agent half is yours to edit). Do not touch `result:`.
+
+**4. Re-evaluate.** Precondition: the block is removed and the record validates. Run `careeros evaluate <job>`.
+
+**Recovery by state** (what to do when you find each state):
+
+| State found | Action |
+|---|---|
+| legacy block, no `compensation.md` | step 1 |
+| legacy block, `compensation.md` present and valid | resume at step 3; the file is not rewritten |
+| legacy block, `compensation.md` present but invalid (for example a truncated write) | step 2: show the `CMP` errors and ask; never overwrite; if the user wants to start over they delete the file and you restart at step 1 |
+| no legacy block, valid non-empty `compensation.md`, evaluation stale | step 4 |
+| no legacy block, no or empty `compensation.md`, a stale version 1 result | the pay left the agent half but the stored `result.basis.cap_inputs` still holds the range, currency, basis and `as_of` until a re-evaluation replaces it: offer to rebuild the observation from those, ask for the kind, the period and the source, then continue at step 1's confirmation (an empty existing file is not overwritten: show the observation and, once the user agrees, add it to that file); if the user says the job has no pay information, continue at step 4 with the empty record |
+| no legacy block, valid non-empty record, evaluation current | nothing to do |
+
+A repeat run in any state performs only the steps whose preconditions hold. It never duplicates an observation (step 1 runs only when there is no `compensation.md`), never rewrites an existing file, and unchanged inputs after a completed migration give an `(unchanged)` evaluation. A migration never changes the job's state.
 
 ---
 
@@ -185,7 +230,30 @@ Requirements:
 - Rust is a bonus
 
 Location: hybrid, Pune.
+Compensation: INR 3,000,000 to 4,200,000 per year.
 Visa sponsorship is not available for this role.
+```
+
+**compensation.md**
+```markdown
+---
+schema: 1
+market: "Atlantis (home)"
+observations:
+  - id: c1
+    kind: posted
+    low: 3000000
+    high: 4200000
+    currency: INR
+    basis: base
+    period: year
+    source: "posting text"
+    quote: "INR 3,000,000 to 4,200,000 per year"
+    as_of: 2026-10-10
+    confidence: high
+conversions: []
+---
+Invented example. Pay comes from the posting itself, so no conversion is needed.
 ```
 
 **evaluation.md agent half**
@@ -236,15 +304,9 @@ agent:
       needed: "no"
       listing: not_offered
       quote: Visa sponsorship is not available
-    compensation:
-      range: {low: 3000000, high: 4200000, currency: INR, basis: base}
-      floor: {amount: 3500000, currency: INR, basis: base}
-      source: posting
-      confidence: medium
-      as_of: "2026-09"
 ```
 
-Paste it under `agent:` in the file `--init` created (replace the empty `agent: {}`; the `id`, `type`, `schema`, `job` and `created_at` lines stay), then run `careeros evaluate <job>`. Here `r1` comes back `covered` (the memory has a Kubernetes skill), `r2` `covered` (the dated experience adds up to at least three years), `r3` `adjacent` (linked, not matched) and `r4` `gap`; the unmet `nice` requirement does not trigger a cap.
+Save the `compensation.md` block as `compensation.md` in the job folder (`careeros comp <job> --init` creates the skeleton; `careeros comp <job>` shows the derivation: a `posted` range of 3,000,000 to 4,200,000, whose top is above the 3,500,000 floor, so the pay cap does not fire). Paste the agent half under `agent:` in the file `evaluate --init` created (replace the empty `agent: {}`; the `id`, `type`, `schema`, `job` and `created_at` lines stay), then run `careeros evaluate <job>`. Here `r1` comes back `covered` (the memory has a Kubernetes skill), `r2` `covered` (the dated experience adds up to at least three years), `r3` `adjacent` (linked, not matched) and `r4` `gap`; the unmet `nice` requirement does not trigger a cap.
 
 ---
 

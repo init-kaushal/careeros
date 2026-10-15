@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.0 — Structured compensation
+
+### Added
+
+- `compensation.md` per saved job: dated pay observations (`posted`, `recruiter`, `estimate`) with range, base or total, currency, period, source, `as_of`, confidence and a verbatim quote for `posted`, plus recorded currency conversions. `careeros comp <job>` validates it and shows the derivation (`--init` writes the skeleton, `--json` is machine-readable). Exit 0 valid, 1 invalid or ledger failure, 2 usage. New ledger events `compensation.recorded` and `compensation.rejected`; the type prefix `compensation.*` is reserved.
+- `careeros validate` reports `CMP001`-`CMP007` (errors) and `CMP100` (warning, an observation older than 90 days) for every `compensation.md`.
+- The `browse` skill records pay in `compensation.md` when it saves a job; the `evaluate` skill reads the derivation and migrates a 0.5.0 evaluation in four resumable steps.
+- `docs/compensation.md`.
+
+### Changed
+
+- Evaluation basis and rules are now version 2: pay comes only from `compensation.md`, the floor from the verified `## Markets` row by code, and a sixth freshness stamp (`compensation`) covers the record. `job_facts.compensation` is removed from the agent half (`EVL003`), and `job_facts.market` must equal the record's `market` (`EVL006`).
+- Upgrading: run `careeros upgrade` to receive the updated skills. Existing evaluations read as stale once (`EVL008`, never tampered) and need an explicit re-evaluation; a 0.5.0 record that still has the pay block is refused by `careeros evaluate` until the `evaluate` skill has migrated it.
+
+### Known limits
+
+- Observations and rates are supplied by the agent, so a mistaken source is not detectable; a verbatim quote proves the text is in `jd.md`, not that it is pay. A rate dated after the observation reads as not comparable. The cap needs a verified `## Markets` floor. Out of scope: live exchange rates, market benchmarks, offer-stage pay, tax modelling and the GPT workspace.
+
 ## 0.5.0 — Job evaluation
 
 ### Added
