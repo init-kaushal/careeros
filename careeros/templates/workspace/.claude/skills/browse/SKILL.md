@@ -153,6 +153,8 @@ For each selected job:
 
 Record the choice as `- **Route:** reach-out-first | apply-direct | both` in `job.md`. Reach-out-first drafts go through the `outreach` skill; direct applications through `apply`. Never send a message or submit an application without the user's go-ahead.
 
+**F. Record the pay, per job.** Run `careeros comp [job-slug] --init`. It writes `jobs/discovered/[job-slug]/compensation.md` and refuses if the file exists (then edit that file). Set `market` to the exact label of the job's `## Markets` row; `null` is valid only with `observations: []`. Add one observation for each figure the comp check found: `kind` (`posted` for the employer's own listing, `recruiter` for a recruiter's statement, `estimate` for a third-party guess such as Levels.fyi or Glassdoor), `low` and `high` as whole numbers (`null` for a side the source does not give), `currency`, `basis` (`base` or `total`), `period` (`year` or `month`), `source`, `as_of` (the date you saw it, YYYY-MM-DD) and `confidence` (`high`, `medium` or `low`; the record has no `unknown`, so record `low` for a weak source or omit the figure, and never choose a confidence just to clear a `CMP` error). Record `posted` ONLY when you read the full description on the job page, saved it verbatim to `jd.md` (as the `evaluate` skill's STEP 1 does), and the `quote` is a line copied verbatim from it. Never write `jd.md` from a listing snippet, and never paste a band into it to satisfy `CMP004`; otherwise record the figure as `estimate` with the board or page as its `source`, or leave `observations: []` and say so. If you found no figure, leave `observations: []`. Add a `conversions` entry only for a rate you actually looked up, with its source and date. Never invent a figure, a source or a date. Then run `careeros comp [job-slug]` and fix any `CMP` error it reports.
+
 ---
 
 ## NOTES
@@ -163,3 +165,4 @@ Record the choice as `- **Route:** reach-out-first | apply-direct | both` in `jo
 - Dismiss premium popups before reading: look for "No thanks" / "Continue" links.
 - Never navigate the user's existing tabs.
 - To see how well a saved job fits your career memory, say "evaluate [job]" (the `evaluate` skill); it scores the posting against your facts and never changes the job's state.
+- Pay you found is kept in the job's `compensation.md` (STEP 5, F); `careeros comp [job-slug]` shows what it means, and the `evaluate` skill reads it.

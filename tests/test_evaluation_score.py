@@ -602,7 +602,7 @@ def test_no_float_arithmetic_outside_the_serialiser():
 
 def test_unknown_versions_raise_exactly_unsupported_version():
     b = worked_example()
-    for bad in ({**b, "rules_version": "2"}, {**b, "basis_version": "9"}, {**b, "rules_version": 1},
+    for bad in ({**b, "rules_version": "9"}, {**b, "basis_version": "9"}, {**b, "rules_version": 1},
                 {**b, "basis_version": ["1"]}):
         with pytest.raises(UnsupportedVersion) as info:
             score.score(bad)
@@ -610,9 +610,9 @@ def test_unknown_versions_raise_exactly_unsupported_version():
 
 
 def test_score_resolves_rules_from_the_registry(monkeypatch):
-    other = dataclasses.replace(RULES1, version="2", tier_pursue=F(9, 10))
-    monkeypatch.setitem(RULES, "2", other)
-    b = {**worked_example(), "rules_version": "2"}
+    other = dataclasses.replace(RULES1, version="9", tier_pursue=F(9, 10))
+    monkeypatch.setitem(RULES, "9", other)
+    b = {**worked_example(), "rules_version": "9"}
     assert score.score(b).tier == Tier.STRETCH                      # 4/5 < 9/10 under the registered version
     assert score.score(worked_example()).tier == Tier.PURSUE
 
@@ -743,7 +743,7 @@ def test_complete_basis_has_exactly_the_v1_keys_and_no_floats():
                      range_low=6000, range_high=7500, range_currency="sgd", range_basis=MarketBasis.BASE,
                      floor_amount=8000, floor_currency="SGD", source="levels.fyi", comp_confidence=None, as_of="2026-09")
     check = markets.verify_market(facts, MARKETS)
-    out = derived_basis(entry()).complete(judgements(("Role title matches", "yes")), facts, check, RUBRIC)
+    out = derived_basis(entry()).complete_v1(judgements(("Role title matches", "yes")), facts, check, RUBRIC)
     assert set(out) == set(BASIS_VERSIONS["1"].keys)
     canon.canonical_json(out)
     assert out["basis_version"] == "1" and out["rules_version"] == "1"
@@ -767,7 +767,7 @@ def test_complete_basis_scores_and_caps_from_real_market_inputs():
                      range_low=6000, range_high=7500, range_currency="SGD", range_basis=MarketBasis.BASE,
                      floor_amount=8000, floor_currency="SGD", comp_confidence=SourceConfidence.HIGH, as_of="2026-09")
     check = markets.verify_market(facts, MARKETS)
-    out = derived_basis(entry("r1"), entry("r2", "strong")).complete(
+    out = derived_basis(entry("r1"), entry("r2", "strong")).complete_v1(
         judgements(("Role title matches", "yes"), ("Location match", "no")), facts, check, RUBRIC)
     result = score.score(json.loads(canon.canonical_json(out)))
     assert result.combined == F(65, 100) + F(35, 100) * F(3, 5)          # 0.86, would be pursue
@@ -777,7 +777,7 @@ def test_complete_basis_scores_and_caps_from_real_market_inputs():
 def test_complete_basis_conflict_and_unverified_states_are_carried():
     facts = JobFacts(market="Atlantis (home)", needed=True, listing=Listing.UNKNOWN, floor_amount=1, floor_currency="INR")
     check = markets.verify_market(facts, MARKETS)
-    out = derived_basis(entry()).complete((), facts, check, RUBRIC)["cap_inputs"]
+    out = derived_basis(entry()).complete_v1((), facts, check, RUBRIC)["cap_inputs"]
     assert out["need"] == {"value": "yes", "verification": "conflict", "source_cell": "not needed",
                              "row_state": "parseable"}
     assert out["floor"]["verification"] == "conflict" and out["floor"]["source_cell"] == "₹35,00,000"
@@ -785,7 +785,7 @@ def test_complete_basis_conflict_and_unverified_states_are_carried():
 
 def test_complete_basis_without_a_market_or_facts_is_neutral():
     check = markets.verify_market(JobFacts(), MARKETS)
-    out = derived_basis(entry()).complete((), JobFacts(), check, Rubric((), ("rubric missing",), "missing"))
+    out = derived_basis(entry()).complete_v1((), JobFacts(), check, Rubric((), ("rubric missing",), "missing"))
     assert out["rubric_state"] == "missing" and out["fit"] == []
     assert out["cap_inputs"] == {
         "market": None, "need": {"value": None, "verification": "unverified", "source_cell": None, "row_state": "no_market"},
@@ -798,15 +798,15 @@ def test_complete_basis_without_a_market_or_facts_is_neutral():
 def test_complete_basis_unusable_rubrics_drop_fit_rows():
     check = markets.verify_market(JobFacts(), MARKETS)
     given = judgements(("Role title matches", "yes"))
-    invalid = derived_basis(entry()).complete(given, JobFacts(), check, Rubric(RUBRIC.rows, ("bad",), "invalid"))
+    invalid = derived_basis(entry()).complete_v1(given, JobFacts(), check, Rubric(RUBRIC.rows, ("bad",), "invalid"))
     assert invalid["rubric_state"] == "invalid" and invalid["fit"] == []
-    empty = derived_basis(entry()).complete(given, JobFacts(), check, Rubric((), (), "ok"))
+    empty = derived_basis(entry()).complete_v1(given, JobFacts(), check, Rubric((), (), "ok"))
     assert empty["rubric_state"] == "missing" and empty["fit"] == []
 
 
 def test_complete_basis_fit_rows_follow_the_normalised_label_and_are_sorted():
     check = markets.verify_market(JobFacts(), MARKETS)
-    out = derived_basis(entry()).complete(judgements(("LOCATION  match", "partial"), ("role TITLE matches", "no")),
+    out = derived_basis(entry()).complete_v1(judgements(("LOCATION  match", "partial"), ("role TITLE matches", "no")),
                                           JobFacts(), check, RUBRIC)
     assert out["fit"] == [{"row": "location match", "weight": 2, "judgement": "partial"},
                           {"row": "role title matches", "weight": 3, "judgement": "no"}]
@@ -815,10 +815,10 @@ def test_complete_basis_fit_rows_follow_the_normalised_label_and_are_sorted():
 def test_complete_basis_requires_both_range_ends_to_be_ints_and_normalises_none_basis():
     check = markets.verify_market(JobFacts(), MARKETS)
     only_low = JobFacts(range_low=5, range_currency="INR")
-    assert derived_basis(entry()).complete((), only_low, check, RUBRIC)["cap_inputs"]["range"] is None
+    assert derived_basis(entry()).complete_v1((), only_low, check, RUBRIC)["cap_inputs"]["range"] is None
     floor_no_basis = JobFacts(market="Atlantis (home)", floor_amount=3_500_000, floor_currency="INR", range_high=3_000_000,
                               range_currency="INR", range_basis=MarketBasis.BASE)
-    out = derived_basis(entry()).complete((), floor_no_basis, markets.verify_market(floor_no_basis, MARKETS), RUBRIC)
+    out = derived_basis(entry()).complete_v1((), floor_no_basis, markets.verify_market(floor_no_basis, MARKETS), RUBRIC)
     assert out["cap_inputs"]["floor"]["basis"] == "base" and out["cap_inputs"]["floor"]["verification"] == "verified"
 
 
@@ -846,7 +846,7 @@ def singapore(**over):
     given.update(over)
     facts = JobFacts(**given)
     reqs = (entry("r1"), entry("r2", "strong"), entry("r3", "nice"))
-    out = Basis(reqs, 3).complete(judgements(("Role title matches", "yes")), facts, markets.verify_market(facts, SG),
+    out = Basis(reqs, 3).complete_v1(judgements(("Role title matches", "yes")), facts, markets.verify_market(facts, SG),
                                   Rubric((FitRow("Role title matches", 3),), (), "ok"))
     return out, score.score(json.loads(canon.canonical_json(out)))
 
@@ -900,7 +900,7 @@ def test_listed_facts_are_sorted_in_claimed_items():
 
 def test_every_pinned_text_is_a_named_constant():
     names = [n for n in dir(score) if n.startswith(("REASON_", "ITEM_"))]
-    assert len(names) == 20
+    assert len(names) == 25
     doc = score.__doc__
     assert all(f"`{n}`" in doc for n in names)
     assert "requires a new rules version" in doc
@@ -930,10 +930,10 @@ def test_row_state_is_recorded_at_build_time():
     facts = JobFacts(market="Elsewhere")
     profile = SG_PROFILE + "| Elsewhere | TBD | preferred | 2 |\n"
     mk = markets.parse(profile)
-    unreadable = Basis((entry(),), 1).complete((), facts, markets.verify_market(facts, mk), Rubric((), (), "missing"))
+    unreadable = Basis((entry(),), 1).complete_v1((), facts, markets.verify_market(facts, mk), Rubric((), (), "missing"))
     assert unreadable["cap_inputs"]["need"]["row_state"] == unreadable["cap_inputs"]["floor"]["row_state"] == "unreadable"
     assert unreadable["cap_inputs"]["need"]["source_cell"] == "preferred"
-    none = Basis((entry(),), 1).complete((), JobFacts(), markets.verify_market(JobFacts(), mk), Rubric((), (), "missing"))
+    none = Basis((entry(),), 1).complete_v1((), JobFacts(), markets.verify_market(JobFacts(), mk), Rubric((), (), "missing"))
     assert none["cap_inputs"]["need"]["row_state"] == none["cap_inputs"]["floor"]["row_state"] == "no_market"
     out, _ = singapore(needed=None, floor_amount=None, floor_currency=None)
     assert out["cap_inputs"]["need"]["row_state"] == out["cap_inputs"]["floor"]["row_state"] == "parseable"
@@ -993,7 +993,7 @@ def singapore_in(table, **over):
                  comp_confidence=SourceConfidence.HIGH, as_of="2026-09", needed=True, floor_amount=8000, floor_currency="SGD")
     given.update(over)
     facts = JobFacts(**given)
-    out = Basis((entry("r1"), entry("r2", "strong"), entry("r3", "nice")), 3).complete(
+    out = Basis((entry("r1"), entry("r2", "strong"), entry("r3", "nice")), 3).complete_v1(
         judgements(("Role title matches", "yes")), facts, markets.verify_market(facts, table),
         Rubric((FitRow("Role title matches", 3),), (), "ok"))
     return out, score.score(json.loads(canon.canonical_json(out)))
@@ -1058,7 +1058,7 @@ def test_builder_output_is_always_accepted_by_the_scorer():
                                          range_high=7500, range_currency=currency, range_basis=basis_,
                                          floor_amount=amount, floor_currency=currency, floor_basis=basis_,
                                          comp_confidence="great" if basis_ == "x" else SourceConfidence.HIGH, as_of=2026)
-                        out = reqs.complete(judged, facts, markets.verify_market(facts, table), rubric)
+                        out = reqs.complete_v1(judged, facts, markets.verify_market(facts, table), rubric)
                         try:
                             score.score(json.loads(canon.canonical_json(out)))
                         except ValueError as exc:                                           # pragma: no cover

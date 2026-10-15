@@ -12,7 +12,7 @@ Agent half (`parse_agent`, `validate_agent`): codes per spec 8 and 16.1. YAML 1.
 coercions never see invalid input. Quotes are verified as substrings of `normalize_text(jd.md)` after the same
 normalisation (the one the `jd` stamp uses): reflowed whitespace passes, a different case does not.
 
-Stamps (spec 9; `result.stamps`, five strings):
+Stamps (spec 9; `result.stamps`: five strings for basis version 1, six for version 2, see `STAMP_KEYS`):
 
 * `jd`: SHA-256 of `normalize_text(jd.md)`.
 * `memory`: SHA-256 of the canonical JSON of `memory_canonical`: every fact (retired and disputed included, sorted by
@@ -27,6 +27,16 @@ Stamps (spec 9; `result.stamps`, five strings):
   ambiguous/unusable flags: the cap inputs are verified against that table, so editing it must read as stale.
 * `rules`: the rules version string.
 * `inputs`: SHA-256 of the agent half without `updated_at` (dates as ISO strings, floats as decimal strings).
+* `compensation` (basis version 2 only): `compensation.record.stamp` of the job's current `compensation.md`. An absent
+  file, the skeleton and any record without observations share `EMPTY_STAMP` (market and conversions are ignored then);
+  an unparseable file hashes its text under an `invalid:` prefix. The Markets row cell the floor comes from stays covered
+  by `rubric`. A v1 result keeps its five stamps and is never re-keyed (it reads stale through `rules` and `basis`).
+
+Pay (basis version 2): `compensation.md` is the only source. `job_facts.compensation` (the 0.5.0 pay block) is EVL003
+unless the stored result is basis version 1, where it is parsed read-only so the record stays verifiable; `compute`
+(and `careeros evaluate`) refuse such a record until the block is removed (`legacy_refusal`). `job_facts.market` must
+name the same Markets row as `compensation.md`'s `market` when that file has observations (EVL006). Any CMP error in
+`compensation.md` makes `compute` raise with that CMP code; `validate` reports the CMP findings in its own section.
 
 `result.basis` (spec 16.2) is separate from the stamps: the exact scorer input built by `derive.Basis.complete`, with its
 hash in `result.basis_sha256`. Scores are stored as `score.stored_score` floats (four decimals).
@@ -42,6 +52,9 @@ from decimal import Decimal
 from pathlib import Path
 
 from careeros.core import ids, models
+from careeros.core.compensation import derive as comp_derive, record as comp_record, rules as comp_rules
+from careeros.core.compensation import service as comp_service
+from careeros.core.compensation.model import CompRecord
 from careeros.core.evaluation import derive, markets as markets_mod, rubric as rubric_mod, rules, score
 from careeros.core.evaluation.canon import canonical_json, fixed4, normalize_text, sha256_hex
 from careeros.core.evaluation.markets import MarketError, Markets
@@ -60,7 +73,9 @@ from careeros.core.workspace import WorkspaceError, join_frontmatter, normalize_
 EVALUATION_FILE = "evaluation.md"
 JD_FILE = "jd.md"
 SCHEMA = 1
-STAMP_KEYS = ("jd", "memory", "rubric", "rules", "inputs")
+STAMP_KEYS = {"1": ("jd", "memory", "rubric", "rules", "inputs"),
+              "2": ("jd", "memory", "rubric", "rules", "inputs", "compensation")}    # by basis version
+_ALL_STAMPS = STAMP_KEYS["2"]
 RESULT_KEYS = ("tier", "combined", "coverage", "fit", "confidence", "caps", "action_items", "requirements",
                "stamps", "basis_sha256", "basis")
 SKELETON_BODY = ("\n# Evaluation\n\nNot evaluated yet. Fill in `agent:` (see the `evaluate` skill), then run "
@@ -77,6 +92,16 @@ _COMP_KEYS = ("range", "floor", "source", "confidence", "as_of")
 _RANGE_KEYS = ("low", "high", "currency", "basis")
 _FLOOR_KEYS = ("amount", "currency", "basis")
 _FIX = "fix the `agent:` half of evaluation.md (see the `evaluate` skill), then run `careeros evaluate <job>`"
+LEGACY_PAY = "job_facts.compensation: pay now lives in compensation.md; see the evaluate skill"
+_LEGACY_HEAD = ("job_facts.compensation is the 0.5.0 pay block and pay now lives in compensation.md (see the evaluate "
+                "skill): ")
+_LEGACY_ABSENT = "there is no compensation.md yet, so migrate the block (see the `evaluate` skill) before re-evaluating"
+_LEGACY_INVALID = ("compensation.md has errors ({codes}): fix the CMP errors first (`careeros comp <job>` lists them), "
+                   "then confirm the record covers the legacy block and remove the block")
+_LEGACY_EMPTY = ("compensation.md is empty (no observations), so it cannot cover the legacy block: record the legacy "
+                 "pay as an observation in it (or confirm the job has no pay information) before removing the block")
+_LEGACY_VALID = ("compensation.md exists and is valid: confirm the record covers the legacy block, then remove the "
+                 "block from the agent half and run `careeros evaluate <job>`")
 
 
 class RecordError(WorkspaceError):
@@ -271,18 +296,33 @@ def inputs_stamp(agent: object) -> str:
     return sha256_hex(canonical_json(agent_canonical(agent)))
 
 
+def compensation_stamp(inputs: Inputs) -> str:
+    """The `compensation` stamp of the job's current compensation.md (`compensation.record.stamp`)."""
+    return comp_record.stamp(inputs.compensation, None if inputs.compensation is not None else inputs.compensation_text)
+
+
 def stamps(jd_text: str, career: Career, rubric: Rubric, rules_version: str, agent: object, *,
-           lexicon: Lexicon, markets: Markets, now: str) -> Stamps:
-    """The five freshness stamps of the current inputs (see the module docstring)."""
+           lexicon: Lexicon, markets: Markets, now: str, compensation: str | None = None) -> Stamps:
+    """The freshness stamps of the current inputs (see the module docstring); `compensation` is the
+    `compensation_stamp`, given for a basis-v2 result."""
     return Stamps(jd_stamp(jd_text), memory_stamp(career, lexicon, now), rubric_stamp(rubric, markets),
-                  rules_version, inputs_stamp(agent))
+                  rules_version, inputs_stamp(agent), compensation)
+
+
+def stamp_keys(basis_version: object) -> tuple[str, ...] | None:
+    """The stamp names of a basis version (`STAMP_KEYS`), or None for a version this CareerOS does not know."""
+    return STAMP_KEYS.get(basis_version) if isinstance(basis_version, str) else None
 
 
 # --- current inputs ------------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class Inputs:
-    """Everything the record is checked or computed against today. Read-only snapshot."""
+    """Everything the record is checked or computed against today. Read-only snapshot.
+
+    `compensation`, `compensation_issues`: the job's `compensation.service.check_job` result (the record, None when the
+    file does not parse; the empty record when it is absent); `compensation_text`: the file's text (None when absent),
+    for the `invalid:` stamp of an unparseable file. A workspace-wide `Inputs` (no job) has none of them."""
 
     job_id: str | None
     jd_text: str | None
@@ -291,6 +331,9 @@ class Inputs:
     rubric: Rubric
     markets: Markets
     now: str
+    compensation: CompRecord | None = None
+    compensation_issues: tuple[Issue, ...] = ()
+    compensation_text: str | None = None
 
 
 def _text(path: Path) -> str | None:
@@ -313,6 +356,16 @@ def workspace_inputs(root: Path, now: str | None = None) -> Inputs:
                   now or models.utc_now())
 
 
+def _comp_text(path: Path) -> str | None:
+    """The file's text for the stamp: None when absent; undecodable bytes kept as surrogates; "" when unreadable."""
+    try:
+        return path.read_bytes().decode("utf-8", "surrogateescape")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return ""
+
+
 def for_job(base: Inputs, job_dir: Path) -> Inputs:
     job_dir = Path(job_dir)
     job_id = None
@@ -321,8 +374,11 @@ def for_job(base: Inputs, job_dir: Path) -> Inputs:
         job_id = fm.get("id") if fm else None
     except (OSError, UnicodeDecodeError, WorkspaceError):
         pass
-    return dataclasses.replace(base, job_id=job_id if isinstance(job_id, str) else None,
-                               jd_text=_text(job_dir / JD_FILE))
+    jd_text = _text(job_dir / JD_FILE)
+    comp, comp_issues = comp_service.check_job(job_dir, jd_text, base.markets)
+    return dataclasses.replace(base, job_id=job_id if isinstance(job_id, str) else None, jd_text=jd_text,
+                               compensation=comp, compensation_issues=tuple(comp_issues),
+                               compensation_text=_comp_text(job_dir / comp_rules.COMPENSATION_FILE))
 
 
 def read_inputs(root: Path, job_dir: Path, now: str | None = None) -> Inputs:
@@ -467,7 +523,9 @@ def _fit(p: _Parser, item: object, n: int, seen: set[str]) -> FitJudgement | Non
     return FitJudgement(row, judgement, quote)
 
 
-def _job_facts(p: _Parser, raw: object) -> JobFacts:
+def _job_facts(p: _Parser, raw: object, legacy: bool = False) -> JobFacts:
+    """`legacy`: the stored result is basis version 1, so the 0.5.0 `compensation` block is parsed (read-only);
+    otherwise its presence is EVL003 (pay lives in compensation.md)."""
     facts = p.mapping(raw, "job_facts")
     if facts is None:
         return JobFacts()
@@ -493,7 +551,11 @@ def _job_facts(p: _Parser, raw: object) -> JobFacts:
             p.bad("EVL006", f"job_facts.sponsorship.listing is {listing}, which needs a verbatim quote")
         else:
             p.quotes.append(("job_facts.sponsorship.quote", squote))
-    comp = p.mapping(facts.get("compensation"), "job_facts.compensation")
+    comp = None
+    if "compensation" in facts and not legacy:
+        p.bad("EVL003", LEGACY_PAY)
+    else:
+        comp = p.mapping(facts.get("compensation"), "job_facts.compensation")
     values: dict = {}
     floor_given = False
     if comp:
@@ -531,6 +593,38 @@ def _job_facts(p: _Parser, raw: object) -> JobFacts:
                     sponsorship_quote=squote, **values)
 
 
+def _v1_result(rec: Record) -> bool:
+    """The stored result is basis version 1 (a 0.5.0 evaluation), the only case the legacy pay block is read."""
+    result = rec.result
+    basis = result.get("basis") if isinstance(result, dict) else None
+    return isinstance(basis, dict) and basis.get("basis_version") == "1"
+
+
+def has_legacy_pay(rec: Record) -> bool:
+    """The agent half still carries the 0.5.0 `job_facts.compensation` key."""
+    facts = rec.agent.get("job_facts") if isinstance(rec.agent, dict) else None
+    return isinstance(facts, dict) and "compensation" in facts
+
+
+def legacy_refusal(rec: Record, inputs: Inputs) -> Issue | None:
+    """EVL003 when a basis-v1 record still carries the legacy pay block: `evaluate` must not run until it is migrated.
+    The message names the situation (spec 10): no compensation.md, an invalid one, a valid one without observations
+    (it cannot cover the block: record the pay first, so following the message never drops it silently), or a valid
+    one with observations. (On any other record the block is already EVL003 from `parse_agent`.)"""
+    if not (has_legacy_pay(rec) and _v1_result(rec)):
+        return None
+    errors = sorted({i.code for i in inputs.compensation_issues if i.severity == "error"})
+    if errors:
+        tail = _LEGACY_INVALID.format(codes=", ".join(errors))
+    elif inputs.compensation_text is None:
+        tail = _LEGACY_ABSENT
+    elif inputs.compensation is not None and not inputs.compensation.observations:
+        tail = _LEGACY_EMPTY
+    else:
+        tail = _LEGACY_VALID
+    return Issue("error", "EVL003", rec.rel, _LEGACY_HEAD + tail, "see the `evaluate` skill (migration)")
+
+
 def parse_agent(rec: Record) -> tuple[Agent, list[Issue]]:
     """The agent half, best effort, with its structural issues (EVL002, EVL003, EVL004 for absent quotes, EVL006)."""
     p = _Parser(rec.rel)
@@ -554,7 +648,7 @@ def parse_agent(rec: Record) -> tuple[Agent, list[Issue]]:
         judged = _fit(p, item, n, seen_rows)
         if judged is not None:
             fit.append(judged)
-    job_facts = _job_facts(p, agent.get("job_facts"))
+    job_facts = _job_facts(p, agent.get("job_facts"), legacy=_v1_result(rec))
     return Agent(tuple(reqs), tuple(fit), job_facts, tuple(p.quotes), tuple(p.links)), p.issues
 
 
@@ -566,10 +660,14 @@ def no_requirements(rec: Record) -> list[Issue]:
 
 
 def validate_agent(rec: Record, jd_text: str | None, career: Career, rubric: Rubric, markets: Markets,
-                   job_id: str | None) -> list[Issue]:
+                   job_id: str | None, *, compensation: CompRecord | None = None) -> list[Issue]:
     """EVL002-EVL006 for the agent half (spec 8 and 16.1). Pure; never raises on a malformed record.
 
     `job_id` is the id in this job's `job.md` (None when it cannot be read: the job check is then skipped).
+    `compensation` is the job's parsed compensation.md (`Inputs.compensation`): when it has observations, its `market`
+    must name the same Markets row as `job_facts.market` (EVL006). None skips that check, and so does an empty agent
+    half (an untouched `--init` skeleton states nothing yet; `evaluate` rejects it with EVL002 anyway) or a
+    `job_facts.market` that is not text (already EVL003; a second EVL006 would mislead).
     """
     agent, issues = parse_agent(rec)
 
@@ -602,6 +700,13 @@ def validate_agent(rec: Record, jd_text: str | None, career: Career, rubric: Rub
         markets_mod.verify_market(agent.job_facts, markets)
     except MarketError as exc:
         bad("EVL006", str(exc))
+    facts = rec.agent.get("job_facts") if isinstance(rec.agent, dict) else None
+    raw_market = facts.get("market") if isinstance(facts, dict) else None
+    if compensation is not None and compensation.observations and rec.agent and (
+            raw_market is None or isinstance(raw_market, str)) and (    # an unparseable market is EVL003 already
+            norm_label(compensation.market or "") != norm_label(agent.job_facts.market or "")):
+        bad("EVL006", f"job_facts.market {agent.job_facts.market!r} differs from compensation.md's market "
+                      f"{compensation.market!r}; name the same `## Markets` row in both")
     return issues
 
 
@@ -626,6 +731,8 @@ def assemble(basis: dict, stamps: Stamps | dict, requirements: list[dict]) -> di
     """The `result:` mapping for a basis: scored with the rules version the basis declares (`score.score`)."""
     s = score.score(basis)
     stamp_map = dataclasses.asdict(stamps) if isinstance(stamps, Stamps) else dict(stamps)
+    keys = stamp_keys(basis.get("basis_version")) or tuple(
+        k for k in _ALL_STAMPS if stamp_map.get(k) is not None)        # an unknown version keeps the names it was given
     return {
         "tier": str(s.tier),
         "combined": score.stored_score(s.combined),
@@ -635,17 +742,34 @@ def assemble(basis: dict, stamps: Stamps | dict, requirements: list[dict]) -> di
         "caps": [{"code": c.code, "ceiling": str(c.ceiling), "reason": c.reason} for c in s.caps],
         "action_items": [score.action_item_text(i) for i in s.action_items],
         "requirements": [dict(r) for r in requirements],
-        "stamps": {k: stamp_map[k] for k in STAMP_KEYS},
+        "stamps": {k: stamp_map[k] for k in keys},
         "basis_sha256": sha256_hex(canonical_json(basis)),
         "basis": basis,
     }
 
 
+def _compensation_errors(inputs: Inputs) -> None:
+    """`RecordError` carrying the CMP codes when the job's compensation.md has any CMP error."""
+    errors = [i for i in inputs.compensation_issues if i.severity == "error"]
+    if errors:
+        found = sorted({i.code for i in errors})
+        raise RecordError(f"{comp_rules.COMPENSATION_FILE} is invalid ({', '.join(found)}): {errors[0].message}; "
+                          "fix it (`careeros comp <job>` lists the problems)", code=found[0])
+
+
 def derive_basis(agent: Agent, inputs: Inputs) -> tuple[dict, derive.Derived]:
-    """The current basis (current versions) and derivation. Raises `DeriveError`/`MarketError` on invalid links/market."""
+    """The current basis (current versions, layout v2) and derivation. Pay comes from `inputs.compensation` (an absent
+    file is the empty record), compared with the floor of the Markets row `job_facts.market` names
+    (`compensation.service.floor_for`), with the current rules' `fx_window_days`. Raises `DeriveError`/`MarketError` on
+    invalid links/market and `RecordError` (a CMP code) when compensation.md has errors."""
+    _compensation_errors(inputs)
     derived = derive.derive(agent.requirements, inputs.career, inputs.lexicon, inputs.now)
     check = markets_mod.verify_market(agent.job_facts, inputs.markets)
-    basis = derived.basis.complete(agent.fit, agent.job_facts, check, inputs.rubric)
+    _, floor = comp_service.floor_for(inputs.markets, agent.job_facts.market)   # resolvable: verify_market passed
+    window = rules.rules_for(rules.RULES_VERSION).fx_window_days
+    pay = comp_derive.derive_compensation(inputs.compensation or comp_service.EMPTY, floor, fx_window_days=window)
+    basis = derived.basis.complete(agent.fit, agent.job_facts, check, inputs.rubric,
+                                   compensation=comp_derive.to_basis(pay), floor=floor)
     basis["basis_version"], basis["rules_version"] = rules.BASIS_VERSION, rules.RULES_VERSION
     return basis, derived
 
@@ -658,9 +782,13 @@ def compute(rec: Record, inputs: Inputs) -> dict:
                           code=issues[0].code)
     if inputs.jd_text is None:
         raise RecordError(f"{rec.rel}: {JD_FILE} is missing", code="EVL004")
+    refusal = legacy_refusal(rec, inputs)
+    if refusal is not None:
+        raise RecordError(f"{rec.rel}: {refusal.message}", code="EVL003")
     basis, derived = derive_basis(agent, inputs)
     current = stamps(inputs.jd_text, inputs.career, inputs.rubric, rules.RULES_VERSION, rec.fm.get("agent"),
-                     lexicon=inputs.lexicon, markets=inputs.markets, now=inputs.now)
+                     lexicon=inputs.lexicon, markets=inputs.markets, now=inputs.now,
+                     compensation=compensation_stamp(inputs))
     return assemble(basis, current, display_requirements(derived))
 
 

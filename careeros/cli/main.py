@@ -3,6 +3,7 @@ import typer
 from careeros.cli.approve import approve_cmd
 from careeros.cli.archive import archive_cmd
 from careeros.cli.check import check_cmd
+from careeros.cli.comp import comp_cmd
 from careeros.cli.doctor import doctor_cmd
 from careeros.cli.evaluate import evaluate_cmd
 from careeros.cli.init_cmd import init_cmd
@@ -29,6 +30,7 @@ app.command("status")(status_cmd)
 app.command("validate")(validate_cmd)
 app.command("transition")(transition_cmd)
 app.command("evaluate")(evaluate_cmd)
+app.command("comp")(comp_cmd)
 app.command("approve")(approve_cmd)
 app.command("archive")(archive_cmd)
 app.command("migrate")(migrate_cmd)

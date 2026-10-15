@@ -60,6 +60,7 @@ jobs/
       people.md         — hiring manager, recruiter, peers
       jd.md             — the posting, saved verbatim
       evaluation.md     — fit evaluation against your career memory
+      compensation.md   — the job's dated pay observations and currency conversions
       prep.md           — tailoring brief (keywords, bullets)
       interview-prep.md — question bank + STAR stories
       offer.md          — offer details + negotiation notes
@@ -106,6 +107,15 @@ careeros evaluate <job>          # score it against your career memory
 ```
 
 In Claude Code say "evaluate [job]". The agent saves the posting to `jd.md` and records the requirements and fit judgements with verbatim quotes; the command matches them against your facts and gives a tier, scores, confidence, sponsorship and pay caps and a list of what would change the result. It never changes a job's state, and a score is not evidence for a draft. Run `careeros upgrade` to receive the `evaluate` skill. See `docs/evaluation.md`.
+
+## Job compensation
+
+```bash
+careeros comp <job> --init   # create compensation.md for the agent to fill in
+careeros comp <job>          # validate it and show the derivation
+```
+
+Each saved job can carry a `compensation.md` of dated pay observations (`posted`, `recruiter` or `estimate`, each with its source, confidence and, for `posted`, a verbatim quote) and recorded currency conversions. `careeros comp` validates it and derives one effective range against your `## Markets` floor; `careeros evaluate` reads that as the only source of pay for its compensation cap. The `browse` skill records pay as it saves a job. Evaluations written by 0.5.0 read as stale once and need an explicit re-evaluation, which the `evaluate` skill guides. Run `careeros upgrade` to receive the updated skills. See `docs/compensation.md`.
 
 ## Requirements
 

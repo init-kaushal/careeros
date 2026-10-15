@@ -26,6 +26,27 @@ PREP_GATE_BEFORE = "caac6e951267c866b55512c66085694d10d621105c8e766648c110a654d5
 BROWSE_HINT = ('- To see how well a saved job fits your career memory, say "evaluate [job]" (the `evaluate` skill); '
                "it scores the posting against your facts and never changes the job's state.\n")
 
+# the 0.6.0 compensation additions to browse: the save step (after step E) and a second closing hint line
+COMP_BROWSE_ADDITIONS = {
+    "step": ("\n**F. Record the pay, per job.** Run `careeros comp [job-slug] --init`. It writes "
+             "`jobs/discovered/[job-slug]/compensation.md` and refuses if the file exists (then edit that file). Set `market` to "
+             "the exact label of the job's `## Markets` row; `null` is valid only with `observations: []`. Add one observation "
+             "for each figure the comp check found: `kind` (`posted` for the employer's own listing, `recruiter` for a "
+             "recruiter's statement, `estimate` for a third-party guess such as Levels.fyi or Glassdoor), `low` and `high` as "
+             "whole numbers (`null` for a side the source does not give), `currency`, `basis` (`base` or `total`), `period` "
+             "(`year` or `month`), `source`, `as_of` (the date you saw it, YYYY-MM-DD) and `confidence` (`high`, `medium` or "
+             "`low`; the record has no `unknown`, so record `low` for a weak source or omit the figure, and never choose a "
+             "confidence just to clear a `CMP` error). Record `posted` ONLY when you read the full description on the job page, "
+             "saved it verbatim to `jd.md` (as the `evaluate` skill's STEP 1 does), and the `quote` is a line copied verbatim "
+             "from it. Never write `jd.md` from a listing snippet, and never paste a band into it to satisfy `CMP004`; "
+             "otherwise record the figure as `estimate` with the board or page as its `source`, or leave `observations: []` "
+             "and say so. If you found no figure, leave `observations: []`. Add a `conversions` entry only for a rate you "
+             "actually looked up, with its source and date. Never invent a figure, a source or a date. Then run "
+             "`careeros comp [job-slug]` and fix any `CMP` error it reports.\n"),
+    "hint": ("- Pay you found is kept in the job's `compensation.md` (STEP 5, F); `careeros comp [job-slug]` shows what it "
+             "means, and the `evaluate` skill reads it.\n"),
+}
+
 GPT_TREE = {
     ".gpt/skills/browse/SKILL.md": "e078ebb9e4428adbf3a0239ecd9fd7b6d301c9a62c9f6540f7cbd3195c805f71",
     ".gpt/skills/market/SKILL.md": "660bd59aea64c3d94571bac5abd67e2c4a294ef31635eca92f2305f83ba39da4",
@@ -115,6 +136,9 @@ def test_prep_checks_for_a_fresh_evaluation_and_keeps_the_gate() -> None:
 
 def test_browse_gained_exactly_one_closing_hint_line() -> None:
     text = skill("browse")
+    for addition in COMP_BROWSE_ADDITIONS.values():      # the 0.6.0 compensation additions (see test_skills_compensation)
+        assert text.count(addition) == 1
+        text = text.replace(addition, "")
     assert text.endswith(BROWSE_HINT) and text.count(BROWSE_HINT) == 1
     assert sha(text[:-len(BROWSE_HINT)]) == BROWSE_BEFORE
 
@@ -188,11 +212,12 @@ def example_blocks() -> dict[str, str]:
 def test_the_skills_complete_example_is_accepted_by_careeros_evaluate(career) -> None:
     root, ids = career
     blocks = example_blocks()
-    assert set(blocks) == {"profile.md (the parts the evaluation reads)", "jd.md", "evaluation.md agent half"}
+    assert set(blocks) == {"profile.md (the parts the evaluation reads)", "jd.md", "compensation.md", "evaluation.md agent half"}
     (root / "profile.md").write_text(blocks["profile.md (the parts the evaluation reads)"] + "\n", encoding="utf-8")
     job = add_job(root, "example-platform", company="Example Corp", title="Senior Platform Engineer")
     job_dir = job["path"].parent
     (job_dir / "jd.md").write_text(blocks["jd.md"] + "\n", encoding="utf-8")
+    (job_dir / "compensation.md").write_text(blocks["compensation.md"] + "\n", encoding="utf-8")
     # the example names facts by placeholder; the invented memory fixture supplies the real ids
     placeholders = {"ach_incident": ids["incident"], "skl_kubernetes": ids["skill_kubernetes"]}
     agent_text = blocks["evaluation.md agent half"]
@@ -201,7 +226,7 @@ def test_the_skills_complete_example_is_accepted_by_careeros_evaluate(career) ->
     for name, real in placeholders.items():
         agent_text = agent_text.replace(name, real)
     agent = yaml.safe_load(agent_text)
-    assert list(agent) == ["agent"]
+    assert list(agent) == ["agent"] and "compensation" not in agent["agent"]["job_facts"]      # pay lives in compensation.md
 
     res = runner.invoke(app, ["evaluate", job["id"], "--init", "--workspace", str(root)])
     assert res.exit_code == 0, res.output

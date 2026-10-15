@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from helpers import add_job
 
-from careeros.core.evaluation import canon, integrity, record, rules
+from careeros.core.evaluation import canon, derive, integrity, markets, record, rules
 from careeros.core.evaluation.model import Kind, ReqClass
 from careeros.core.memory import ops, store
 from careeros.core.memory.lexicon import Lexicon
@@ -77,22 +77,54 @@ def agent_half(ids: dict) -> dict:
         "job_facts": {
             "market": "Atlantis (home)",
             "sponsorship": {"needed": "no", "listing": "unknown"},
-            "compensation": {
-                "range": {"low": 3000000, "high": 4200000, "currency": "INR", "basis": "base"},
-                "floor": {"amount": 3500000, "currency": "INR", "basis": "base"},
-                "source": "posting", "confidence": "medium", "as_of": "2026-09",
-            },
         },
     }
 
 
+# The 0.5.0 pay block. Since basis/rules version 2 it is accepted only, read-only, on a record whose stored result is
+# basis version 1 (`V1_RESULT`); pay for new evaluations lives in compensation.md (`write_comp`).
+LEGACY_COMP = {
+    "range": {"low": 3000000, "high": 4200000, "currency": "INR", "basis": "base"},
+    "floor": {"amount": 3500000, "currency": "INR", "basis": "base"},
+    "source": "posting", "confidence": "medium", "as_of": "2026-09",
+}
+V1_RESULT = {"result": {"basis": {"basis_version": "1"}}}
+
+
+def legacy_agent(ids: dict) -> dict:
+    """The 0.5.0 agent half: `agent_half` with the legacy `job_facts.compensation` block."""
+    agent = agent_half(ids)
+    agent["job_facts"]["compensation"] = copy.deepcopy(LEGACY_COMP)
+    return agent
+
+
+# The pay the 0.5.0 agent half carried, as a compensation.md observation (a recruiter figure needs no quote).
+COMP_OBS = {"id": "c1", "kind": "recruiter", "low": 3000000, "high": 4200000, "currency": "INR", "basis": "base",
+            "period": "year", "source": "recruiter call", "quote": None, "as_of": "2026-09-15", "confidence": "medium"}
+COMP_MARKET = "Atlantis (home)"
+
+
 # --- builders ------------------------------------------------------------------------------------
 
-def make_job(root: Path, slug: str = "example-platform") -> dict:
+def write_comp(job: dict, observations=(COMP_OBS,), *, market: str | None = COMP_MARKET, conversions=(),
+               body: str = "Free notes.\n") -> Path:
+    """Write the job's compensation.md (agent-owned) with the given observations and conversions."""
+    fm = {"schema": 1, "market": market, "observations": [dict(o) for o in observations],
+          "conversions": [dict(c) for c in conversions]}
+    path = job["path"].parent / "compensation.md"
+    path.write_text(join_frontmatter(fm, body), encoding="utf-8")
+    return path
+
+
+def make_job(root: Path, slug: str = "example-platform", *, comp: bool = True) -> dict:
+    """A job with jd.md and, unless `comp` is False, the compensation.md equivalent of the 0.5.0 pay block."""
     (root / "profile.md").write_text(PROFILE, encoding="utf-8")
     job = add_job(root, slug, company="Example Corp", title="Senior Platform Engineer")
     (job["path"].parent / "jd.md").write_text(JD, encoding="utf-8")
     job["eval"] = job["path"].parent / "evaluation.md"
+    job["comp"] = job["path"].parent / "compensation.md"
+    if comp:
+        write_comp(job)
     return job
 
 
@@ -165,7 +197,7 @@ def test_fresh_record_round_trips_and_is_clean(ws):
     assert (rep.stale, rep.tampered, rep.unsupported, rep.issues) == ((), (), None, ())
     assert rec.body == record.render_body(rec.result)
     assert set(rec.result) == set(record.RESULT_KEYS)
-    assert set(rec.result["stamps"]) == {"jd", "memory", "rubric", "rules", "inputs"}
+    assert set(rec.result["stamps"]) == {"jd", "memory", "rubric", "rules", "inputs", "compensation"}
     assert rec.result["basis_sha256"] == canon.sha256_hex(canon.canonical_json(rec.result["basis"]))
     assert rec.result["tier"] == "pursue" and rec.result["combined"] == 0.8
 
@@ -277,12 +309,13 @@ def test_record_for_another_job_is_evl002(career):
 def test_invalid_values_are_evl003(career, path, value):
     root, ids = career
     job = make_job(root)
-    agent = agent_half(ids)
+    legacy = "compensation" in path               # the legacy pay block is parsed only on a basis-v1 record
+    agent = legacy_agent(ids) if legacy else agent_half(ids)
     target = agent
     for key in path[:-1]:
         target = target[key]
     target[path[-1]] = value
-    assert codes(issues_of(root, job, agent)) == ["EVL003"]
+    assert codes(issues_of(root, job, agent, extra=V1_RESULT if legacy else None)) == ["EVL003"]
 
 
 def test_unknown_rubric_row_is_evl003(career):
@@ -416,22 +449,22 @@ def test_link_to_an_inactive_fact_is_evl005(career, how):
 
 # --- EVL006 --------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("change", [
-    lambda a: a["job_facts"]["sponsorship"].update(listing="not_offered"),
-    lambda a: a["job_facts"]["sponsorship"].update(listing="offered", quote="  "),
-    lambda a: a["job_facts"]["compensation"].pop("as_of"),
-    lambda a: a["job_facts"]["compensation"].pop("source"),
-    lambda a: a["job_facts"]["compensation"].update(confidence=None),
-    lambda a: a["job_facts"].update(market="Narnia"),
-    lambda a: a["job_facts"].pop("market"),
-    lambda a: a["job_facts"].update(market="  ", compensation=dict(a["job_facts"]["compensation"])),
+@pytest.mark.parametrize("change, legacy", [
+    (lambda a: a["job_facts"]["sponsorship"].update(listing="not_offered"), False),
+    (lambda a: a["job_facts"]["sponsorship"].update(listing="offered", quote="  "), False),
+    (lambda a: a["job_facts"]["compensation"].pop("as_of"), True),
+    (lambda a: a["job_facts"]["compensation"].pop("source"), True),
+    (lambda a: a["job_facts"]["compensation"].update(confidence=None), True),
+    (lambda a: a["job_facts"].update(market="Narnia"), False),
+    (lambda a: a["job_facts"].pop("market"), False),
+    (lambda a: a["job_facts"].update(market="  ", compensation=dict(a["job_facts"]["compensation"])), True),
 ])
-def test_job_fact_rules_are_evl006(career, change):
+def test_job_fact_rules_are_evl006(career, change, legacy):
     root, ids = career
     job = make_job(root)
-    agent = agent_half(ids)
+    agent = legacy_agent(ids) if legacy else agent_half(ids)     # legacy pay rules hold on a basis-v1 record
     change(agent)
-    assert codes(issues_of(root, job, agent)) == ["EVL006"]
+    assert codes(issues_of(root, job, agent, extra=V1_RESULT if legacy else None)) == ["EVL006"]
 
 
 def test_not_offered_with_a_verbatim_quote_is_accepted(career):
@@ -445,12 +478,12 @@ def test_not_offered_with_a_verbatim_quote_is_accepted(career):
 def test_floor_given_without_a_market_is_evl006_but_no_market_and_no_values_is_fine(career):
     root, ids = career
     job = make_job(root)
-    agent = agent_half(ids)
+    agent = legacy_agent(ids)                                        # a legacy floor: only on a basis-v1 record
     agent["job_facts"].pop("market")
     agent["job_facts"]["sponsorship"].pop("needed")
-    assert codes(issues_of(root, job, agent)) == ["EVL006"]          # the floor is still given
+    assert codes(issues_of(root, job, agent, extra=V1_RESULT)) == ["EVL006"]          # the floor is still given
     agent["job_facts"]["compensation"].pop("floor")
-    assert issues_of(root, job, agent) == []
+    assert issues_of(root, job, agent, extra=V1_RESULT) == []
 
 
 def test_skeleton_agent_has_no_structural_errors(career):
@@ -524,7 +557,7 @@ def test_changing_the_markets_row_is_stale_rubric_not_tamper(ws):
 
 def test_bumping_the_rules_version_is_stale_rules(ws, monkeypatch):
     root, ids, job = ws
-    monkeypatch.setattr(rules, "RULES_VERSION", "2")
+    monkeypatch.setattr(rules, "RULES_VERSION", "3")
     assert stale_of(root, job) == ("rules",)
 
 
@@ -586,9 +619,8 @@ def test_sub_precision_score_edit_is_evl007(ws):
 def test_deleted_cap_is_evl007_scores(career):
     root, ids = career
     job = make_job(root)
-    agent = agent_half(ids)
-    agent["job_facts"]["compensation"]["range"]["high"] = 3000000          # below the verified floor: capped
-    write_agent(root, job, agent)
+    write_comp(job, [dict(COMP_OBS, high=3000000)])                         # below the verified floor: capped
+    write_agent(root, job, agent_half(ids))
     assert load(root, job).result["caps"][0]["code"] == "compensation"
     edit(root, job, lambda fm: fm["result"].update(caps=[]))
     assert "scores" in tampered(root, job)
@@ -677,7 +709,7 @@ def test_stale_memory_or_rubric_never_reads_as_tamper(ws):
 
 def test_stamps_rules_differing_from_basis_rules_version_is_evl007(ws):
     root, ids, job = ws
-    edit(root, job, lambda fm: fm["result"]["stamps"].update(rules="2"))
+    edit(root, job, lambda fm: fm["result"]["stamps"].update(rules="1"))
     rep = report(root, job)
     assert "basis" in rep.tampered and "rules" in rep.stale
     assert any("rules_version" in i.message for i in rep.issues if i.code == "EVL007")
@@ -724,11 +756,14 @@ def test_older_known_rules_version_recomputes_with_its_own_constants(ws, monkeyp
     assert "scores" in report(root, job).tampered
 
 
-def test_older_known_basis_version_is_verified_but_stale(ws, monkeypatch):
-    root, ids, job = ws
+def test_older_known_basis_version_is_verified_but_stale(career, monkeypatch):
+    root, ids = career
+    job = make_job(root)
+    write_v1_record(root, job, agent_half(ids))         # the v1 layout: the only older one the scorer reads
     monkeypatch.setitem(rules.BASIS_VERSIONS, "0", dataclasses.replace(rules.BASIS_VERSIONS["1"], version="0"))
     result = stored_result(root, job)
     result["basis"]["basis_version"] = "0"
+    result["basis"]["rules_version"] = result["stamps"]["rules"] = rules.RULES_VERSION   # only the basis is older
     rewrite_result(root, job, record.assemble(result["basis"], result["stamps"], result["requirements"]))
     rep = report(root, job)
     assert rep.tampered == () and rep.stale == ("basis",) and rep.unsupported is None
@@ -750,6 +785,7 @@ def test_unparseable_floor_and_preferred_sponsorship_warn_with_the_cell_text(car
     job = make_job(root)
     agent = agent_half(ids)
     agent["job_facts"]["market"] = "Elsewhere"
+    write_comp(job, market="Elsewhere")                  # compensation.md names the same Markets row
     write_agent(root, job, agent)
     found = market_warnings(root, job)
     assert len(found) == 2 and all(i.severity == "warning" for i in found)
@@ -757,12 +793,28 @@ def test_unparseable_floor_and_preferred_sponsorship_warn_with_the_cell_text(car
     assert any('"preferred"' in i.message and "sponsorship" in i.message for i in found)
 
 
+def write_v1_record(root, job, agent: dict) -> None:
+    """A record as 0.5.0 wrote it: the legacy pay block and a basis/rules version 1 result (the v1 layout builder)."""
+    path = write_agent(root, job, agent, evaluate=False, extra=V1_RESULT)
+    rec = load(root, job)
+    inputs = record.read_inputs(root, path.parent)
+    parsed, problems = record.parse_agent(rec)
+    assert problems == []
+    derived = derive.derive(parsed.requirements, inputs.career, inputs.lexicon, inputs.now)
+    check = markets.verify_market(parsed.job_facts, inputs.markets)
+    basis = derived.basis.complete_v1(parsed.fit, parsed.job_facts, check, inputs.rubric)
+    assert (basis["basis_version"], basis["rules_version"]) == ("1", "1")
+    stamps = record.stamps(inputs.jd_text, inputs.career, inputs.rubric, "1", rec.fm["agent"], lexicon=inputs.lexicon,
+                           markets=inputs.markets, now=inputs.now)
+    path.write_bytes(record.to_bytes(rec, record.assemble(basis, stamps, record.display_requirements(derived))))
+
+
 def test_agent_row_conflict_warns_with_the_cell_text(career):
     root, ids = career
     job = make_job(root)
-    agent = agent_half(ids)
+    agent = legacy_agent(ids)                    # an agent floor (and so a conflict) exists only in a basis-v1 record
     agent["job_facts"]["compensation"]["floor"]["amount"] = 3000000
-    write_agent(root, job, agent)
+    write_v1_record(root, job, agent)
     found = market_warnings(root, job)
     assert len(found) == 1 and "conflict" in found[0].message and "₹35,00,000" in found[0].message
 
