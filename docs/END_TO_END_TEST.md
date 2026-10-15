@@ -100,3 +100,49 @@ Not covered: the skills cannot be run live here; they are covered by the wording
 - Automated tests: Python 3.14: 1329 passed (150 s); Python 3.11: 1329 passed (146 s). `tests/test_evaluation_e2e.py` walks the same flow plus every staleness cause on its own (`jd`, `memory`, `rubric`, `rules`, `inputs`), a ledger failure, the crash window (`EVL009`, healed by a re-run) and the delivered skills.
 
 Not covered: the `evaluate`, `prep` and `browse` skills cannot be run live here; they are covered by the wording tests only. A real posting and a real workspace were not used, so the quality of an agent's judgements on real text is untested.
+
+## Structured compensation (0.6.0)
+
+- Date: 2026-10-15
+- Commit under test: `47c1281` (the end-to-end test and this record are added by the commit that follows it)
+- Method: a brand-new invented workspace was generated in a temporary directory with `careeros init`; an invented career memory, an invented profile (markets table with a verified floor), one invented job with an invented `jd.md` and a valid agent half were written by a throwaway script that is not committed. `compensation.md` was written by the script, since the skills cannot be run live. Every command ran the installed `careeros` with `-w` on that workspace. A second brand-new workspace was a copy of the committed golden 0.5.0 fixture. No real workspace was read, copied or touched, and no real posting, employer, person or figure was used. For each read-only command, a SHA-256 of every file in the workspace (including `ledger.jsonl` and `.careeros/`) was taken before and after.
+
+| # | Command (after the step shown) | Exit | Result | Files before/after |
+|---|---|---|---|---|
+| 1 | `validate` (no `compensation.md`) | 0 | no `EVL` or `CMP` finding | identical |
+| 2 | `comp <job> --init` | 0 | skeleton written, no event | n/a |
+| 3 | `comp <job>` (posted figure below the verified floor) | 0 | one `compensation.recorded` | n/a |
+| 4 | `evaluate <job>` | 0 | tier `weak`, cap `compensation` | n/a |
+| 5 | `validate` | 0 | no `EVL` finding | identical |
+| 6 | raise the figure above the floor, then `validate` | 0 | `EVL008` (warning), no `EVL007` | identical |
+| 7 | `comp <job>` | 0 | one `compensation.recorded` | n/a |
+| 8 | `evaluate <job>` | 0 | tier `pursue`, 0 caps | n/a |
+| 9 | `evaluate <job>` (again) | 0 | `(unchanged)`, no new event | n/a |
+| 10 | `validate` | 0 | no `EVL` finding | identical |
+| 11-12 | foreign currency, no conversion: `comp`, `evaluate` | 0, 0 | 0 caps, `FX_CONVERSION_MISSING` action item | n/a |
+| 13-14 | add an in-window conversion: `comp`, `evaluate` | 0, 0 | tier `weak`, cap `compensation` | n/a |
+| 15-16 | conversion dated after the observation: `comp`, `evaluate` | 0, 0 | 0 caps, `FX_RATE_OUTSIDE_WINDOW` action item | n/a |
+| 17-18 | conflicting recruiter pair: `comp`, `evaluate` | 0, 0 | 0 caps, resolve-conflict action item | n/a |
+| 19 | `comp <job>` (low above high) | 1 | `CMP003`; one `compensation.rejected` | n/a |
+| 20 | `comp <job>` (same invalid file) | 1 | `CMP003`; no new event (deduped) | n/a |
+| 21 | `validate` | 1 | `CMP003`, `EVL008`, `STR002` | identical |
+| 22 | `ledger verify` | 0 | chain OK (31 events) | n/a |
+
+- Events across the run: 6 `compensation.recorded`, 1 `compensation.rejected`, 6 `evaluation.completed`. No evaluation event came from `comp` or `validate`.
+- Every `validate` also showed one `STR002` warning for a workspace file that the invented workspace never created. It is unrelated to compensation.
+- Golden 0.5.0 record (copy of the committed fixture), by hand following the skill steps:
+
+| # | Command | Exit | Result | Files before/after |
+|---|---|---|---|---|
+| 1 | `validate` | 0 | `EVL008` (stale), no `EVL007`, no `EVL010` | identical |
+| 2 | `evaluate <job>` | 1 | `EVL003`, the migration wording; nothing changed but one `evaluation.rejected` | n/a |
+| 3 | write `compensation.md`, then `comp <job>` | 0 | one `compensation.recorded` | n/a |
+| 4 | remove the legacy block, then `evaluate <job>` | 0 | version 2, tier `weak`, cap `compensation` (same cap as 0.5.0) | n/a |
+| 5 | `evaluate <job>` (again) | 0 | `(unchanged)` | n/a |
+| 6 | `validate` | 0 | no `EVL` finding | identical |
+
+- Migration interruptions (automated, in `tests/test_compensation_e2e.py`): stopped after step 1, in the empty-skeleton state, after step 3, and with the block removed and no `compensation.md` (rebuilt from the stored version 1 range). Each resumed to the same tier, caps, stamps, action items and `cap_inputs` as the uninterrupted run; a written `compensation.md` was never rewritten (SHA-256 equal after its first full write) and no observation was duplicated.
+- Real workspace: not touched.
+- Automated tests: Python 3.14: 1795 passed (30 s); Python 3.11: 1795 passed (30 s). `tests/test_compensation_e2e.py` walks the same flow in one test (cap, stale, uncap, `(unchanged)`, foreign currency, conflict, rejection dedupe, write scope with a SHA-256 table, event counts, isolation of `career/`, the job file and `jd.md`) plus the migration matrix above.
+
+Not covered: the `browse` and `evaluate` skills cannot be run live here; they are covered by the wording tests only, and the migration steps were followed by a script, not by an agent. No real posting and no real workspace were used, so the quality of an agent's observations, quotes and migration answers on real text is untested.
