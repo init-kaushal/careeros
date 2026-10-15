@@ -98,6 +98,8 @@ _LEGACY_HEAD = ("job_facts.compensation is the 0.5.0 pay block and pay now lives
 _LEGACY_ABSENT = "there is no compensation.md yet, so migrate the block (see the `evaluate` skill) before re-evaluating"
 _LEGACY_INVALID = ("compensation.md has errors ({codes}): fix the CMP errors first (`careeros comp <job>` lists them), "
                    "then confirm the record covers the legacy block and remove the block")
+_LEGACY_EMPTY = ("compensation.md is empty (no observations), so it cannot cover the legacy block: record the legacy "
+                 "pay as an observation in it (or confirm the job has no pay information) before removing the block")
 _LEGACY_VALID = ("compensation.md exists and is valid: confirm the record covers the legacy block, then remove the "
                  "block from the agent half and run `careeros evaluate <job>`")
 
@@ -606,8 +608,9 @@ def has_legacy_pay(rec: Record) -> bool:
 
 def legacy_refusal(rec: Record, inputs: Inputs) -> Issue | None:
     """EVL003 when a basis-v1 record still carries the legacy pay block: `evaluate` must not run until it is migrated.
-    The message names the situation (spec 10): no compensation.md, an invalid one, or a valid one. (On any other
-    record the block is already EVL003 from `parse_agent`.)"""
+    The message names the situation (spec 10): no compensation.md, an invalid one, a valid one without observations
+    (it cannot cover the block: record the pay first, so following the message never drops it silently), or a valid
+    one with observations. (On any other record the block is already EVL003 from `parse_agent`.)"""
     if not (has_legacy_pay(rec) and _v1_result(rec)):
         return None
     errors = sorted({i.code for i in inputs.compensation_issues if i.severity == "error"})
@@ -615,6 +618,8 @@ def legacy_refusal(rec: Record, inputs: Inputs) -> Issue | None:
         tail = _LEGACY_INVALID.format(codes=", ".join(errors))
     elif inputs.compensation_text is None:
         tail = _LEGACY_ABSENT
+    elif inputs.compensation is not None and not inputs.compensation.observations:
+        tail = _LEGACY_EMPTY
     else:
         tail = _LEGACY_VALID
     return Issue("error", "EVL003", rec.rel, _LEGACY_HEAD + tail, "see the `evaluate` skill (migration)")
@@ -661,7 +666,8 @@ def validate_agent(rec: Record, jd_text: str | None, career: Career, rubric: Rub
     `job_id` is the id in this job's `job.md` (None when it cannot be read: the job check is then skipped).
     `compensation` is the job's parsed compensation.md (`Inputs.compensation`): when it has observations, its `market`
     must name the same Markets row as `job_facts.market` (EVL006). None skips that check, and so does an empty agent
-    half (an untouched `--init` skeleton states nothing yet; `evaluate` rejects it with EVL002 anyway).
+    half (an untouched `--init` skeleton states nothing yet; `evaluate` rejects it with EVL002 anyway) or a
+    `job_facts.market` that is not text (already EVL003; a second EVL006 would mislead).
     """
     agent, issues = parse_agent(rec)
 
@@ -694,7 +700,10 @@ def validate_agent(rec: Record, jd_text: str | None, career: Career, rubric: Rub
         markets_mod.verify_market(agent.job_facts, markets)
     except MarketError as exc:
         bad("EVL006", str(exc))
+    facts = rec.agent.get("job_facts") if isinstance(rec.agent, dict) else None
+    raw_market = facts.get("market") if isinstance(facts, dict) else None
     if compensation is not None and compensation.observations and rec.agent and (
+            raw_market is None or isinstance(raw_market, str)) and (    # an unparseable market is EVL003 already
             norm_label(compensation.market or "") != norm_label(agent.job_facts.market or "")):
         bad("EVL006", f"job_facts.market {agent.job_facts.market!r} differs from compensation.md's market "
                       f"{compensation.market!r}; name the same `## Markets` row in both")

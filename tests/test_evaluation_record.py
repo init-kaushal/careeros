@@ -763,9 +763,10 @@ def test_older_known_basis_version_is_verified_but_stale(career, monkeypatch):
     monkeypatch.setitem(rules.BASIS_VERSIONS, "0", dataclasses.replace(rules.BASIS_VERSIONS["1"], version="0"))
     result = stored_result(root, job)
     result["basis"]["basis_version"] = "0"
+    result["basis"]["rules_version"] = result["stamps"]["rules"] = rules.RULES_VERSION   # only the basis is older
     rewrite_result(root, job, record.assemble(result["basis"], result["stamps"], result["requirements"]))
     rep = report(root, job)
-    assert rep.tampered == () and rep.stale == ("rules", "basis") and rep.unsupported is None
+    assert rep.tampered == () and rep.stale == ("basis",) and rep.unsupported is None
 
 
 # --- EVL011 --------------------------------------------------------------------------------------
@@ -801,7 +802,7 @@ def write_v1_record(root, job, agent: dict) -> None:
     assert problems == []
     derived = derive.derive(parsed.requirements, inputs.career, inputs.lexicon, inputs.now)
     check = markets.verify_market(parsed.job_facts, inputs.markets)
-    basis = derived.basis.complete(parsed.fit, parsed.job_facts, check, inputs.rubric)
+    basis = derived.basis.complete_v1(parsed.fit, parsed.job_facts, check, inputs.rubric)
     assert (basis["basis_version"], basis["rules_version"]) == ("1", "1")
     stamps = record.stamps(inputs.jd_text, inputs.career, inputs.rubric, "1", rec.fm["agent"], lexicon=inputs.lexicon,
                            markets=inputs.markets, now=inputs.now)

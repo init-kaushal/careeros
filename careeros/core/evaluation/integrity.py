@@ -37,6 +37,14 @@ and the basis shape is fixed): a forged term, or a swap between the two legal re
 the memory, rubric and inputs stamps are current (derivation check), and always visible through EVL009 against the
 ledger. `evaluate` replaces stale records, and the body is rendered from `result` only.
 
+Compensation (basis version 2) adds limits of the same kind, all caught only by EVL009 (the result no longer matches
+the ledger's hash) and healed by `evaluate`, which records the replacement as `stale,ledger_mismatch`:
+`stamps.compensation` can be forged to a stale value (like the other stamps, it then skips the derivation check); a
+basis forged while the `compensation` or `rubric` stamp is genuinely stale is not re-derived; a downgrade to version 1
+(a self-consistent v1 result plus a legacy `job_facts.compensation` block) reads only as stale (versions 1 stay
+verifiable by design); and while compensation.md has a CMP error (for example CMP004 after a `jd.md` edit) the basis
+cannot be derived, so the derivation check is skipped.
+
 `validate_workspace(root)` runs this and `ledgercheck.verify` (EVL009) for every `jobs/discovered/*/evaluation.md`; it
 never writes and never raises on a hand-edited file.
 """
@@ -61,9 +69,10 @@ _FIX_STALE = "run `careeros evaluate <job>` to refresh the evaluation"
 _FIX_VERSION = "run `careeros evaluate <job>`: it recomputes with this CareerOS's versions"
 _FIX_MARKET = "make the profile `## Markets` row state the floor as one amount with a currency and the sponsorship as " \
               "`required` or `not needed`, and give the same values in `job_facts`; then run `careeros evaluate <job>`"
-_FIX_MARKET_V2 = "make the profile `## Markets` row state the floor as one amount with a currency and the sponsorship " \
-                 "as `required` or `not needed`, and give the sponsorship need in `job_facts` (the floor comes from " \
-                 "the row itself); then run `careeros evaluate <job>`"
+_FIX_FLOOR_V2 = "state the floor in the profile.md `## Markets` row as one amount with a currency (evaluation reads the " \
+                "floor from that row only, never from job_facts); then run `careeros evaluate <job>`"
+_FIX_NEED_V2 = "state the sponsorship in the profile.md `## Markets` row as `required` or `not needed`, and give the " \
+               "same need in `job_facts.sponsorship.needed`; then run `careeros evaluate <job>`"
 
 
 @dataclass(frozen=True)
@@ -236,7 +245,7 @@ def _derivation(rec: Record, result: dict, inputs: Inputs) -> str | None:
 def market_issues(rec: Record) -> list[Issue]:
     """EVL011: every unverified or conflicting floor or need in the stored (well-formed) basis, with its source cell."""
     cap = rec.result["basis"]["cap_inputs"]
-    fix = _FIX_MARKET_V2 if "compensation" in cap else _FIX_MARKET
+    v2 = "compensation" in cap
     out = []
     for name, label in (("need", "sponsorship need"), ("floor", "floor")):
         field = cap[name]
@@ -247,6 +256,7 @@ def market_issues(rec: Record) -> list[Issue]:
             where = "no Markets row: job_facts.market is not named"
         else:
             where = f'the Markets row {cap["market"]!r} (cell "{field["source_cell"]}")'
+        fix = (_FIX_FLOOR_V2 if name == "floor" else _FIX_NEED_V2) if v2 else _FIX_MARKET
         out.append(Issue("warning", "EVL011", rec.rel, f"{label} is {state} against {where}", fix))
     return out
 

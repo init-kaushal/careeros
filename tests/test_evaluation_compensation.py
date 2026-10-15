@@ -360,3 +360,96 @@ def test_golden_v1_refusal_names_the_situation_then_migrates(v1) -> None:
     res = run(root, "evaluate", job["id"])
     assert res.exit_code == 0 and "(unchanged)" in res.output and len(ledger.read_events(root)) == len(events) + 1
     assert not v1_codes(root) & {"EVL007", "EVL008", "EVL009", "EVL010"}
+
+
+# --- fix round 1 -----------------------------------------------------------------------------
+
+def test_golden_v1_refusal_for_an_empty_compensation_md_asks_to_record_the_legacy_pay(v1) -> None:
+    root, job = v1
+    for empty in (lambda: write_comp(job, []), lambda: run(root, "comp", job["id"], "--init")):   # empty, skeleton
+        if job["comp"].exists():
+            job["comp"].unlink()
+        empty()
+        message = refuse(root, job)
+        assert "compensation.md is empty" in message and "record the legacy pay as an observation" in message
+        assert "confirm the job has no pay information" in message and "before removing the block" in message
+        assert "confirm the record covers the legacy block" not in message
+    job["comp"].unlink()
+    absent = refuse(root, job)                                         # the other three wordings are unchanged
+    assert "there is no compensation.md yet, so migrate the block" in absent
+    write_comp(job, [dict(COMP_OBS, low=5, high=1)])
+    assert "compensation.md has errors (CMP003): fix the CMP errors first" in refuse(root, job)
+    write_comp(job, [dict(COMP_OBS, high=3200000)])
+    assert ("compensation.md exists and is valid: confirm the record covers the legacy block, then remove the block"
+            in refuse(root, job))
+
+
+def test_cmp_and_agent_half_errors_are_one_rejection_with_both_code_sets(ws) -> None:
+    root, ids, job = ws
+    write_comp(job, [dict(COMP_OBS, low=5, high=1)])                   # CMP003
+    agent = agent_half(ids)
+    agent["requirements"][0]["quote"] = "not in the posting"           # EVL004
+    write_agent(root, job, agent, evaluate=False)
+    res = run(root, "evaluate", job["id"])
+    assert res.exit_code == 1
+    (event,) = evl_events(root)
+    assert event["reason"] == "CMP003,EVL004"
+
+
+@pytest.mark.parametrize("version", ["99", 1, None, ["1"]])
+def test_the_legacy_block_on_an_unsupported_or_malformed_version_is_evl003(ws, version) -> None:
+    root, ids, job = ws
+    write_agent(root, job, legacy_agent(ids), evaluate=False, extra={"result": {"basis": {"basis_version": version}}})
+    inputs = record.read_inputs(root, job["eval"].parent)
+    found = record.validate_agent(load(root, job), inputs.jd_text, inputs.career, inputs.rubric, inputs.markets,
+                                  inputs.job_id, compensation=inputs.compensation)
+    assert [i.code for i in found] == ["EVL003"] and "pay now lives in compensation.md" in found[0].message
+
+
+def test_v2_evl011_fix_points_at_the_markets_row_not_job_facts(ws) -> None:
+    root, ids, job = ws
+    agent = agent_half(ids)
+    agent["job_facts"]["market"] = "Elsewhere"
+    write_agent(root, job, agent, evaluate=False)
+    evaluate_ok(root, job)
+    found = [i for i in report(root, job).issues if i.code == "EVL011"]
+    (floor,) = [i for i in found if i.message.startswith("floor")]
+    assert "profile.md" in floor.fix and "## Markets" in floor.fix
+    assert "same values in `job_facts`" not in floor.fix and "floor" in floor.fix
+    (need,) = [i for i in found if i.message.startswith("sponsorship")]
+    assert "profile.md" in need.fix and "job_facts.sponsorship" in need.fix
+
+
+def test_an_unparseable_file_after_an_absent_one_reads_stale(ws) -> None:
+    root, ids, job = ws
+    assert evaluate_ok(root, job)["stamps"]["compensation"] == comp_record.EMPTY_STAMP
+    job["comp"].write_text("---\nschema: [unclosed\n---\n", encoding="utf-8")
+    assert stale_names(root, job) == ("compensation",)
+    job["comp"].write_bytes(b"\xff\xfe not utf-8")
+    assert stale_names(root, job) == ("compensation",)
+
+
+def test_an_unparseable_job_facts_market_gives_no_second_evl006(ws) -> None:
+    root, ids, job = ws
+    write_comp(job, [POSTED])
+    agent = agent_half(ids)
+    agent["job_facts"]["market"] = 7
+    write_agent(root, job, agent, evaluate=False)
+    inputs = record.read_inputs(root, job["eval"].parent)
+    found = record.validate_agent(load(root, job), inputs.jd_text, inputs.career, inputs.rubric, inputs.markets,
+                                  inputs.job_id, compensation=inputs.compensation)
+    assert [i.code for i in found] == ["EVL003"]
+
+
+def test_complete_never_switches_layout_implicitly() -> None:
+    from careeros.core.evaluation.derive import Basis
+    from careeros.core.evaluation.markets import MarketCheck, FieldCheck
+    from careeros.core.evaluation.model import JobFacts, Verification
+    from careeros.core.evaluation.rubric import Rubric
+
+    none = FieldCheck(Verification.UNVERIFIED, None)
+    check, rubric = MarketCheck(None, none, none), Rubric((), (), "missing")
+    with pytest.raises(TypeError):
+        Basis((), 0).complete((), JobFacts(), check, rubric)           # v2 needs compensation and floor
+    v1 = Basis((), 0).complete_v1((), JobFacts(), check, rubric)
+    assert (v1["basis_version"], v1["rules_version"]) == ("1", "1") and "range" in v1["cap_inputs"]

@@ -75,32 +75,29 @@ class Basis:
             "requirements": [dict(r, facts=list(r["facts"])) for r in self.requirements],
         }
 
-    def complete(self, fit: tuple[FitJudgement, ...], facts: JobFacts, check: MarketCheck, rubric: Rubric,
-                 compensation: dict | None = None, floor: FloorInfo | None = None) -> dict:
-        """The full basis: `as_dict()` plus `rubric_state`, `fit` and `cap_inputs`.
-
-        Fit rows are the usable rubric's rows that have a judgement, sorted by normalised label (a judgement naming no
-        rubric row is ignored here; the record validator rejects it). An unusable rubric gives `fit: []` and state
-        `missing` or `invalid`.
-
-        With `compensation` (the `compensation.derive.to_basis` object) and `floor` (the `FloorInfo` of the Markets row
-        named by `job_facts.market`): the BasisSchema-v2 layout under this basis' versions; the floor is the row's own,
-        `verified` or `unverified` (`_cap_inputs_v2`). Without them: the BasisSchema-v1 layout, stamped basis/rules
-        version "1" whatever this basis says (the layout decides the version; kept for the v1 layout tests and the
-        scorer's v1 path): the agent's values (display only unless `verified`) with the verification states and exact
-        source cells from `check`; a range needs an integer `high`.
-        """
+    def _head(self, fit: tuple[FitJudgement, ...], rubric: Rubric) -> dict:
+        """`as_dict()` plus `rubric_state` and `fit`: the fit rows are the usable rubric's rows that have a judgement,
+        sorted by normalised label (a judgement naming no rubric row is ignored here; the record validator rejects it).
+        An unusable rubric gives `fit: []` and state `missing` or `invalid`."""
         by_row = {norm_label(j.row): j for j in fit}
         rows = sorted(({"row": r.key, "weight": r.weight, "judgement": str(by_row[r.key].judgement)}
                        for r in rubric.rows if r.key in by_row), key=lambda r: r["row"]) if rubric.usable else []
-        head = self.as_dict()
-        if compensation is None:
-            head.update(basis_version="1", rules_version="1")
-            cap_inputs = _cap_inputs(facts, check)
-        else:
-            cap_inputs = _cap_inputs_v2(facts, check, floor or FloorInfo(None, None, None, False), compensation)
-        return {**head, "rubric_state": rubric.state if rubric.usable or rubric.state != "ok" else "missing",
-                "fit": rows, "cap_inputs": cap_inputs}
+        return {**self.as_dict(), "rubric_state": rubric.state if rubric.usable or rubric.state != "ok" else "missing",
+                "fit": rows}
+
+    def complete(self, fit: tuple[FitJudgement, ...], facts: JobFacts, check: MarketCheck, rubric: Rubric,
+                 compensation: dict, floor: FloorInfo) -> dict:
+        """The full BasisSchema-v2 basis under this basis' versions: `_head` plus `cap_inputs` (`_cap_inputs_v2`), with
+        `compensation` (the `compensation.derive.to_basis` object) and `floor` (the `FloorInfo` of the Markets row named
+        by `job_facts.market`; the stored floor is the row's own, `verified` or `unverified`)."""
+        return {**self._head(fit, rubric), "cap_inputs": _cap_inputs_v2(facts, check, floor, compensation)}
+
+    def complete_v1(self, fit: tuple[FitJudgement, ...], facts: JobFacts, check: MarketCheck, rubric: Rubric) -> dict:
+        """The full BasisSchema-v1 basis, stamped basis/rules version "1" (the 0.5.0 layout; kept for v1 layout tests and
+        the scorer's v1 path, never used by `evaluate`). Cap inputs hold the agent's values (display only unless
+        `verified`) with the verification states and exact source cells from `check`; a range needs an integer `high`."""
+        return {**self._head(fit, rubric), "basis_version": "1", "rules_version": "1",
+                "cap_inputs": _cap_inputs(facts, check)}
 
 
 _CONFIDENCES = ("high", "medium", "low", "unknown")
