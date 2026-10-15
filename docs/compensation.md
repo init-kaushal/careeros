@@ -134,7 +134,7 @@ Because the union uses the highest top, the cap fires only if even the best case
 
 | Code | Severity | Meaning |
 |---|---|---|
-| `CMP001` | error | unreadable file, no or invalid frontmatter or YAML, unsupported `schema`, a missing or unknown key |
+| `CMP001` | error | unreadable file, no or invalid frontmatter or YAML, unsupported `schema`, a missing or unknown top-level key (a missing observation key is `CMP002`, `CMP003` or `CMP006`) |
 | `CMP002` | error | wrong type, unsupported enum value, bad ISO date, empty required text, or `market: null` while there are observations |
 | `CMP003` | error | range rule broken: a missing bound, a non-integer or boolean amount, `low` below zero, `high` below `low` |
 | `CMP004` | error | a `posted` quote is missing, not found verbatim in `jd.md`, or `jd.md` is absent |
@@ -182,6 +182,8 @@ The `evaluate` skill performs the migration; no code writes a file for it. It ap
 2. **Validate** with `careeros comp <job>`; on a `CMP` error it stops and asks you to fix the file.
 3. **Remove** the legacy block, only when the record validates, and only after you confirm the record covers it.
 4. **Re-evaluate** with `careeros evaluate <job>`.
+
+A block with a floor but no range has no pay figure to migrate (the floor now comes from the Markets row): once you confirm the job has no pay information, the skill removes the block without creating a `compensation.md`.
 
 The skill re-detects the state from the files on every run and performs only the steps whose precondition holds, so an interruption is recovered by running it again. It never overwrites an existing `compensation.md` and never removes the block before a valid record exists. If the block is already gone but the old version 1 result is still stored, it can rebuild the observation from the result's stored range, currency, basis and `as_of`. The refusal from `careeros evaluate` names the situation: no `compensation.md` yet, a file with errors, a valid file with no observations, or a valid file that needs your confirmation.
 

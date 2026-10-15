@@ -30,7 +30,7 @@ def obs(id="a", kind="posted", low=2_000_000, high=3_000_000, currency="INR", ba
 
 
 def derived(*observations, floor=FloorInfo(FLOOR_AMOUNT, "INR", "base", True), conversions=()):
-    return to_basis(derive_compensation(CompRecord("Atlantis", tuple(observations), tuple(conversions), ""), floor))
+    return to_basis(derive_compensation(CompRecord("Atlantis", tuple(observations), tuple(conversions), ""), floor, fx_window_days=30))
 
 
 def caps2(compensation, floor=None, **over):

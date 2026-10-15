@@ -41,7 +41,7 @@ def _render(report: service.Report) -> None:
     floor = report.floor
     if floor.verified:
         typer.echo(f"  floor: {floor.amount:,} {floor.currency} ({floor.basis}) from market {report.record.market!r}")
-    elif report.record is not None and report.record.market is not None:
+    elif report.valid and report.record is not None and report.record.market is not None:
         typer.echo(f"  floor: unverified for market {report.record.market!r}")
     for o in data["observations"]:
         orig = o["original"]

@@ -291,7 +291,7 @@ def test_v2_builder_output_is_always_accepted_by_the_scorer() -> None:
             facts = JobFacts(market=name, needed=need, listing=Listing.NOT_OFFERED, sponsorship_quote="q")
             for pay in pays:
                 for conversions in ((), (usd,)):
-                    d = comp_derive.derive_compensation(CompRecord(name, pay, conversions, ""), floor)
+                    d = comp_derive.derive_compensation(CompRecord(name, pay, conversions, ""), floor, fx_window_days=30)
                     out = reqs.complete(judgements(("Role title matches", "yes")), facts,
                                         markets.verify_market(facts, table), rubric,
                                         compensation=comp_derive.to_basis(d), floor=floor)

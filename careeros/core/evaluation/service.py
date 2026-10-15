@@ -48,9 +48,15 @@ class Summary:
                 "replaced": self.replaced}
 
 
+def _last_evaluation_event(events: list[dict], entity: str) -> dict | None:
+    """The latest `evaluation.*` event for the entity (`compensation.*` events share the job entity and are not ours)."""
+    return next((e for e in reversed(events) if e.get("entity") == entity
+                 and str(e.get("type", "")).startswith("evaluation.")), None)
+
+
 def _rejected(root: Path, job, actor: str, issues: list[Issue], events: list[dict]) -> None:
     reason = ",".join(sorted({i.code for i in issues}))
-    last = next((e for e in reversed(events) if e.get("entity") == job.id), None)
+    last = _last_evaluation_event(events, job.id)
     if not (last and last.get("type") == "evaluation.rejected" and last.get("reason") == reason):
         ledger.append_event(root, type="evaluation.rejected", actor=actor, entity=job.id, source="cli", reason=reason,
                             action=f"rejected evaluation: {len(issues)} issue(s)")
@@ -125,7 +131,7 @@ def evaluate(root: Path, ref: str, actor: str) -> Summary:
         if twin is not None:
             message = (f"EVL009: duplicate evaluation id (also used by {twin.rel}); delete the copied {EVALUATION_FILE} "
                        f"and run `careeros evaluate {job.id} --init` for a fresh id")
-            last = next((e for e in reversed(events) if e.get("entity") == job.id), None)
+            last = _last_evaluation_event(events, job.id)
             reason = message.split(";")[0]
             if not (last and last.get("type") == "evaluation.rejected" and last.get("reason") == reason):
                 ledger.append_event(root, type="evaluation.rejected", actor=actor, entity=job.id, source="cli",

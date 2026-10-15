@@ -51,6 +51,7 @@ never writes and never raises on a hand-edited file.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from dataclasses import dataclass
@@ -229,6 +230,9 @@ def _derivation(rec: Record, result: dict, inputs: Inputs) -> str | None:
     agent, issues = record.parse_agent(rec)
     if issues:
         return None
+    if inputs.compensation is not None and not inputs.compensation.observations:
+        # the empty record derives the same whatever its `market` (a CMP007 there must not skip this check)
+        inputs = dataclasses.replace(inputs, compensation_issues=())
     try:
         basis, derived = record.derive_basis(agent, inputs)
     except (WorkspaceError, MarketError, UnsupportedVersion):     # also: a current RULES_VERSION this code lacks

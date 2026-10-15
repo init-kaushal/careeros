@@ -508,7 +508,7 @@ def test_comp_display_agrees_with_cap_applies(ws) -> None:
         out = json.loads(comp(root, job, "--json").output)
         rec, _ = record.parse(record.load(job["comp"], root))
         floor = FloorInfo(3500000, "INR", "base", True)
-        want = cap_applies(to_basis(derive_compensation(rec, floor)), Fraction(3500000), True)
+        want = cap_applies(to_basis(derive_compensation(rec, floor, fx_window_days=30)), Fraction(3500000), True)
         assert out["cap_fires"] is want
         expected.append(want)
         assert ("WOULD fire" in comp(root, job).output) is want

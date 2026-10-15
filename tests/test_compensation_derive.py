@@ -33,7 +33,7 @@ def rec(*observations, conversions=()):
 
 
 def run(*observations, conversions=(), floor=FLOOR):
-    return derive_compensation(rec(*observations, conversions=conversions), floor)
+    return derive_compensation(rec(*observations, conversions=conversions), floor, fx_window_days=30)
 
 
 def only(d):
@@ -146,7 +146,7 @@ def test_estimate_only_is_effective_with_note():
 
 
 def test_empty_is_none():
-    d = derive_compensation(CompRecord(None, (), (), ""), FloorInfo(None, None, None, False))
+    d = derive_compensation(CompRecord(None, (), (), ""), FloorInfo(None, None, None, False), fx_window_days=30)
     assert (d.status, d.kind, d.low, d.high, d.observations, d.notes) == ("none", None, None, None, (), ())
     assert not d.kind_complete and not d.kind_confident
 

@@ -1,6 +1,6 @@
 """Pure compensation derivation (spec section 5). No I/O, no clock, no markets parsing; `now` is never an input.
 
-`derive_compensation(record, floor)` annualises each observation (month x12 first), converts it with the single exact
+`derive_compensation(record, floor, *, fx_window_days)` annualises each observation (month x12 first), converts it with the single exact
 `(observation currency -> floor currency)` conversion, and marks it comparable or gives it one stable reason code. The
 first applicable reason is reported, in this order: `FLOOR_UNVERIFIED`, `BASIS_MISMATCH`, `FX_CONVERSION_MISSING`,
 `FX_RATE_OUTSIDE_WINDOW`. A not-comparable observation keeps its originals but has no `converted` figure and never
@@ -25,7 +25,6 @@ from careeros.core.compensation import rules
 from careeros.core.compensation.model import CompRecord, Observation
 from careeros.core.evaluation import canon
 
-FX_WINDOW_DAYS = rules.FX_WINDOW_DAYS
 PERIOD_FACTOR = {"year": 1, "month": 12}
 
 
@@ -122,7 +121,7 @@ def _union(spans: list[Span]) -> tuple[bool, Fraction | None, Fraction | None]:
     return True, low, high
 
 
-def derive_compensation(record: CompRecord, floor: FloorInfo, *, fx_window_days: int = FX_WINDOW_DAYS) -> Derivation:
+def derive_compensation(record: CompRecord, floor: FloorInfo, *, fx_window_days: int) -> Derivation:
     results = tuple(sorted((_one(o, floor, record.conversions, fx_window_days) for o in record.observations),
                            key=lambda r: r.id))
     notes = [Note("incomparable", r.id, r.reason) for r in results if not r.comparable]

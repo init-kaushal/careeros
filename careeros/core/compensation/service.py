@@ -22,6 +22,7 @@ from careeros.core.compensation import record, rules
 from careeros.core.compensation.derive import Derivation, FloorInfo, cap_applies, derive_compensation, to_basis
 from careeros.core.compensation.model import CompRecord
 from careeros.core.evaluation import canon
+from careeros.core.evaluation import rules as eval_rules
 from careeros.core.evaluation.markets import MarketError, Markets, MarketRow
 from careeros.core.evaluation.markets import parse as parse_markets
 from careeros.core.evaluation.rubric import norm_label
@@ -288,7 +289,7 @@ def run(root: Path, ref: str, actor: str) -> Report:
         derivation = None
         if not errors and rec is not None:
             floor = floor_for(markets, rec.market)[1]
-            derivation = derive_compensation(rec, floor)
+            derivation = derive_compensation(rec, floor, fx_window_days=eval_rules.rules_for(eval_rules.RULES_VERSION).fx_window_days)
             if rec.observations:
                 issues = issues + stale_warnings(rec, rel, _today(None))
         try:

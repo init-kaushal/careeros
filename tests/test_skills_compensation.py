@@ -103,6 +103,8 @@ MIGRATION_RULES = (
     "Show the proposed file and write nothing yet",
     "ask for a full ISO date and never invent a day",
     "ask for high, medium or low and never choose one",
+    "each observation needs an `id`, for example `c1`",
+    "an empty record is acceptable only through the floor-only row",
     "an `estimate` never caps, while `recruiter` or `posted` can",
     "first ask whether it was a posted band",
     "only after the user agrees",
@@ -148,13 +150,14 @@ RECOVERY_ROWS = (
     ("no legacy block, no or empty `compensation.md`, a stale version 1 result", "result.basis.cap_inputs"),
     ("no legacy block, valid non-empty record, evaluation current", "nothing to do"),
     ("legacy block, valid but empty `compensation.md`", "never go to step 3 with an empty record"),
+    ("legacy block with no `range`", "ask the user to confirm the job has no pay information"),
 )
 
 
-def test_the_recovery_table_has_all_seven_rows() -> None:
+def test_the_recovery_table_has_all_eight_rows() -> None:
     text = migration()
     table = [line for line in text.splitlines() if line.startswith("| ") and "State found" not in line and "---" not in line]
-    assert len(table) == 7
+    assert len(table) == 8
     for (state, action), line in zip(RECOVERY_ROWS, table):
         assert line.startswith(f"| {state}"), line
         assert action in line, line
@@ -167,8 +170,15 @@ def test_the_recovery_table_has_all_seven_rows() -> None:
     row7 = table[6]
     for phrase in ("do step 1's mapping and questions", "after the user agrees ADD the observation and `market` to that file",
                    "append the provenance heading to its notes body", "keep the existing body",
-                   "the only permitted edit of an existing `compensation.md` (never replace the file)"):
+                   "the only permitted edit of an existing `compensation.md` (never replace the file)",
+                   "the only exception is the floor-only row below, with the user's explicit confirmation that there is no pay information"):
         assert phrase in row7, phrase
+    row8 = table[7]
+    for phrase in ("(floor only, optionally source, confidence and `as_of`)", "there is no pay figure to migrate (the floor now comes from the Markets row)",
+                   "show the block", "ask the user to confirm the job has no pay information",
+                   "then step 3 (remove the block; `compensation.md` may be absent or an empty valid skeleton; if absent, do not create one) and step 4",
+                   "if the user says there WAS a pay figure, treat it as the first or the seventh row"):
+        assert phrase in row8, phrase
     assert "never overwrite" in table[2].lower() and "delete the file" in table[2]
 
 
@@ -177,7 +187,7 @@ def test_migration_explains_the_four_evl003_refusals() -> None:
     bullets = [b for b in text.split("\n") if b.startswith('- **"')]
     meanings = (("there is no compensation.md yet", "Migrate (step 1)"),
                 ("compensation.md has errors", "Fix them first (step 2); never overwrite the file"),
-                ("compensation.md is empty", "Never remove the block on an empty record: use the empty-skeleton row of the recovery table"),
+                ("compensation.md is empty", "Never remove the block on an empty record unless the block has no `range` and the user explicitly confirms the job has no pay information (the floor-only row); if it had a pay figure, use the empty-skeleton row"),
                 ("compensation.md exists and is valid", "confirm the record covers the legacy block, then remove the block (step 3) and re-evaluate (step 4)"))
     assert len(bullets) == 4
     for bullet, (label, meaning) in zip(bullets, meanings):

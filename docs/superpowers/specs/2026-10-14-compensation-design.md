@@ -72,7 +72,7 @@ Field rules:
 
 ## 5. Derivation (pure function)
 
-`derive_compensation(record, floor, jd_text_available, rules) → Derivation` has no I/O, no clock and no randomness. All arithmetic uses exact fractions; stored numbers use the existing `exact()` string form.
+`derive_compensation(record, floor, *, fx_window_days) → Derivation` (the window comes from the registered rules version; the `jd.md` quote check lives in validation, `CMP004`, not in the derivation) has no I/O, no clock and no randomness. All arithmetic uses exact fractions; stored numbers use the existing `exact()` string form.
 
 ### 5.1 Per observation
 
@@ -125,8 +125,8 @@ With a floor present and **no effective range** (no observations, all incomparab
 - Resolves the job, reads `compensation.md`, validates it (§8), reads the `## Markets` floor for the record's `market` (reusing evaluation's market parsing), derives, and prints the derivation: observations with original and converted figures, reason codes, effective kind/range, conflicts, cap eligibility and action items. `--json` prints the same as one JSON object once the workspace is found (usage errors before that print plain text on stderr).
 - **It never edits `compensation.md`**, and a successful derivation never repairs or normalises malformed YAML.
 - **Its only writes are ledger events** (reserved prefix `compensation.`):
-  - `compensation.recorded` `{file_sha256, observations}` when the record validates and its canonical hash differs from the latest **valid** `compensation.recorded` event **for that job**. A missing or malformed prior event counts as no baseline.
-  - `compensation.rejected` (needs a reason) when the record is invalid, carrying the sorted CMP codes and the SHA-256 of the file's raw bytes. It is deduplicated on exactly (raw-bytes hash, sorted code set), so a changed invalid file is never suppressed by an earlier rejection.
+  - `compensation.recorded` (`artifacts=[rel, "sha256:<canonical record stamp>"]`, the observation count in `action`) when the record validates and its canonical hash differs from the latest **valid** `compensation.recorded` event **for that job**. A missing or malformed prior event counts as no baseline.
+  - `compensation.rejected` (needs a reason) when the record is invalid, carrying the sorted CMP codes and the SHA-256 of the file's raw bytes. It is deduplicated against the job's latest `compensation.*` event: skipped only when that is a rejection with exactly the same (raw-bytes hash, sorted code set), so a changed invalid file is never suppressed by an earlier rejection.
   - If the ledger append fails the command reports it and never claims the event was recorded.
 - **Exit codes:** 0 valid; 1 invalid record (including a `market` label that is unknown or ambiguous, `CMP007`) or ledger failure; 2 usage / no workspace.
 - `--init` refuses if the file exists (exit 1) and never writes an event.
@@ -153,7 +153,7 @@ Malformed records produce these stable codes without modifying any file. Final c
 - **Agent half:** `job_facts.compensation` is removed (the key is rejected by `EVL003` for new records). `job_facts.market` stays and must equal `compensation.md`'s `market` when that file has observations, otherwise `EVL006`. Sponsorship stays in the agent half.
 - **Floor:** taken directly from the verified `## Markets` row by code (no agent copy, so the floor "conflict" state disappears). Row unparseable ⇒ unverified.
 - **Basis:** `basis_version` and `rules_version` go to `2`. The basis stores the derivation inputs and outputs needed to reproduce the cap: the effective kind and range (exact strings), comparability and reason codes, conflict and confidence flags, and the floor with its source cell and row state. The scorer stays pure and reads only the basis.
-- **Stamps:** a new `compensation` stamp, the SHA-256 of the canonical parsed record (a fixed constant for "no file"). The existing `inputs` stamp keeps covering everything else that feeds the cap (the plan must confirm it still covers the Markets row cell). A changed figure makes the evaluation `stale`.
+- **Stamps:** a new `compensation` stamp, the SHA-256 of the canonical parsed record (a fixed constant for "no file"). The Markets row cell is covered by the existing `rubric` stamp, and `inputs` covers the rest of the agent half. An absent file, the skeleton and any empty record (including one holding only conversions) stamp identically, and `market` is ignored when there are no observations. A changed figure makes the evaluation `stale`.
 - **Version 1 records** stay verifiable (never tamper, never `EVL010`): they report `stale` (EVL008) because their versions are older. Their historical basis is recomputed with the version 1 rules, which remain in the code.
 - **Re-evaluation is explicit.** `validate` and `comp` never re-evaluate anything. `careeros evaluate <job>` on a version 1 record needs a v2 agent half; the skill guides the migration (§10).
 
@@ -176,11 +176,19 @@ Malformed records produce these stable codes without modifying any file. Final c
   | no legacy block, valid non-empty `compensation.md`, evaluation stale | step 4 |
   | no legacy block, no or empty `compensation.md`, a stale version 1 result | the figures left the agent half but the stored `result.basis.cap_inputs` still holds the range, currency, basis and `as_of` until a re-evaluation replaces it: offer to rebuild the observation from those, ask for the kind, period and source, then continue at step 1's confirmation; if the user says the job has no pay information, continue at step 4 with the empty record |
   | no legacy block, valid non-empty record, evaluation current | nothing to do |
-  | legacy block, valid but empty `compensation.md` (a skeleton, for example from an interrupted or declined step 1) | do step 1's mapping and questions; after the user agrees ADD the observation and `market` to that file and append the provenance heading to its notes body; keep the existing body; this is the only permitted edit of an existing `compensation.md` (never replace the file); never go to step 3 with an empty record |
+  | legacy block, valid but empty `compensation.md` (a skeleton, for example from an interrupted or declined step 1) | do step 1's mapping and questions; after the user agrees ADD the observation and `market` to that file and append the provenance heading to its notes body; keep the existing body; this is the only permitted edit of an existing `compensation.md` (never replace the file); never go to step 3 with an empty record (the only exception is the floor-only row below, with the user's explicit confirmation that there is no pay information) |
+  | legacy block with no `range` (floor only, optionally source, confidence and `as_of`) | there is no pay figure to migrate (the floor now comes from the Markets row): show the block, ask the user to confirm the job has no pay information, then step 3 (remove the block; `compensation.md` may be absent or an empty valid skeleton; if absent, do not create one) and step 4; if the user says there WAS a pay figure, treat it as the first or the seventh row |
 
-  `evaluate`'s refusal on a version 1 record (`EVL003`) names the situation: with no `compensation.md` it says to migrate; with an existing valid one it says to confirm the record covers the legacy block and remove the block.
+  `evaluate`'s refusal on a version 1 record (`EVL003`) has four wordings: no `compensation.md` (migrate the block); `compensation.md` has errors (fix the `CMP` errors first); `compensation.md` is empty (record the legacy pay, or confirm the job has no pay information, before removing the block); `compensation.md` exists and is valid (confirm the record covers the legacy block, then remove it).
 - **Idempotent:** a repeat run in any state above performs only the steps whose preconditions hold; it never duplicates an observation (step 1 runs only when there is no `compensation.md`) and never rewrites an existing file; unchanged inputs after a completed migration are an `(unchanged)` evaluation.
 - `prep`, `offer`, the GPT workspace and the Career Memory evidence gate are unchanged.
+
+### Implementation notes (as shipped)
+
+- The v2 cap reason template is `the {kind} range tops out at <amount> <currency> (<basis>), below the verified floor of ...`: whole amounts print plain, others with two decimals, half-up.
+- The v2 floor states are constrained by `row_state` in the stored basis.
+- An effective low-confidence estimate gets only the estimate-only action item.
+- A mixed (basis version, rules version) pair is malformed.
 
 ## 11. Docs and release
 
