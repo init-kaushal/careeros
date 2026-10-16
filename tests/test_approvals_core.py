@@ -16,6 +16,8 @@ import re
 import subprocess
 import sys
 import textwrap
+import unicodedata
+from urllib.parse import quote
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -445,7 +447,7 @@ def test_bidi_overrides_and_controls_are_all_escaped():
             assert out.startswith("\\") and out.isascii() and decode(out) == chr(cp), hex(cp)
 
 
-INVISIBLE = [0xAD, 0x34F, 0x180E, 0x200B, 0x200C, 0x200D, 0x2060, 0x2061, 0x2064, 0xFEFF, 0x3164, 0xE0000, 0xE0041, 0xE007F]
+INVISIBLE = [0x115F, 0x1160, 0x17B4, 0x17B5, 0xFFA0, 0xAD, 0x34F, 0x180E, 0x200B, 0x200C, 0x200D, 0x2060, 0x2061, 0x2064, 0xFEFF, 0x3164, 0xE0000, 0xE0041, 0xE007F]
 
 
 def test_invisible_characters_are_escaped():
@@ -1036,7 +1038,7 @@ REJECTED = [
     "https://www.linkedin.com/in/a%2Fb", "https://www.linkedin.com/in/a%2fb", "https://www.linkedin.com/in/a%252e", "https://www.linkedin.com/in/a%00b",
     "https://www.linkedin.com/in/a%0ab", "https://www.linkedin.com/in/a%20b", "https://www.linkedin.com/in/a b", "https://www.linkedin.com/in/a\nb",
     "https://www.linkedin.com/in/a\x00b", "https://www.linkedin.com/in/a%ff", "https://www.linkedin.com/in/a%e2%80%ae", "https://www.linkedin.com/in/a.b",
-    "https://www.linkedin.com/in/a%5Cb", "https://www.linkedin.com/in/%C4%B0", "https://www.linkedin.com/in/" + "a" * 101,
+    "https://www.linkedin.com/in/a%5Cb", "https://www.linkedin.com/in/" + "a" * 101,
     "https://www.linkedin.com/in/alex" + "/" * 5000, "https://www.linkedin.com/in/" + "a" * 5000, None, 5, b"https://www.linkedin.com/in/alex", ["x"],
 ]
 
@@ -1136,3 +1138,75 @@ def test_person_identity_helpers():
     problems = item.person_identity_problems([a, two_urls])
     assert len(problems) == 1 and PER in problems[0]
     assert len(item.person_identity_problems([a, two_ids, two_urls])) >= 2
+
+
+# --- fix round 3: NFKC identity ----------------------------------------------------------------------------------------
+
+P = "https://www.linkedin.com/in/"
+
+
+def slug_of(raw_slug: str, *, encode=False) -> str | None:
+    got = item.canonical_profile_url(P + (quote(raw_slug, safe="") if encode else raw_slug))
+    return None if got is None else got[len(P):]
+
+
+@pytest.mark.parametrize("a,b", [
+    ("\ud55c\uae00", "\u1112\u1161\u11ab\u1100\u1173\u11af"),          # Hangul precomposed vs conjoining jamo
+    ("\uff41bc", "abc"), ("\uff21\uff22\uff23", "abc"),                      # fullwidth
+    ("\ufb01sh", "fish"), ("a\u00b2", "a2"), ("\u2460\u2461", "12"), ("a\u2460", "a1"),
+    ("caf\u00e9", "cafe\u0301"), ("CAF\u00c9", "cafe\u0301"),                # accented NFC vs NFD, case
+    ("\u0130", "i\u0307"),
+])
+def test_equivalent_slugs_have_one_canonical_url(a, b):
+    assert slug_of(a) is not None and slug_of(a) == slug_of(b)
+    assert slug_of(a, encode=True) == slug_of(a) == slug_of(b, encode=True)
+    assert slug_of(slug_of(a)) == slug_of(a)
+    assert unicodedata.normalize("NFKC", slug_of(a)) == slug_of(a)
+
+
+def test_combining_marks_scripts_and_case_choices():
+    for slug in ("\u0939\u093f\u0928\u094d\u0926\u0940", "\u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35", "e\u0301", "\u4e2d\u6587-x_y"):
+        got = slug_of(slug)
+        assert got is not None and slug_of(got) == got and unicodedata.normalize("NFKC", got) == got, slug
+    assert slug_of("\u00df") == "\u00df"                                       # no casefold: sharp s stays
+    assert slug_of("\u0391\u03a3") == slug_of("\u03b1\u03c2") == "\u03b1\u03c2"   # word-final sigma lower-cases to final sigma
+    assert slug_of("\u03b1\u03c3") != slug_of("\u03b1\u03c2")                 # a medial sigma is a different slug
+    for bad in ("a\u200db", "a\u00adb", "a\u00a0b", "a!b", "a$b", "a\ue000b", "a\u2028b", "a\u202eb", "a\x00b", "a\u0301\u034f", "a\u3164"):
+        assert slug_of(bad) is None and slug_of(bad, encode=True) is None, repr(bad)
+    assert slug_of("\u2460" * 101) is None and slug_of("1" * 100) is not None        # length counted after normalisation
+    assert slug_of("\ufb03" * 40) is None                                          # 40 ligatures normalise to 120 characters
+
+
+def test_uppercase_scheme_is_accepted_and_lowercased_on_purpose():
+    assert item.canonical_profile_url("HTTPS://WWW.LINKEDIN.COM/in/Alex-Example") == CANON
+    assert item.canonical_profile_url("HtTp://linkedin.com/in/alex-example") == CANON
+
+
+def test_stored_non_nfkc_or_non_lowercase_slug_is_apr001():
+    for bad in ("Cafe\u0301", "cafe\u0301", "ABC", "\ufb01sh"):
+        text = _swap(INVITE, "alex-example", bad)
+        parsed, issues = item.parse(text, f"approvals/{APR}.md")
+        assert (parsed is None) == (unicodedata.normalize("NFKC", bad).lower() != bad), bad
+    parsed, issues = item.parse(_swap(INVITE, "alex-example", "caf\u00e9"), f"approvals/{APR}.md")
+    assert issues == [] and parsed.target.url == P + "caf\u00e9"
+
+
+def test_nfkc_equivalent_inputs_give_equal_outputs_differential():
+    rng = random.Random(23)
+    pool = list("abAB09-_") + ["\uff41", "\uff22", "\ufb01", "\u00b2", "\u2460", "e\u0301", "\u00e9", "\u1112\u1161\u11ab", "\ud55c",
+                              "\u0939\u093f", "\u00df", "\u03a3", "\u03c3", "\u03c2", "\u0130", "\u4e2d", "\u200d", "\u00ad", "!", " "]
+    for _ in range(3000):
+        x = "".join(rng.choice(pool) for _ in range(rng.randrange(1, 7)))
+        base = slug_of(x)
+        assert slug_of(unicodedata.normalize("NFKC", x)) == base, repr(x)
+        assert slug_of(unicodedata.normalize("NFKD", x)) == base, repr(x)
+        assert slug_of(x, encode=True) == base, repr(x)
+        if base is not None:
+            assert slug_of(base) == base and unicodedata.normalize("NFKC", base) == base
+
+
+def test_person_ids_by_url_first_id_wins():
+    first = person_item(pid="per_aaaaaaaaaa")
+    second = person_item(pid="per_bbbbbbbbbb")
+    assert item.person_ids_by_url([first, second]) == {URL: "per_aaaaaaaaaa"}
+    assert item.person_ids_by_url([second, first]) == {URL: "per_bbbbbbbbbb"}

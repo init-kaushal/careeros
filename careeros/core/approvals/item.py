@@ -9,6 +9,7 @@ or target shape, and a manifest that does not match the kind.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Iterable
 from urllib.parse import unquote
 
@@ -55,10 +56,12 @@ def canonical_profile_url(raw: object) -> str | None:
     """`https://www.linkedin.com/in/<slug>` for a LinkedIn profile URL, or None. Accepts http or https (forced to https),
     the hosts `linkedin.com`, `www.linkedin.com` and `<cc>.linkedin.com` (two letters; mapped to `www`), a path of exactly
     `/in/<slug>` with an optional trailing slash, and drops query and fragment. The slug is percent-decoded (strict
-    UTF-8) and lower-cased; it may contain letters and digits of any script plus `-` and `_` (profile slugs of
-    non-English members are real), at most 100 characters. Everything else is refused: other hosts and look-alikes,
+    UTF-8), normalised with NFKC and then lower-cased (`lower`, never `casefold`: the sharp s stays; a word-final capital
+    sigma becomes the final sigma, so it equals the lower-case spelling but a medial sigma is a different slug); it may
+    contain letters, digits and combining marks of any script plus `-` and `_` (slugs of non-English members are real;
+    format characters such as joiners are not allowed), at most 100 characters counted after normalisation. Everything else is refused: other hosts and look-alikes,
     userinfo, ports, IP literals, other paths, an empty slug, anything with controls, spaces, `/`, `.` or `%` left after
-    decoding, non-text input and very long input. Idempotent on its own output."""
+    decoding, non-text input and very long input. Idempotent on its own output. The scheme is matched case-insensitively and lower-cased on purpose."""
     if not isinstance(raw, str) or len(raw) > _MAX_URL:
         return None
     match = _URL.fullmatch(raw)
@@ -68,12 +71,12 @@ def canonical_profile_url(raw: object) -> str | None:
     if not path:
         return None
     try:
-        slug = unquote(path[1], errors="strict").lower()
+        slug = unicodedata.normalize("NFKC", unquote(path[1], errors="strict")).lower()
     except UnicodeDecodeError:
         return None
-    if not slug or len(slug) > _MAX_SLUG or slug.lower() != slug or not all(c.isalnum() or c in "-_" for c in slug):
+    if not slug or len(slug) > _MAX_SLUG or slug.lower() != slug or unicodedata.normalize("NFKC", slug) != slug:
         return None
-    if render.render_content(slug) != slug:
+    if not all(unicodedata.category(c)[0] in "LNM" or c in "-_" for c in slug) or render.render_content(slug) != slug:
         return None
     return f"https://www.linkedin.com/in/{slug}"
 
