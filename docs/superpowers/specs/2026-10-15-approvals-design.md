@@ -42,7 +42,7 @@ New ID prefix `apr` (`ids.PREFIXES["approval"] = "apr"`). One file per item: `ap
 schema: 1
 id: apr_xxxxxxxxxx
 kind: linkedin_invite            # linkedin_invite | linkedin_message | application_submit
-target: {id: per_xxxxxxxxxx, channel: linkedin, label: "Alex Example, Example Corp"}
+target: {id: per_xxxxxxxxxx, channel: linkedin, label: "Alex Example, Example Corp", url: "https://www.linkedin.com/in/alex-example"}   # url: messages and invites only
 created_at: 2026-10-15T09:00:00Z
 manifest:                        # application_submit only
   - {path: jobs/discovered/example/resume.pdf, sha256: "<64 hex>"}
@@ -51,10 +51,10 @@ manifest:                        # application_submit only
 The exact message text, or, for application_submit, the exact answers text.
 ```
 
-- `target.id` is a person ID (`per_`) for messages and invites, a job ID (`job_`) for submissions; both must exist.
+- **Targets.** For `linkedin_invite` and `linkedin_message`, `target.url` is required and `target.id` is a person ID (`per_`) that **the system allocates**: CareerOS has no person records, so a person is identified by the **canonical LinkedIn profile URL**. Canonical form: `https://www.linkedin.com/in/<slug>`, host `linkedin.com` or `<country>.linkedin.com` mapped to `www.linkedin.com`, scheme forced to `https`, slug percent-decoded and lowercased, query, fragment and trailing slash dropped; anything else (another host, a path other than `/in/<slug>`, embedded credentials, a port) is rejected. The first proposal for a canonical URL allocates a new `per_` ID; **every later proposal for the same URL reuses it**, so the invite-uniqueness and in-flight rules hold however the agent re-proposes. For `application_submit`, `target.id` is a job ID (`job_`) that must exist and `target.url` is absent. `label` and `channel` must not contain control characters.
 - **Content** is the body exactly as written: line endings normalised to LF and nothing else; leading/trailing blank lines are significant. (The plan fixes the round trip with tests.)
 - **Manifest** paths are workspace-relative regular files. Absolute paths, `..` traversal, symlinks that resolve outside the workspace and non-regular files are rejected at `propose` and again at `begin`. Code computes the hashes; the agent never types one. The answers text is the body, so it is bound too.
-- **Action hash:** `sha256(canonical_json({schema, kind, target: {id, channel, label}, content, manifest: sorted [(path, sha256)]}))`, using `evaluation.canon`. It covers the action, the target and the exact content. It is stored in the `approval.proposed` event as `artifacts: [rel, "sha256:<hex>"]`.
+- **Action hash:** `sha256(canonical_json({schema, kind, target: {id, channel, label, url (messages and invites only; absent for submissions)}, content, manifest: sorted [(path, sha256)]}))`, using `evaluation.canon`. It covers the action, the target and the exact content. It is stored in the `approval.proposed` event as `artifacts: [rel, "sha256:<hex>"]`.
 - **A changed draft is a new item with a new ID.** `propose` never overwrites a file or reuses an ID. Editing an item's file after proposing is `APR004`.
 
 ## 5. Lifecycle
@@ -94,7 +94,7 @@ States: `pending`, `approved`, `in_flight`, `consumed`, `declined`, `expired`, `
 
 A new `careeros approval` group plus an extended `careeros approve`. Exit codes: 0 ok; 1 refused; 2 usage, no workspace, or non-interactive where interactive is required.
 
-- **`approval propose --kind K --target ID [--channel C] [--label L] --content-file F [--manifest M]`.** Validates the target and manifest; writes `approvals/<apr_id>.md` atomically; appends `approval.proposed` (plus an `approval.superseded` for each earlier pending/approved item of the same kind and target) in one batch. File first, event second, in a transaction rolled back on any exception (`Transaction.rollback` for the file; `ledger.append_events` restores the ledger itself). Refusals: any item whose (kind, target) already has an `in_flight` item (`in_flight_conflict`: a new proposal can never supersede or race around an action whose outcome is uncertain, the user must `resolve` it first); `linkedin_invite` for a person who already has a consumed invite (`invite_conflict`); `application_submit` for a job that already has a consumed submit item (`already_submitted`) or any `in_flight` submit item.
+- **`approval propose --kind K (--person-url URL | --job REF) [--label L] --content-file F [--manifest M]`.** Validates the target (a job must exist; a profile URL must canonicalise) and the manifest, allocates or reuses the person ID for a URL; writes `approvals/<apr_id>.md` atomically; appends `approval.proposed` (plus an `approval.superseded` for each earlier pending/approved item of the same kind and target) in one batch. File first, event second, in a transaction rolled back on any exception (`Transaction.rollback` for the file; `ledger.append_events` restores the ledger itself). Refusals: any item whose (kind, target) already has an `in_flight` item (`in_flight_conflict`: a new proposal can never supersede or race around an action whose outcome is uncertain, the user must `resolve` it first); `linkedin_invite` for a person who already has a consumed invite (`invite_conflict`); `application_submit` for a job that already has a consumed submit item (`already_submitted`) or any `in_flight` submit item.
 - **`approval list [--status S] [--json]` / `approval show <id>`.** Read-only. `show` prints the exact content (rendered as below), the hash prefix and the derived state.
 - **`careeros approve`.** Interactive only.
   - `approve <job>`: unchanged.
@@ -133,7 +133,7 @@ A new `careeros approval` group plus an extended `careeros approve`. Exit codes:
 | `APR003` | error | a non-terminal item's file is missing |
 | `APR004` | error | content hash differs from the proposal event |
 | `APR005` | error | illegal event sequence (for example `consumed` without `started`) |
-| `APR006` | error | target person/job not found |
+| `APR006` | error | a job target does not exist, or the person identity is inconsistent (one canonical URL carried by two different `per_` IDs, or one `per_` ID carrying two URLs) |
 | `APR007` | warning | an `approved` or `in_flight` submit item whose manifest file is missing or changed (consumed and other terminal items are never checked; their recorded hashes stay for audit) |
 | `APR008` | warning | an item is `in_flight`: run `careeros approval resolve` |
 | `APR100` | info | a `pending` item older than 7 days |
@@ -154,7 +154,7 @@ A new `careeros approval` group plus an extended `careeros approve`. Exit codes:
 Written first (RED), with pure fold/validation tests needing no workspace:
 
 - **Transition grid:** every state × every operation, legal and illegal, against the table in §5; status-fold properties over random legal event sequences; superseding.
-- **Hash:** covers kind, target (id, channel, label), exact content and manifest; whitespace changes the hash; CRLF normalised; the file round trip.
+- **Hash:** covers kind, target (id, channel, label, url), exact content and manifest; whitespace changes the hash; CRLF normalised; the file round trip.
 - **Manifest:** absolute path, `..`, symlink escaping the workspace, non-regular file, missing file, changed file at `begin`; answers text bound.
 - **Rendering:** ANSI, bidi overrides, NUL, tab, literal backslash; the hash prefix is derived from the exact action hash.
 - **Clock:** valid at 23:59:59, expired at 24:00:00; `now < approved_at` refused with `clock_skew`; **a clock moving backwards after approval never bypasses a check**; one clock read per operation.
