@@ -22,6 +22,7 @@ class Target:
     id: str
     channel: str
     label: str
+    url: str | None = None      # canonical LinkedIn profile URL for invites and messages; None for submissions
 
 
 @dataclass(frozen=True)

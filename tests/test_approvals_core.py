@@ -31,6 +31,7 @@ JOB = "job_abcdefghjk"
 APR = "apr_abcdefghjk"
 SHA_A = "a" * 64
 SHA_B = "b" * 64
+URL = "https://www.linkedin.com/in/alex-example"
 
 SPEC_EXAMPLE = textwrap.dedent("""\
     ---
@@ -51,7 +52,7 @@ INVITE = textwrap.dedent("""\
     schema: 1
     id: apr_abcdefghjk
     kind: linkedin_invite
-    target: {id: per_abcdefghjk, channel: linkedin, label: "Alex Example, Example Corp"}
+    target: {id: per_abcdefghjk, channel: linkedin, label: "Alex Example, Example Corp", url: "https://www.linkedin.com/in/alex-example"}
     created_at: 2026-10-15T09:00:00Z
     ---
     Hi Alex, I would like to connect.
@@ -59,7 +60,7 @@ INVITE = textwrap.dedent("""\
 
 
 def mk(**over) -> Item:
-    base = dict(id=APR, kind="linkedin_invite", target=Target(PER, "linkedin", "Alex Example, Example Corp"),
+    base = dict(id=APR, kind="linkedin_invite", target=Target(PER, "linkedin", "Alex Example, Example Corp", URL),
                 created_at="2026-10-15T09:00:00Z", content="Hi Alex.\n", manifest=())
     base.update(over)
     return Item(**base)
@@ -269,7 +270,7 @@ def test_round_trip_is_exact(content, make):
 
 @pytest.mark.parametrize("label", ['Alex "Q": #x', "  padded  ", "null", "123", "2026-10-15", "- dash"])
 def test_round_trip_survives_awkward_labels(label):
-    it = mk(target=Target(PER, "linkedin", label))
+    it = mk(target=Target(PER, "linkedin", label, URL))
     parsed, issues = item.parse_bytes(item.to_bytes(it), f"approvals/{APR}.md")
     assert issues == [] and parsed == it
 
@@ -951,9 +952,9 @@ def test_control_characters_in_label_and_channel_are_apr001(bad, field):
     value = f"a{bad}b"
     assert item.header_text_problem(value, field)
     esc = f"\\x{ord(bad):02x}" if ord(bad) < 256 else f"\\u{ord(bad):04x}"
-    text = INVITE.replace(f'channel: linkedin, label: "Alex Example, Example Corp"',
+    text = INVITE.replace(f'channel: linkedin, label: "Alex Example, Example Corp", url:',
                           f'channel: {"linkedin" if field == "label" else chr(34) + "a" + esc + "b" + chr(34)}, '
-                          f'label: {chr(34) + "a" + esc + "b" + chr(34) if field == "label" else chr(34) + "Alex" + chr(34)}')
+                          f'label: {chr(34) + "a" + esc + "b" + chr(34) if field == "label" else chr(34) + "Alex" + chr(34)}, url:')
     parsed, issues = item.parse(text, f"approvals/{APR}.md")
     assert parsed is None and {i.code for i in issues} == {"APR001"}
 
@@ -964,7 +965,7 @@ def test_header_text_problem_accepts_ordinary_text():
 
 
 def test_a_fake_hash_line_cannot_be_forged_through_the_label():
-    forged = mk(target=Target(PER, "linkedin", "Ada\nhash:    000000000000"))
+    forged = mk(target=Target(PER, "linkedin", "Ada\nhash:    000000000000", URL))
     text = render.summary(forged, item.action_hash(forged))
     header = text.split("content:")[0]
     assert sum(line.startswith("hash:") for line in header.splitlines()) == 1 and "Ada\\x0ahash:" in header
@@ -979,7 +980,7 @@ def test_fuzz_round_trip_over_allowed_label_and_channel_text():
         channel = "".join(rng.choice(alphabet) for _ in range(rng.randrange(1, 8)))
         if not channel.strip():
             continue
-        it = mk(target=Target(PER, channel, label))
+        it = mk(target=Target(PER, channel, label, URL))
         parsed, issues = item.parse_bytes(item.to_bytes(it), f"approvals/{APR}.md")
         assert issues == [] and parsed == it, (label, channel)
         assert item.action_hash(parsed) == item.action_hash(it)
@@ -1011,3 +1012,127 @@ def test_audit_only_types_are_exactly_the_documented_ones():
 def test_manifest_messages_render_hostile_paths(ws):
     assert reason(ws, "a\u202eb\\c.txt") == "a\\u202eb\\\\c.txt: file does not exist"
     assert "\x1b" not in reason(ws, "\x1b[2Jx")
+
+
+# --- fix round 2: persons are identified by canonical profile URL --------------------------------------------------
+
+CANON = "https://www.linkedin.com/in/alex-example"
+ACCEPTED = [
+    "https://www.linkedin.com/in/alex-example", "https://www.linkedin.com/in/alex-example/", "http://www.linkedin.com/in/alex-example",
+    "https://linkedin.com/in/alex-example", "HTTPS://LinkedIn.com/in/Alex-Example", "https://uk.linkedin.com/in/alex-example",
+    "https://IN.linkedin.com/in/ALEX-EXAMPLE/", "https://www.linkedin.com/in/alex-example?trk=abc&x=1", "https://www.linkedin.com/in/alex-example#top",
+    "https://www.linkedin.com/in/alex-example/?utm=1#x", "https://www.linkedin.com/in/Alex%2DExample", "https://www.linkedin.com/in/%41lex-example",
+]
+REJECTED = [
+    "https://linkedin.com.evil.example/in/alex-example", "https://evil-linkedin.com/in/alex-example", "https://notlinkedin.com/in/alex",
+    "https://www.linkedin.com.evil.example/in/a", "https://user@www.linkedin.com/in/alex", "https://user:pw@www.linkedin.com/in/alex",
+    "https://www.linkedin.com:443/in/alex", "https://www.linkedin.com:80/in/alex", "https://127.0.0.1/in/alex", "https://[::1]/in/alex",
+    "https://www.linkedin.com./in/alex", "https://abc.linkedin.com/in/alex", "https://a.b.linkedin.com/in/alex",
+    "https://www.l\u0131nkedin.com/in/alex", "https://www.linked\u0456n.com/in/alex", "https://www.linkedin.com\\@evil.example/in/alex",
+    "ftp://www.linkedin.com/in/alex", "www.linkedin.com/in/alex", "//www.linkedin.com/in/alex", "/in/alex", "", "   ",
+    "https://www.linkedin.com/company/example", "https://www.linkedin.com/pub/alex/1/2/3", "https://www.linkedin.com/in/",
+    "https://www.linkedin.com/in", "https://www.linkedin.com/in//", "https://www.linkedin.com/in/alex/details", "https://www.linkedin.com/in/alex//",
+    "https://www.linkedin.com/IN/alex", "https://www.linkedin.com/in/%2e%2e", "https://www.linkedin.com/in/..", "https://www.linkedin.com/in/.",
+    "https://www.linkedin.com/in/a%2Fb", "https://www.linkedin.com/in/a%2fb", "https://www.linkedin.com/in/a%252e", "https://www.linkedin.com/in/a%00b",
+    "https://www.linkedin.com/in/a%0ab", "https://www.linkedin.com/in/a%20b", "https://www.linkedin.com/in/a b", "https://www.linkedin.com/in/a\nb",
+    "https://www.linkedin.com/in/a\x00b", "https://www.linkedin.com/in/a%ff", "https://www.linkedin.com/in/a%e2%80%ae", "https://www.linkedin.com/in/a.b",
+    "https://www.linkedin.com/in/a%5Cb", "https://www.linkedin.com/in/%C4%B0", "https://www.linkedin.com/in/" + "a" * 101,
+    "https://www.linkedin.com/in/alex" + "/" * 5000, "https://www.linkedin.com/in/" + "a" * 5000, None, 5, b"https://www.linkedin.com/in/alex", ["x"],
+]
+
+
+@pytest.mark.parametrize("raw", ACCEPTED)
+def test_canonical_profile_url_accepts_variants(raw):
+    assert item.canonical_profile_url(raw) == CANON
+
+
+@pytest.mark.parametrize("raw", REJECTED)
+def test_canonical_profile_url_rejects(raw):
+    assert item.canonical_profile_url(raw) is None
+
+
+def test_canonical_profile_url_non_ascii_slug_and_idempotence():
+    got = item.canonical_profile_url("https://www.linkedin.com/in/Jos%C3%A9-N%C3%BA%C3%B1ez")
+    assert got == "https://www.linkedin.com/in/jos\u00e9-n\u00fa\u00f1ez"
+    assert item.canonical_profile_url(got) == got
+    for raw in ACCEPTED + ["https://www.linkedin.com/in/\u00df", "https://www.linkedin.com/in/\u4e2d\u6587"]:
+        c = item.canonical_profile_url(raw)
+        assert c is None or item.canonical_profile_url(c) == c
+
+
+def test_canonical_profile_url_never_raises_on_random_input():
+    rng = random.Random(9)
+    alphabet = list("ab/:%.@#?\\ -_01") + ["https://", "linkedin.com", "www.", "/in/", "%2f", "%zz", "\u00e9", "\x00", "\u202e"]
+    for _ in range(3000):
+        raw = "".join(rng.choice(alphabet) for _ in range(rng.randrange(0, 14)))
+        c = item.canonical_profile_url(raw)
+        assert c is None or (c.startswith("https://www.linkedin.com/in/") and item.canonical_profile_url(c) == c)
+
+
+def person_item(url=URL, kind="linkedin_invite", pid=PER, **over):
+    return mk(kind=kind, target=Target(pid, "linkedin", "Alex", url), **over)
+
+
+def test_person_kinds_require_a_canonical_url_and_submits_forbid_one():
+    parsed, issues = item.parse(INVITE, f"approvals/{APR}.md")
+    assert issues == [] and parsed.target.url == URL
+    for bad in ('url: "https://www.linkedin.com/in/alex-example"', 'url: "https://linkedin.com/in/Alex-Example/"',
+                'url: "https://www.linkedin.com/company/x"', "url: 5", 'url: ""', "url: null"):
+        text = _swap(INVITE, 'url: "https://www.linkedin.com/in/alex-example"', bad)
+        parsed, issues = item.parse(text, f"approvals/{APR}.md")
+        assert (parsed is None) == (bad != 'url: "https://www.linkedin.com/in/alex-example"'), bad
+        assert {i.code for i in issues} <= {"APR001"}
+    missing = _swap(INVITE, ', url: "https://www.linkedin.com/in/alex-example"', "")
+    parsed, issues = item.parse(missing, f"approvals/{APR}.md")
+    assert parsed is None and {i.code for i in issues} == {"APR001"}
+    msg = INVITE.replace("linkedin_invite", "linkedin_message")
+    assert item.parse(msg, f"approvals/{APR}.md")[0].target.url == URL
+    assert item.parse(_swap(msg, ', url: "https://www.linkedin.com/in/alex-example"', ""), f"approvals/{APR}.md")[0] is None
+    with_url = _swap(SPEC_EXAMPLE, 'label: "Alex Example, Example Corp"', f'label: "x", url: "{URL}"')
+    parsed, issues = item.parse(with_url, f"approvals/{APR}.md")
+    assert parsed is None and {i.code for i in issues} == {"APR001"}
+    assert item.parse(SPEC_EXAMPLE, f"approvals/{APR}.md")[0].target.url is None
+
+
+def test_url_is_covered_by_the_hash_and_the_round_trip():
+    a = person_item()
+    b = person_item(url="https://www.linkedin.com/in/someone-else")
+    assert item.action_hash(a) != item.action_hash(b)
+    doc = {"schema": 1, "kind": "linkedin_invite", "target": {"id": PER, "channel": "linkedin", "label": "Alex", "url": URL},
+           "content": "Hi Alex.\n", "manifest": []}
+    raw = json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    assert item.action_hash(a) == hashlib.sha256(raw).hexdigest()
+    for it in (a, b, mk_submit()):
+        parsed, issues = item.parse_bytes(item.to_bytes(it), f"approvals/{APR}.md")
+        assert issues == [] and parsed == it
+    assert b"url:" not in item.to_bytes(mk_submit())
+    unicode_url = "https://www.linkedin.com/in/jos\u00e9"
+    parsed, issues = item.parse_bytes(item.to_bytes(person_item(url=unicode_url)), f"approvals/{APR}.md")
+    assert issues == [] and parsed.target.url == unicode_url
+
+
+def test_summary_shows_the_url_without_new_header_spoofing():
+    it = person_item()
+    text = render.summary(it, item.action_hash(it))
+    assert f"url:     {URL}" in text
+    header = text.split("content:")[0]
+    assert sum(line.startswith("hash:") for line in header.splitlines()) == 1
+    forged = dataclasses.replace(it, target=Target(PER, "linkedin", "Alex", "https://www.linkedin.com/in/a\nhash:    0"))
+    header = render.summary(forged, item.action_hash(forged)).split("content:")[0]
+    assert sum(line.startswith("hash:") for line in header.splitlines()) == 1
+
+
+def test_person_identity_helpers():
+    a = person_item()
+    a2 = person_item(kind="linkedin_message", pid=PER)
+    b = person_item(url="https://www.linkedin.com/in/other", pid="per_zzzzzzzzzz")
+    assert item.person_ids_by_url([a, a2, b, mk_submit()]) == {URL: PER, "https://www.linkedin.com/in/other": "per_zzzzzzzzzz"}
+    assert item.person_identity_problems([a, a2, b, mk_submit()]) == []
+    assert item.person_identity_problems([]) == []
+    two_ids = person_item(pid="per_yyyyyyyyyy")
+    problems = item.person_identity_problems([a, two_ids])
+    assert len(problems) == 1 and URL in problems[0] and PER in problems[0] and "per_yyyyyyyyyy" in problems[0]
+    two_urls = person_item(url="https://www.linkedin.com/in/other")
+    problems = item.person_identity_problems([a, two_urls])
+    assert len(problems) == 1 and PER in problems[0]
+    assert len(item.person_identity_problems([a, two_ids, two_urls])) >= 2

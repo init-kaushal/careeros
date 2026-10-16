@@ -59,6 +59,7 @@ def summary(item: Item, action_hash: str) -> str:
         f"item:    {item.id}",
         f"kind:    {_header(item.kind)}",
         f"target:  {_header(item.target.label)} ({_header(item.target.id)}, {_header(item.target.channel)})",
+        *([f"url:     {_header(item.target.url)}"] if item.target.url is not None else []),
         f"length:  {len(item.content)} characters",
         f"hash:    {hash_prefix(action_hash)}",
     ]

@@ -9,6 +9,8 @@ or target shape, and a manifest that does not match the kind.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
+from urllib.parse import unquote
 
 from careeros.core import ids
 from careeros.core.approvals import manifest, render, rules
@@ -20,6 +22,7 @@ from careeros.core.workspace import join_frontmatter, normalize_value
 
 _KEYS = ("schema", "id", "kind", "target", "created_at", "manifest")
 _TARGET_KEYS = ("id", "channel", "label")
+_PERSON_KINDS = (rules.LINKEDIN_INVITE, rules.LINKEDIN_MESSAGE)
 _ENTRY_KEYS = ("path", "sha256")
 _SHA = re.compile(r"[0-9a-f]{64}")
 _FIX = "an approval item is immutable: restore the file from version control, or propose a new item"
@@ -41,6 +44,67 @@ def header_text_problem(value: object, name: str) -> str | None:
     return None
 
 
+_URL = re.compile(r"(?i)(https?)://([^/?#]*)(/[^?#]*)?(\?[^#]*)?(#.*)?")
+_HOST = re.compile(r"(?:www\.|[a-z]{2}\.)?linkedin\.com")
+_SLUG_PATH = re.compile(r"/in/([^/]+)/?")
+_MAX_URL = 2048
+_MAX_SLUG = 100
+
+
+def canonical_profile_url(raw: object) -> str | None:
+    """`https://www.linkedin.com/in/<slug>` for a LinkedIn profile URL, or None. Accepts http or https (forced to https),
+    the hosts `linkedin.com`, `www.linkedin.com` and `<cc>.linkedin.com` (two letters; mapped to `www`), a path of exactly
+    `/in/<slug>` with an optional trailing slash, and drops query and fragment. The slug is percent-decoded (strict
+    UTF-8) and lower-cased; it may contain letters and digits of any script plus `-` and `_` (profile slugs of
+    non-English members are real), at most 100 characters. Everything else is refused: other hosts and look-alikes,
+    userinfo, ports, IP literals, other paths, an empty slug, anything with controls, spaces, `/`, `.` or `%` left after
+    decoding, non-text input and very long input. Idempotent on its own output."""
+    if not isinstance(raw, str) or len(raw) > _MAX_URL:
+        return None
+    match = _URL.fullmatch(raw)
+    if not match or not match[2].isascii() or not _HOST.fullmatch(match[2].lower()):
+        return None
+    path = _SLUG_PATH.fullmatch(match[3] or "")
+    if not path:
+        return None
+    try:
+        slug = unquote(path[1], errors="strict").lower()
+    except UnicodeDecodeError:
+        return None
+    if not slug or len(slug) > _MAX_SLUG or slug.lower() != slug or not all(c.isalnum() or c in "-_" for c in slug):
+        return None
+    if render.render_content(slug) != slug:
+        return None
+    return f"https://www.linkedin.com/in/{slug}"
+
+
+def person_ids_by_url(items: Iterable[Item]) -> dict[str, str]:
+    """`{canonical profile URL: person id}` over the invite and message items given (first id seen wins)."""
+    out: dict[str, str] = {}
+    for it in items:
+        if it.target.url is not None:
+            out.setdefault(it.target.url, it.target.id)
+    return out
+
+
+def person_identity_problems(items: Iterable[Item]) -> list[str]:
+    """Inconsistent person identities: one URL under two ids, or one id under two URLs."""
+    by_url: dict[str, list[str]] = {}
+    by_id: dict[str, list[str]] = {}
+    for it in items:
+        if it.target.url is None:
+            continue
+        if it.target.id not in by_url.setdefault(it.target.url, []):
+            by_url[it.target.url].append(it.target.id)
+        if it.target.url not in by_id.setdefault(it.target.id, []):
+            by_id[it.target.id].append(it.target.url)
+    problems = [f"profile URL {render.render_content(u)} is used under more than one person id: {', '.join(v)}"
+                for u, v in sorted(by_url.items()) if len(v) > 1]
+    problems += [f"person id {i} is used for more than one profile URL: {', '.join(render.render_content(u) for u in v)}"
+                 for i, v in sorted(by_id.items()) if len(v) > 1]
+    return problems
+
+
 def _unencodable(value: object) -> bool:
     if isinstance(value, str):
         try:
@@ -59,7 +123,9 @@ def _target(raw: object, kind: str | None, problems: list[str]) -> Target | None
     if not isinstance(raw, dict):
         problems.append("target must be a mapping with id, channel and label")
         return None
-    extra, missing = set(raw) - set(_TARGET_KEYS), [k for k in _TARGET_KEYS if k not in raw]
+    person = kind in _PERSON_KINDS
+    allowed = _TARGET_KEYS + (("url",) if person else ())
+    extra, missing = set(raw) - set(allowed), [k for k in allowed if k not in raw]
     if extra:
         problems.append(f"unknown key in target: {', '.join(sorted(map(str, extra)))}")
     if missing:
@@ -81,7 +147,14 @@ def _target(raw: object, kind: str | None, problems: list[str]) -> Target | None
         if problem:
             problems.append(problem)
             ok = False
-    return Target(raw["id"], raw["channel"], raw["label"]) if ok else None
+    url = None
+    if person:
+        url = raw["url"]
+        if not isinstance(url, str) or canonical_profile_url(url) != url:
+            problems.append(f"target url {url!r} must be a canonical LinkedIn profile URL "
+                            f"(https://www.linkedin.com/in/<slug>; try {canonical_profile_url(url)!r})")
+            ok = False
+    return Target(raw["id"], raw["channel"], raw["label"], url) if ok else None
 
 
 def _manifest(raw: object, kind: str | None, present: bool, problems: list[str]) -> tuple[ManifestEntry, ...] | None:
@@ -172,11 +245,18 @@ def parse_bytes(raw: bytes, rel: str) -> tuple[Item | None, list[Issue]]:
     return parse(text, rel)
 
 
+def _target_doc(item: Item) -> dict:
+    doc = {"id": item.target.id, "channel": item.target.channel, "label": item.target.label}
+    if item.target.url is not None:
+        doc["url"] = item.target.url
+    return doc
+
+
 def to_bytes(item: Item) -> bytes:
     """The exact bytes of the item file: frontmatter, closing fence, then the content (LF line endings)."""
     fm: dict = {
         "schema": rules.SCHEMA, "id": item.id, "kind": item.kind,
-        "target": {"id": item.target.id, "channel": item.target.channel, "label": item.target.label},
+        "target": _target_doc(item),
         "created_at": item.created_at,
     }
     if item.kind == rules.APPLICATION_SUBMIT:
@@ -185,11 +265,11 @@ def to_bytes(item: Item) -> bytes:
 
 
 def action_hash(item: Item) -> str:
-    """sha256 of the canonical JSON of schema, kind, target (id, channel, label), content and the sorted manifest.
+    """sha256 of the canonical JSON of schema, kind, target (id, channel, label and, for invites and messages, the canonical profile url), content and the sorted manifest.
     The item id and creation time are not part of it: it binds the action, the target and the exact content."""
     doc = {
         "schema": rules.SCHEMA, "kind": item.kind,
-        "target": {"id": item.target.id, "channel": item.target.channel, "label": item.target.label},
+        "target": _target_doc(item),
         "content": normalize_content(item.content),
         "manifest": sorted([m.path, m.sha256] for m in item.manifest),
     }
