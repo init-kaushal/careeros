@@ -32,7 +32,9 @@ EV_VOIDED = "approval.voided"
 EV_REJECTED = "approval.rejected"
 EVENT_PREFIX = "approval."
 STATE_EVENTS = (EV_PROPOSED, EV_APPROVED, EV_DECLINED, EV_SUPERSEDED, EV_STARTED, EV_CONSUMED, EV_RELEASED, EV_VOIDED)
-# recorded for the audit trail only: they never change a state, a gate, a conflict check or a sequence check
+# recorded for the audit trail only: they never change a state, a gate, a conflict check or a sequence check.
+# (`job.transition_rejected` is not an `approval.*` type, so the fold ignores it anyway; it is listed so callers and the
+# audit-only tests name every rejection that must never feed back into a decision.)
 AUDIT_ONLY_TYPES = (EV_REJECTED, "job.transition_rejected")
 
 # --- operations (what a caller asks the table about) and the event each one writes

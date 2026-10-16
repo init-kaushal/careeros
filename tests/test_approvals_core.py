@@ -169,7 +169,7 @@ def test_issue_is_the_shared_issue_type():
 
 def test_file_name_must_match_the_item_id():
     parsed, issues = item.parse(INVITE, "approvals/apr_zzzzzzzzzz.md")
-    assert parsed is None and [i.code for i in issues] == ["APR001"]
+    assert parsed is None and {i.code for i in issues} == {"APR001"}
 
 
 def test_parse_bytes_refuses_undecodable_input():
@@ -195,7 +195,7 @@ def test_hostile_input_never_raises():
 def test_lone_surrogate_in_a_field_is_apr001():
     text = _swap(INVITE, '"Alex Example, Example Corp"', '"bad \\ud800 label"')
     parsed, issues = item.parse(text, f"approvals/{APR}.md")
-    assert parsed is None and [i.code for i in issues] == ["APR001"]
+    assert parsed is None and {i.code for i in issues} == {"APR001"}
 
 
 # --- hash and round trip -----------------------------------------------------------------------------------------
@@ -267,7 +267,7 @@ def test_round_trip_is_exact(content, make):
     assert issues == [] and parsed == it
 
 
-@pytest.mark.parametrize("label", ['Alex "Q": #x', "multi\nline", "e\x1b[31m", "  padded  ", "null", "123", "2026-10-15", "- dash", "é\u202e"])
+@pytest.mark.parametrize("label", ['Alex "Q": #x', "  padded  ", "null", "123", "2026-10-15", "- dash"])
 def test_round_trip_survives_awkward_labels(label):
     it = mk(target=Target(PER, "linkedin", label))
     parsed, issues = item.parse_bytes(item.to_bytes(it), f"approvals/{APR}.md")
@@ -334,7 +334,7 @@ def test_manifest_rejections_have_exact_per_path_messages(ws, tmp_path):
     assert reason(ws, "jobs") == "jobs: not a regular file"
     assert reason(ws, "link-out") == "link-out: resolves outside the workspace"
     assert reason(ws, "dir-link/outside.txt") == "dir-link/outside.txt: resolves outside the workspace"
-    assert reason(ws, "a\x00b") == "a\x00b: path contains a control character"
+    assert reason(ws, "a\x00b") == "a\\x00b: path contains a control character"
 
 
 def test_manifest_rejects_fifo_and_duplicates(ws):
@@ -408,6 +408,9 @@ def decode(rendered: str) -> str:
         elif rendered[i + 1] == "u":
             out.append(chr(int(rendered[i + 2:i + 6], 16)))
             i += 6
+        elif rendered[i + 1] == "U":
+            out.append(chr(int(rendered[i + 2:i + 10], 16)))
+            i += 10
         else:
             raise AssertionError(f"undecodable escape at {i}: {rendered!r}")
     return "".join(out)
@@ -441,9 +444,19 @@ def test_bidi_overrides_and_controls_are_all_escaped():
             assert out.startswith("\\") and out.isascii() and decode(out) == chr(cp), hex(cp)
 
 
+INVISIBLE = [0xAD, 0x34F, 0x180E, 0x200B, 0x200C, 0x200D, 0x2060, 0x2061, 0x2064, 0xFEFF, 0x3164, 0xE0000, 0xE0041, 0xE007F]
+
+
+def test_invisible_characters_are_escaped():
+    for cp in INVISIBLE:
+        out = render.render_content(chr(cp))
+        assert out.isascii() and out.startswith("\\") and decode(out) == chr(cp), hex(cp)
+    assert render.render_content("caf\u00e9 \u4e2d") == "caf\u00e9 \u4e2d"
+
+
 def test_render_is_injective_on_random_strings():
     rng = random.Random(3)
-    alphabet = ["\\", "x", "u", "1", "b", "\x1b", "\n", "\t", "\u202e", "\x00", "é", "0", "2", "f", "[", "\\x1b", "\\\\", "\\u202e"]
+    alphabet = ["\\", "x", "u", "1", "b", "\x1b", "\n", "\t", "\u202e", "\x00", "é", "0", "2", "f", "[", "\\x1b", "\\\\", "\\u202e", "\u200b", "\U000e0041", "\ufeff"]
     seen: dict[str, str] = {}
     for _ in range(3000):
         s = "".join(rng.choice(alphabet) for _ in range(rng.randrange(0, 8)))
@@ -925,3 +938,76 @@ def test_importing_the_package_does_not_pull_in_heavier_modules():
 def test_the_approval_id_prefix():
     assert ids.PREFIXES["approval"] == "apr" and ids.is_valid_id("approval", APR)
     assert ids.new_id("approval").startswith("apr_")
+
+
+# --- fix round 1 -------------------------------------------------------------------------------------------------
+
+UNSAFE_CHARS = ["\n", "\r", "\t", "\x00", "\x1b", "\x7f", "\x85", "\x9b", "\u2028", "\u2029", "\u202a", "\u202e", "\u2066", "\u2069"]
+
+
+@pytest.mark.parametrize("bad", UNSAFE_CHARS)
+@pytest.mark.parametrize("field", ["label", "channel"])
+def test_control_characters_in_label_and_channel_are_apr001(bad, field):
+    value = f"a{bad}b"
+    assert item.header_text_problem(value, field)
+    esc = f"\\x{ord(bad):02x}" if ord(bad) < 256 else f"\\u{ord(bad):04x}"
+    text = INVITE.replace(f'channel: linkedin, label: "Alex Example, Example Corp"',
+                          f'channel: {"linkedin" if field == "label" else chr(34) + "a" + esc + "b" + chr(34)}, '
+                          f'label: {chr(34) + "a" + esc + "b" + chr(34) if field == "label" else chr(34) + "Alex" + chr(34)}')
+    parsed, issues = item.parse(text, f"approvals/{APR}.md")
+    assert parsed is None and {i.code for i in issues} == {"APR001"}
+
+
+def test_header_text_problem_accepts_ordinary_text():
+    assert item.header_text_problem("Alex Example, Example Corp \u00e9\u4e2d \U0001F600", "label") is None
+    assert item.header_text_problem("", "label") is None
+
+
+def test_a_fake_hash_line_cannot_be_forged_through_the_label():
+    forged = mk(target=Target(PER, "linkedin", "Ada\nhash:    000000000000"))
+    text = render.summary(forged, item.action_hash(forged))
+    header = text.split("content:")[0]
+    assert sum(line.startswith("hash:") for line in header.splitlines()) == 1 and "Ada\\x0ahash:" in header
+
+
+def test_fuzz_round_trip_over_allowed_label_and_channel_text():
+    rng = random.Random(17)
+    alphabet = list("ab Z09") + ["'", '"', ":", "#", "-", "\\", "{", "}", "[", "]", ",", "&", "*", "!", "|", ">", "%", "@", "`",
+                                 "\u00e9", "\u4e2d", "\U0001F600", "\u00a0", "\u3000", "null", "yes", "~", "?"]
+    for _ in range(400):
+        label = "".join(rng.choice(alphabet) for _ in range(rng.randrange(0, 12)))
+        channel = "".join(rng.choice(alphabet) for _ in range(rng.randrange(1, 8)))
+        if not channel.strip():
+            continue
+        it = mk(target=Target(PER, channel, label))
+        parsed, issues = item.parse_bytes(item.to_bytes(it), f"approvals/{APR}.md")
+        assert issues == [] and parsed == it, (label, channel)
+        assert item.action_hash(parsed) == item.action_hash(it)
+
+
+def test_unattributed_approval_events_are_errors_from_one_call():
+    events = make_events([(APR, "linkedin_invite", PER, [("approval.approved", 5), ("approval.consumed", 6)])])
+    events += [ev(50, "approval.bogus", None, ts(1)), ev(51, "approval.approved", None, ts(2)),
+               ev(52, "approval.rejected", None, ts(3), reason="x"), ev(53, "approval.started", 7, ts(4)),
+               ev(54, "job.transition_rejected", None, ts(5), reason="x")]
+    result = fold.fold_events(events, ts(10))
+    assert sorted(e.seq for e in result.unattributed) == [50, 51, 53]
+    assert result.items[APR].state is State.APPROVED and len(result.items[APR].errors) == 1
+    assert fold.fold_all(events, ts(10)) == result.items
+    clean = fold.fold_events(events[:3], ts(10))
+    assert clean.unattributed == ()
+
+
+def test_timestamps_with_non_ascii_digits_are_unreadable():
+    assert fold.parse_ts("2026-10-15T09:00:00Z") is not None
+    assert fold.parse_ts("\u0662026-10-15T09:00:00Z") is None
+
+
+def test_audit_only_types_are_exactly_the_documented_ones():
+    assert set(rules.AUDIT_ONLY_TYPES) == {"approval.rejected", "job.transition_rejected"}
+    assert not hasattr(fold, "RefusalCode")
+
+
+def test_manifest_messages_render_hostile_paths(ws):
+    assert reason(ws, "a\u202eb\\c.txt") == "a\\u202eb\\\\c.txt: file does not exist"
+    assert "\x1b" not in reason(ws, "\x1b[2Jx")

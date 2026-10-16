@@ -9,7 +9,15 @@ such as `2026-10-15T09:00:00Z`), so one operation can read the clock once and us
 * `expired` is computed, never stored: an approved item is expired when `now >= approved_at + 24h`. A released item keeps
   its original `approved_at`. An unreadable `approved_at` counts as expired.
 * A proposal event names its kind and target in `action` as `propose <kind> for <target id>` and its file and action
-  hash in `artifacts` as `[rel, "sha256:<hex>"]`; `proposal_event_fields` builds them and the fold reads them back.
+  hash in `artifacts` as `[rel, "sha256:<hex>"]`. Contract: the proposal event is written ONLY through
+  `proposal_event_fields`; `APR005` must fail when a proposal event does not parse, and `APR004`/`APR005` must
+  cross-check the event's kind, target and hash against the item file.
+* Contract for `clock_skewed`: every caller must pass `ItemState.last_ts`; the fold alone does not detect a clock that
+  moved backwards.
+* `fold_events` is the one call `APR005` is built on: `FoldResult.items` holds every item's `ItemState` (with its
+  `errors`) and `FoldResult.unattributed` holds every `approval.*` problem that names no item (an unknown type, or any
+  known type, with a missing or non-string entity). Audit-only events are ignored wherever they appear, entity or not.
+  `fold_all` is the items part alone.
 """
 
 from __future__ import annotations
@@ -22,7 +30,7 @@ from datetime import datetime, timedelta
 from careeros.core.approvals import rules
 from careeros.core.approvals.model import ItemState, SequenceError, State
 
-_TS = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+_TS = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", re.ASCII)
 _TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 _PROPOSAL_ACTION = re.compile(r"propose (" + "|".join(rules.KINDS) + r") for (\S+)")
 _HASH = re.compile(r"sha256:([0-9a-f]{64})")
@@ -34,8 +42,6 @@ class Refusal:
     code: str
     state: State
 
-
-RefusalCode = Refusal
 
 
 @dataclass(frozen=True)
@@ -174,21 +180,36 @@ def _fold_one(events: list[dict], extra: list[SequenceError], now: str) -> ItemS
     return ItemState(State(raw), errors=tuple(errors), **fields)
 
 
-def fold_all(events: Iterable[object], now: str) -> dict[str, ItemState]:
-    """Every item that has any `approval.*` state event, in order of first appearance, as `{item id: ItemState}`.
-    An item with events but no proposal has `state=None` and errors."""
+@dataclass(frozen=True)
+class FoldResult:
+    items: dict[str, ItemState]
+    unattributed: tuple[SequenceError, ...]
+
+
+def fold_events(events: Iterable[object], now: str) -> FoldResult:
+    """Every item that has any `approval.*` state event, in order of first appearance, as `{item id: ItemState}`
+    (state=None plus errors when it has events but no proposal), and every error that names no item."""
     kept, errors = filter_events(events)
     grouped: dict[str, list[dict]] = {}
+    unattributed = [e for e in errors if e.entity is None]
     for event in kept:
         if isinstance(event.get("entity"), str):
             grouped.setdefault(event["entity"], []).append(event)
+        else:
+            unattributed.append(SequenceError(event.get("seq"), None, f"{event['type']} names no item (entity {event.get('entity')!r})"))
+    unattributed.sort(key=lambda e: _order((0, {"seq": e.seq})))
     extra: dict[str, list[SequenceError]] = {}
     for error in errors:
         if error.entity is not None:
             extra.setdefault(error.entity, []).append(error)
     for entity in extra:
         grouped.setdefault(entity, [])
-    return {entity: _fold_one(evs, extra.get(entity, []), now) for entity, evs in grouped.items()}
+    items = {entity: _fold_one(evs, extra.get(entity, []), now) for entity, evs in grouped.items()}
+    return FoldResult(items, tuple(unattributed))
+
+
+def fold_all(events: Iterable[object], now: str) -> dict[str, ItemState]:
+    return fold_events(events, now).items
 
 
 def fold_item(events: Iterable[object], item_id: str, now: str) -> ItemState:

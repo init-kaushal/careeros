@@ -14,7 +14,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from careeros.core.approvals import rules
+from careeros.core.approvals import render, rules
 from careeros.core.approvals.model import ManifestEntry
 
 
@@ -35,7 +35,7 @@ class ResolvedFile:
 
 
 def _invalid(path: str, what: str) -> ManifestError:
-    return ManifestError(rules.MANIFEST_INVALID, path, f"{path}: {what}")
+    return ManifestError(rules.MANIFEST_INVALID, path, f"{render.render_content(path)}: {what}")
 
 
 def normalize_rel(path: str) -> str:
@@ -106,4 +106,4 @@ def verify(root: Path, entries: Iterable[ManifestEntry]) -> None:
     entries = tuple(entries)
     for entry, got in zip(sorted(entries, key=lambda e: e.path), resolve(root, entries)):
         if got.sha256 != entry.sha256:
-            raise ManifestError(rules.MANIFEST_CHANGED, entry.path, f"{entry.path}: content changed since it was proposed")
+            raise ManifestError(rules.MANIFEST_CHANGED, entry.path, f"{render.render_content(entry.path)}: content changed since it was proposed")

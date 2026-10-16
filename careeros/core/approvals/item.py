@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 
 from careeros.core import ids
-from careeros.core.approvals import manifest, rules
+from careeros.core.approvals import manifest, render, rules
 from careeros.core.approvals.model import Item, ManifestEntry, Target
 from careeros.core.compensation import record
 from careeros.core.evaluation.canon import canonical_json, sha256_hex
@@ -27,6 +27,18 @@ _FIX = "an approval item is immutable: restore the file from version control, or
 
 def normalize_content(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def header_text_problem(value: object, name: str) -> str | None:
+    """Why `value` cannot be a target label or channel (None when it can): they appear in the header the user approves
+    from, so control characters (newline and tab included), C1 controls, NEL, line separators, bidi controls and
+    invisible characters are refused. Task B's propose validation reuses this."""
+    if not isinstance(value, str):
+        return f"target {name} must be a string"
+    for char in value:
+        if char != "\\" and render.needs_escape(char):
+            return f"target {name} contains a control, bidi or invisible character (U+{ord(char):04X})"
+    return None
 
 
 def _unencodable(value: object) -> bool:
@@ -64,9 +76,11 @@ def _target(raw: object, kind: str | None, problems: list[str]) -> Target | None
     if not isinstance(raw["channel"], str) or not raw["channel"].strip():
         problems.append("target channel must be a non-empty string")
         ok = False
-    if not isinstance(raw["label"], str):
-        problems.append("target label must be a string")
-        ok = False
+    for name in ("channel", "label"):
+        problem = header_text_problem(raw[name], name)
+        if problem:
+            problems.append(problem)
+            ok = False
     return Target(raw["id"], raw["channel"], raw["label"]) if ok else None
 
 
