@@ -1,4 +1,5 @@
-"""The approvals service: `propose`, `list_items`, `show` and the read-only `validate_workspace` (spec sections 6, 8, 9).
+"""The approvals service: `propose`, `list_items`, `show`, the decisions, claims and recovery (`decide`, `queue`,
+`begin`, `done`, `resolve`) and the read-only `validate_workspace` (spec sections 5, 6, 8, 9).
 
 `propose` writes the item file first and the ledger events second, under the workspace lock, as one transaction: the file
 is put back on any exception (`append_events` restores the ledger itself). A process kill between the two leaves an
@@ -7,6 +8,13 @@ orphan file, which `APR002` reports and nothing treats as actionable. The `appro
 kind and target, in one batch. Persons have no records: a person is identified by the canonical profile URL, and the
 `per_` id is allocated for the first proposal of a URL and reused by every later one (any parsed item file counts, even an
 orphan).
+
+`decide` and `queue` (the user, interactive), `begin` and `done` (the agent) and `resolve` (the user, interactive)
+change state. Each takes the workspace lock, verifies the hash chain (`ledger_corrupt`, nothing written) and folds the
+ledger before deciding anything, and takes `now` from its caller (one clock read per operation, by the CLI). As in
+`approve_job`, a decision does not hold the lock while the user decides and re-checks everything under the lock
+before writing. A refusal of an existing item appends an audit-only, deduped `approval.rejected`; an id that names no
+item appends nothing.
 
 `list_items` and `show` fold the ledger and read the item files; `validate_workspace` does the same and adds the `APR`
 codes. None of the three takes the lock or writes anything. Each takes `now` once and passes it down; every
@@ -23,7 +31,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from careeros.core import ids, ledger, models
-from careeros.core.approvals import fold, item as item_mod, manifest, rules
+from careeros.core.approvals import fold, item as item_mod, manifest, render, rules
 from careeros.core.approvals.model import Item, ItemState, ManifestEntry, Target
 from careeros.core.memory.store import Transaction
 from careeros.core.models import Issue
@@ -43,7 +51,8 @@ _TERMINAL = (rules.CONSUMED, rules.DECLINED, rules.EXPIRED, rules.SUPERSEDED, ru
 
 
 class Refused(WorkspaceError):
-    """A refusal (exit 1): `code` is a stable code from `rules.REFUSAL_CODES`, or `invalid_input`."""
+    """A refusal (exit 1): `code` is a stable code from `rules.REFUSAL_CODES`, or `invalid_input`, `ledger_corrupt` or
+    `job_not_awaiting_approval` (defined here, outside the spec's list)."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -314,6 +323,357 @@ def propose(root: Path, *, kind: str, person_url: str | None, job_ref: str | Non
                     pass
             raise
         return Proposed(new_id, rel, digest, tuple(i for i, _ in superseded), target_id)
+
+
+# --- decisions, claims and recovery ----------------------------------------------------------------------------------------
+
+JOB_NOT_AWAITING = "job_not_awaiting_approval"
+CHOICES = ("approve", "decline", "skip")
+_NEEDS = {rules.OP_APPROVE: rules.PENDING, rules.OP_DECLINE: rules.PENDING, rules.OP_BEGIN: rules.APPROVED,
+          rules.OP_DONE: rules.IN_FLIGHT, rules.OP_RELEASE: rules.IN_FLIGHT}
+
+
+@dataclass(frozen=True)
+class Decision:
+    id: str
+    outcome: str                 # approved | declined | skipped | changed (queue: no longer pending at its turn)
+    events: tuple[dict, ...] = ()
+
+
+@dataclass(frozen=True)
+class QueueResult:
+    id: str
+    outcome: str                 # approved | declined | skipped | changed | refused
+    code: str | None = None
+    message: str | None = None
+
+
+@dataclass(frozen=True)
+class Started:
+    id: str
+    kind: str
+    target_id: str
+    rel: str
+    hash: str
+    item: Item
+    event: dict
+
+
+@dataclass(frozen=True)
+class Done:
+    id: str
+    event: dict
+
+
+@dataclass(frozen=True)
+class Resolved:
+    id: str
+    outcome: str                 # consumed | released | expired (released, past its expiry) | voided
+    reason: str | None
+    event: dict
+    expires_at: str | None = None
+
+
+@dataclass(frozen=True)
+class _Ctx:
+    events: list
+    states: dict[str, ItemState]
+    st: ItemState
+    file: _File | None
+
+
+def _chain_ok(root: Path, what: str) -> None:
+    broken = ledger.verify_chain(root)
+    if broken:
+        raise Refused(LEDGER_CORRUPT, f"the ledger's hash chain is broken ({broken[0].message}); nothing was {what}. "
+                                      "Restore ledger.jsonl from .careeros/backups or version control")
+
+
+def _load(root: Path, item_id: str, now: str, what: str) -> _Ctx:
+    """Under the lock: writable workspace, intact chain, then the folded state of every item. `not_found` (nothing is
+    written) when no proposal event names `item_id`."""
+    ensure_writable(root)
+    _chain_ok(root, what)
+    events = ledger.read_events(root)
+    states = fold.fold_all(events, now)
+    st = states.get(item_id)
+    if st is None or st.state is None:
+        raise Refused(rules.NOT_FOUND, f"no approval item {item_id!r} (an item exists only once its approval.proposed event is recorded)")
+    return _Ctx(events, states, st, _scan(root).get(item_id))
+
+
+def _refuse(root: Path, ctx: _Ctx, item_id: str, operation: str, actor: str, source: str, code: str, message: str):
+    """Append an `approval.rejected` for this EXISTING item, unless the item's latest event of any type is an identical
+    rejection, then raise `Refused`. Audit only: no fold, gate or check reads it. A failed audit write never turns the
+    refusal into something else."""
+    reason, action = f"{code}: {message}", f"rejected {operation} of {item_id}"
+    last = next((e for e in reversed(ctx.events) if isinstance(e, dict) and e.get("entity") == item_id), None)
+    duplicate = (last is not None and last.get("type") == rules.EV_REJECTED and last.get("reason") == reason
+                 and last.get("action") == action and last.get("actor") == actor)
+    if not duplicate:
+        try:
+            ledger.append_events(root, [{"type": rules.EV_REJECTED, "actor": actor, "entity": item_id, "action": action,
+                                         "reason": reason, "source": source}])
+        except (OSError, WorkspaceError):
+            pass
+    raise Refused(code, message)
+
+
+def _state_problem(item_id: str, st: ItemState, operation: str, now: str) -> tuple[str, str] | None:
+    """The item's history is legal, the table allows `operation` from the effective state, and the clock is not behind
+    the item's approval or latest event (`ItemState.last_ts`)."""
+    state = st.state.value
+    if st.errors:
+        return rules.WRONG_STATE, f"{item_id} is {state} but its event history is illegal (careeros validate reports APR005)"
+    got = fold.apply_transition(st.state, operation)
+    if isinstance(got, fold.Refusal):
+        if got.code == rules.EXPIRED_CODE:
+            return got.code, (f"{item_id} expired at {_expires_at(st)}: an approval lasts {rules.APPROVAL_TTL_HOURS} hours; "
+                              "propose it again")
+        return got.code, f"{item_id} is {state}, not {_NEEDS[operation]}"
+    if clock_skew_of(st, now):
+        return rules.CLOCK_SKEW, (f"the clock is earlier than {item_id}'s latest recorded event ({st.last_ts}); "
+                                  "check the system clock")
+    return None
+
+
+def _content_problem(item_id: str, st: ItemState, file: _File | None) -> tuple[str, str] | None:
+    """The item file is the one the proposal names and still holds exactly what was proposed (the ledger is
+    authoritative for kind, target and hash; the file is the cross-check and the content)."""
+    rel = _expected_rel(item_id)
+    if st.rel is not None and st.rel != rel:
+        return rules.HASH_MISMATCH, f"the proposal event of {item_id} names another file ({st.rel})"
+    if file is None:
+        return rules.CONTENT_MISSING, f"{rel} is missing: the approved content cannot be checked"
+    it = file.item
+    if (it is None or it.id != item_id or (it.kind, it.target.id, it.target.url) != (st.kind, st.target_id, st.url)
+            or item_mod.action_hash(it) != st.action_hash):
+        return rules.HASH_MISMATCH, f"{rel} differs from what was proposed (the action hash no longer matches)"
+    return None
+
+
+def _manifest_problem(root: Path, it: Item) -> tuple[str, str] | None:
+    if it.kind != rules.APPLICATION_SUBMIT:
+        return None
+    try:
+        manifest.verify(root, it.manifest)
+    except manifest.ManifestError as exc:
+        return exc.code, f"manifest: {exc}"
+    return None
+
+
+def _others(item_id: str, st: ItemState, states: dict[str, ItemState], state: str) -> list[str]:
+    """Other items of the same kind and target (ledger buckets) in `state`."""
+    return [i for i, s in states.items() if i != item_id and s.state is not None and s.state.value == state
+            and s.kind == st.kind and s.target_id == st.target_id]
+
+
+def _in_flight_problem(item_id: str, st: ItemState, states: dict[str, ItemState]) -> tuple[str, str] | None:
+    flying = _others(item_id, st, states, rules.IN_FLIGHT)
+    if flying:
+        return rules.IN_FLIGHT_CONFLICT, (f"{flying[0]} is in flight for the same {st.kind} target: it may already have "
+                                          f"been acted on. The user resolves it first (careeros approval resolve {flying[0]})")
+    return None
+
+
+def _invite_problem(item_id: str, st: ItemState, states: dict[str, ItemState]) -> tuple[str, str] | None:
+    consumed = _others(item_id, st, states, rules.CONSUMED)
+    if consumed and st.kind == rules.LINKEDIN_INVITE:
+        return rules.INVITE_CONFLICT, f"{consumed[0]} already sent an invite to this person: one invite per person"
+    return None
+
+
+def _submitted_problem(item_id: str, st: ItemState, states: dict[str, ItemState]) -> tuple[str, str] | None:
+    consumed = _others(item_id, st, states, rules.CONSUMED)
+    if consumed and st.kind == rules.APPLICATION_SUBMIT:
+        return rules.ALREADY_SUBMITTED, f"{consumed[0]} already submitted the application for this job"
+    return None
+
+
+def _job_problem(root: Path, job_id: str, events: list, *, require_approved: bool) -> tuple[str, str] | None:
+    """A submit item is decided and claimed only while its job awaits approval (the same check as `approve_job`); the
+    claim also needs the job-level approval, so a sent submission is one `transition … APPLIED` can accept."""
+    from careeros.core.state_machine import approval_status     # lazy: the state machine may come to import approvals
+
+    try:
+        job = resolve_job(root, job_id)
+    except WorkspaceError:
+        return JOB_NOT_AWAITING, f"no job {job_id} exists in this workspace"
+    if job.archived:
+        return JOB_NOT_AWAITING, f"the job {job.id} is archived"
+    if job.status != models.State.APPROVAL_REQUIRED:
+        return JOB_NOT_AWAITING, f"the job {job.id} is {job.status.value}, not APPROVAL_REQUIRED"
+    if require_approved and approval_status(events, job.id) != "approved":
+        return JOB_NOT_AWAITING, f"the job-level approval of {job.id} is not recorded as approved"
+    return None
+
+
+def _first(*checks) -> tuple[str, str] | None:
+    for check in checks:
+        problem = check()
+        if problem:
+            return problem
+    return None
+
+
+def _decidable(root: Path, ctx: _Ctx, item_id: str, now: str) -> tuple[Item, str] | tuple[str, str]:
+    st = ctx.st
+    problem = _first(lambda: _state_problem(item_id, st, rules.OP_APPROVE, now),
+                     lambda: _content_problem(item_id, st, ctx.file),
+                     lambda: _job_problem(root, st.target_id, ctx.events, require_approved=False)
+                     if st.kind == rules.APPLICATION_SUBMIT else None)
+    if problem:
+        _refuse(root, ctx, item_id, "approve", "user", "tty", *problem)
+    return ctx.file.item, st.action_hash
+
+
+def _decide(root: Path, item_id: str, confirm, now: str, *, in_queue: bool) -> Decision:
+    root = Path(root)
+    with WorkspaceLock(root):
+        ctx = _load(root, item_id, now, "decided")
+        if in_queue and ctx.st.state.value != rules.PENDING:
+            return Decision(item_id, "changed")
+        shown, digest = _decidable(root, ctx, item_id, now)
+    choice = confirm(render.summary(shown, digest))       # the lock is NOT held while the user decides
+    if choice not in ("approve", "decline"):
+        return Decision(item_id, "skipped")
+    with WorkspaceLock(root):
+        ctx = _load(root, item_id, now, "decided")
+        again, digest_again = _decidable(root, ctx, item_id, now)     # re-checked: state, content, job
+        if again != shown or digest_again != digest:
+            _refuse(root, ctx, item_id, "approve", "user", "tty", rules.HASH_MISMATCH,
+                    f"{_expected_rel(item_id)} changed while you were deciding; nothing was recorded")
+        st, approve = ctx.st, choice == "approve"
+        rel = _expected_rel(item_id)
+        verb = "approved" if approve else "declined"
+        specs = [{"type": rules.EV_APPROVED if approve else rules.EV_DECLINED, "actor": "user", "entity": item_id,
+                  "source": "tty", "prev_state": rules.PENDING, "new_state": rules.APPROVED if approve else rules.DECLINED,
+                  "approval": "approved" if approve else "denied", "artifacts": [rel, f"sha256:{digest}"],
+                  "action": f"user {verb} {item_id} ({st.kind} for {st.target_id})"}]
+        if st.kind == rules.APPLICATION_SUBMIT:
+            specs.append({"type": "application.approved" if approve else "application.approval_denied", "actor": "user",
+                          "entity": st.target_id, "source": "tty", "approval": "approved" if approve else "denied",
+                          "artifacts": [rel, f"sha256:{digest}"],
+                          "action": f"user {verb} the application submission {item_id}"})
+        events = ledger.append_events(root, specs)
+        return Decision(item_id, verb, tuple(events))
+
+
+def decide(root: Path, item_id: str, *, confirm, now: str) -> Decision:
+    """The user decides one pending item. `confirm(text)` gets the escaped display (`render.summary`) and returns
+    "approve", "decline" or anything else (skip: nothing is written). As in `approve_job`, the lock is not held while
+    the user decides; state, content and (submit) job are re-checked under the lock before writing, and a draft that
+    changed in between is `hash_mismatch`. A submit decision appends the paired job-level event in the same batch."""
+    return _decide(root, item_id, confirm, now, in_queue=False)
+
+
+def queue(root: Path, *, prompt, now: str) -> list[QueueResult]:
+    """Every item pending at the start, in proposal order, each shown in full through `prompt` (see `decide`). An item
+    that left `pending` before its turn is `changed`; a refusal is reported and the queue goes on. Each decision is
+    written when it is made; an interrupted queue (EOF, Ctrl-C) leaves the current and later items pending."""
+    root = Path(root)
+    with WorkspaceLock(root):
+        ensure_writable(root)
+        _chain_ok(root, "decided")
+        pending = [i for i, st in fold.fold_all(ledger.read_events(root), now).items()
+                   if st.state is not None and st.state.value == rules.PENDING]
+    results: list[QueueResult] = []
+    for item_id in pending:
+        try:
+            results.append(QueueResult(item_id, _decide(root, item_id, prompt, now, in_queue=True).outcome))
+        except Refused as exc:
+            if exc.code == LEDGER_CORRUPT:
+                raise
+            results.append(QueueResult(item_id, "refused", exc.code, str(exc)))
+    return results
+
+
+def begin(root: Path, item_id: str, *, actor: str, now: str) -> Started:
+    """The claim, immediately before acting. Under the lock, in the spec's order: state approved, unexpired, no clock
+    skew; the file's action hash equals the proposal's; (submit) every manifest file re-validated and re-hashed; no
+    other item of the same kind and target in flight; (invite) no other invite to the person consumed; (submit) no
+    other submit for the job consumed, and the job awaiting approval with its job-level approval recorded. Then
+    `approval.started`. A refusal of an existing item appends a deduped `approval.rejected`."""
+    root = Path(root)
+    with WorkspaceLock(root):
+        ctx = _load(root, item_id, now, "started")
+        st = ctx.st
+        problem = _first(lambda: _state_problem(item_id, st, rules.OP_BEGIN, now),
+                         lambda: _content_problem(item_id, st, ctx.file),
+                         lambda: _manifest_problem(root, ctx.file.item),
+                         lambda: _in_flight_problem(item_id, st, ctx.states),
+                         lambda: _invite_problem(item_id, st, ctx.states),
+                         lambda: _submitted_problem(item_id, st, ctx.states),
+                         lambda: _job_problem(root, st.target_id, ctx.events, require_approved=True)
+                         if st.kind == rules.APPLICATION_SUBMIT else None)
+        if problem:
+            _refuse(root, ctx, item_id, rules.OP_BEGIN, actor, "cli", *problem)
+        rel = _expected_rel(item_id)
+        (event,) = ledger.append_events(root, [{
+            "type": rules.EV_STARTED, "actor": actor, "entity": item_id, "source": "cli", "prev_state": rules.APPROVED,
+            "new_state": rules.IN_FLIGHT, "artifacts": [rel, f"sha256:{st.action_hash}"],
+            "action": f"started {item_id} ({st.kind} for {st.target_id})"}])
+        return Started(item_id, st.kind, st.target_id, rel, st.action_hash, ctx.file.item, event)
+
+
+def done(root: Path, item_id: str, *, actor: str, note: str | None = None, now: str) -> Done:
+    """`in_flight` -> `consumed`: the action happened. Never touches the job. A refusal appends a deduped rejection."""
+    root = Path(root)
+    with WorkspaceLock(root):
+        ctx = _load(root, item_id, now, "recorded")
+        st = ctx.st
+        problem = _state_problem(item_id, st, rules.OP_DONE, now)
+        if problem:
+            _refuse(root, ctx, item_id, rules.OP_DONE, actor, "cli", *problem)
+        (event,) = ledger.append_events(root, [{
+            "type": rules.EV_CONSUMED, "actor": actor, "entity": item_id, "source": "cli", "prev_state": rules.IN_FLIGHT,
+            "new_state": rules.CONSUMED, "reason": note or None, "action": f"done {item_id} ({st.kind} for {st.target_id})"}])
+        return Done(item_id, event)
+
+
+def resolve(root: Path, item_id: str, *, sent: bool, now: str) -> Resolved:
+    """The user's account of an in-flight item (the CLI allows it only in an interactive terminal). `sent`: consumed.
+    Not sent: revalidate the content hash, the manifest (submit) and invite uniqueness; all pass -> `approval.released`
+    (approved again with its original `approved_at`, or computed `expired` when that has passed); any other failure ->
+    `approval.voided` with the reason, so the old approval is never silently reused."""
+    root = Path(root)
+    with WorkspaceLock(root):
+        ctx = _load(root, item_id, now, "recorded")
+        st = ctx.st
+        problem = _state_problem(item_id, st, rules.OP_DONE, now)
+        if problem:
+            _refuse(root, ctx, item_id, "resolve", "user", "tty", *problem)
+        base = {"actor": "user", "entity": item_id, "source": "tty", "prev_state": rules.IN_FLIGHT}
+        if sent:
+            (event,) = ledger.append_events(root, [{**base, "type": rules.EV_CONSUMED, "new_state": rules.CONSUMED,
+                                                    "action": f"user reports {item_id} was sent"}])
+            return Resolved(item_id, "consumed", None, event)
+        failed = _first(lambda: _content_problem(item_id, st, ctx.file),
+                        lambda: _manifest_problem(root, ctx.file.item),
+                        lambda: _invite_problem(item_id, st, ctx.states))
+        if failed:
+            reason = f"{failed[0]}: {failed[1]}"
+            (event,) = ledger.append_events(root, [{**base, "type": rules.EV_VOIDED, "new_state": rules.VOIDED,
+                                                    "reason": reason, "action": f"user reports {item_id} was not sent; voided"}])
+            return Resolved(item_id, "voided", reason, event)
+        (event,) = ledger.append_events(root, [{**base, "type": rules.EV_RELEASED, "new_state": rules.APPROVED,
+                                                "reason": "the user reports nothing was sent",
+                                                "action": f"user reports {item_id} was not sent; released"}])
+        return Resolved(item_id, "expired" if fold.is_expired(st.approved_at, now) else "released", None, event,
+                        _expires_at(st))
+
+
+def refuse_not_interactive(root: Path, item_id: str, *, operation: str, actor: str, now: str) -> None:
+    """Record the deduped `approval.rejected` (`not_interactive`) when `item_id` names an existing item; an unknown id,
+    a broken chain or a failed write records nothing. Never raises: the caller refuses anyway."""
+    root = Path(root)
+    try:
+        with WorkspaceLock(root):
+            ctx = _load(root, item_id, now, "recorded")
+            _refuse(root, ctx, item_id, operation, actor, "cli", rules.NOT_INTERACTIVE,
+                    f"{operation} needs an interactive terminal: the user runs it")
+    except (WorkspaceError, OSError):
+        pass
 
 
 # --- validation ---------------------------------------------------------------------------------------------------------------
