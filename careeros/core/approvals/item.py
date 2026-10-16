@@ -33,7 +33,7 @@ _TARGET_KEYS = ("id", "channel", "label")
 _PERSON_KINDS = (rules.LINKEDIN_INVITE, rules.LINKEDIN_MESSAGE)
 _ENTRY_KEYS = ("path", "sha256")
 _SHA = re.compile(r"[0-9a-f]{64}")
-_FIX = "an approval item is immutable: restore the file from version control, or propose a new item"
+FIX = "an approval item is immutable: restore the file from version control, or propose a new item"
 
 
 def normalize_content(text: str) -> str:
@@ -248,14 +248,14 @@ def parse(text: str, rel: str) -> tuple[Item | None, list[Issue]]:
         parsed, problems = None, [f"{rel} cannot be read: {type(exc).__name__}"]
     if parsed is not None:
         return parsed, []
-    return None, [Issue("error", rules.APR001, rel, problem, _FIX) for problem in problems or [f"{rel} is not a valid approval item"]]
+    return None, [Issue("error", rules.APR001, rel, problem, FIX) for problem in problems or [f"{rel} is not a valid approval item"]]
 
 
 def parse_bytes(raw: bytes, rel: str) -> tuple[Item | None, list[Issue]]:
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        return None, [Issue("error", rules.APR001, rel, f"{rel} is not valid UTF-8", _FIX)]
+        return None, [Issue("error", rules.APR001, rel, f"{rel} is not valid UTF-8", FIX)]
     return parse(text, rel)
 
 

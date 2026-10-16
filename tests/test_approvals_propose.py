@@ -98,8 +98,8 @@ def test_invite_file_bytes_and_event_shape(ws):
     assert got.hash == item_mod.action_hash(parsed)
     (event,) = approval_events(root)
     assert event["type"] == "approval.proposed" and event["entity"] == got.id and event["actor"] == "agent:test"
-    assert event["artifacts"] == [got.rel, f"sha256:{got.hash}"]
-    assert event["action"] == fold.proposal_event_fields(rules.LINKEDIN_INVITE, parsed.target.id, got.rel, got.hash)["action"]
+    assert event["artifacts"] == [got.rel, f"sha256:{got.hash}", f"url:{URL}"]
+    assert event["action"] == fold.proposal_event_fields(rules.LINKEDIN_INVITE, parsed.target.id, got.rel, got.hash, URL)["action"]
 
 
 def test_message_and_submit_kinds(ws):
@@ -210,7 +210,6 @@ def test_invalid_inputs_are_refused_without_side_effects(ws):
     root, job = ws
     before = everything(root)
     bad = [
-        dict(job="no-such-job", kind=rules.APPLICATION_SUBMIT),
         dict(url="https://example.com/in/alex"),
         dict(url="not a url"),
         dict(url="https://www.linkedin.com/company/acme"),
@@ -225,6 +224,16 @@ def test_invalid_inputs_are_refused_without_side_effects(ws):
         with pytest.raises(service.Refused):
             P(root, kind, **kw)
     assert everything(root) == before
+
+
+def test_unresolvable_job_is_a_usage_error(ws, tmp_path):
+    root, _ = ws
+    with pytest.raises(WorkspaceError) as exc:
+        P(root, rules.APPLICATION_SUBMIT, job="no-such-job", content="a")
+    assert not isinstance(exc.value, service.Refused)
+    content = tmp_path / "c.txt"
+    content.write_text("a")
+    assert cli(root, "propose", "--kind", "application_submit", "--job", "nope", "--content-file", str(content)).exit_code == 2
 
 
 @pytest.mark.parametrize("paths", [
@@ -685,3 +694,203 @@ def test_rejected_needs_a_reason(ws):
     with pytest.raises(ledger.LedgerError):
         ledger.append_event(root, type="approval.rejected", actor="agent:x", action="refused")
     ledger.append_event(root, type="approval.rejected", actor="agent:x", action="refused", reason="expired")
+
+
+# --- the ledger is authoritative for identity and buckets ------------------------------------------------------------------
+
+def consumed_invite(root):
+    got = P(root)
+    approve(root, got.id), start(root, got.id), consume(root, got.id)
+    return got
+
+
+def test_deleted_file_of_a_consumed_invite_still_blocks_a_new_invite(ws):
+    root, _ = ws
+    got = consumed_invite(root)
+    (root / got.rel).unlink()
+    before = everything(root)
+    with pytest.raises(service.Refused) as exc:
+        P(root, url="http://LINKEDIN.com/in/Alex-Example/", content="again")
+    assert exc.value.code == rules.INVITE_CONFLICT
+    assert everything(root) == before
+    assert person_of_event(root, P(root, rules.LINKEDIN_MESSAGE)) == person_of_event(root, got)      # same per_ id reused
+
+
+def person_of_event(root, got):
+    return fold.fold_item(ledger.read_events(root), got.id, NOW).target_id
+
+
+@pytest.mark.parametrize("damage", ["delete", "corrupt"])
+def test_damaged_file_of_an_in_flight_person_item_still_conflicts(ws, damage):
+    root, _ = ws
+    got = P(root)
+    approve(root, got.id), start(root, got.id)
+    if damage == "delete":
+        (root / got.rel).unlink()
+    else:
+        (root / got.rel).write_bytes(b"\xff not an item")
+    with pytest.raises(service.Refused) as exc:
+        P(root, url="https://in.linkedin.com/in/alex-example/", content="again")
+    assert exc.value.code == rules.IN_FLIGHT_CONFLICT
+
+
+def test_rewritten_target_id_in_a_file_cannot_bypass_the_rules(ws):
+    root, _ = ws
+    got = consumed_invite(root)
+    parsed, _ = item_mod.parse_bytes((root / got.rel).read_bytes(), got.rel)
+    forged = Item(parsed.id, parsed.kind, Target(ids.new_id("person"), "linkedin", parsed.target.label, URL), parsed.created_at, parsed.content)
+    (root / got.rel).write_bytes(item_mod.to_bytes(forged))
+    with pytest.raises(service.Refused) as exc:
+        P(root, content="again")
+    assert exc.value.code == rules.INVITE_CONFLICT
+    found = codes(root)
+    assert "APR004" in found and "APR005" in found and "APR006" in found
+
+
+def test_deleted_file_of_a_consumed_submit_still_blocks(ws):
+    root, job = ws
+    got = S(root, job)
+    approve(root, got.id), start(root, got.id), consume(root, got.id)
+    (root / got.rel).unlink()
+    with pytest.raises(service.Refused) as exc:
+        S(root, job)
+    assert exc.value.code == rules.ALREADY_SUBMITTED
+
+
+def test_event_carries_the_url_and_a_file_url_mismatch_is_flagged(ws):
+    root, _ = ws
+    got = P(root)
+    (event,) = approval_events(root)
+    assert event["artifacts"] == [got.rel, f"sha256:{got.hash}", f"url:{URL}"]
+    parsed, _ = item_mod.parse_bytes((root / got.rel).read_bytes(), got.rel)
+    other = Item(parsed.id, parsed.kind, Target(parsed.target.id, "linkedin", parsed.target.label, "https://www.linkedin.com/in/other"),
+                 parsed.created_at, parsed.content)
+    (root / got.rel).write_bytes(item_mod.to_bytes(other))
+    assert "APR005" in codes(root) and "APR004" in codes(root)
+    assert "url" in " ".join(i.message for i in issues(root, "APR005"))
+
+
+def rewrite_ledger(root, edit):
+    path = root / "ledger.jsonl"
+    path.write_bytes(edit(path.read_bytes().split(b"\n")[:-1]))
+
+
+@pytest.mark.parametrize("how", ["edit_action", "delete_line", "reorder"])
+def test_broken_chain_fails_closed(ws, how):
+    root, _ = ws
+    first = P(root)
+    P(root, rules.LINKEDIN_MESSAGE)
+
+    def edit(lines):
+        if how == "edit_action":
+            lines = [l.replace(b"propose linkedin_invite for", b"propose linkedin_message for") for l in lines]
+        elif how == "delete_line":
+            del lines[1]
+        else:
+            lines[-1], lines[-2] = lines[-2], lines[-1]
+        return b"\n".join(lines) + b"\n"
+
+    rewrite_ledger(root, edit)
+    before = everything(root)
+    with pytest.raises(service.Refused) as exc:
+        P(root, content="anything")
+    assert exc.value.code == "ledger_corrupt"
+    assert everything(root) == before
+    assert first.id
+
+
+def test_edited_event_then_repropose_is_refused_not_bypassed(ws):
+    root, _ = ws
+    got = P(root)
+    approve(root, got.id), start(root, got.id)
+    rewrite_ledger(root, lambda lines: b"\n".join(l.replace(b"propose linkedin_invite for", b"propose linkedin_message for") for l in lines) + b"\n")
+    with pytest.raises(service.Refused) as exc:
+        P(root, content="again")
+    assert exc.value.code == "ledger_corrupt"
+
+
+def test_cli_ledger_corrupt_is_exit_1(ws, tmp_path):
+    root, _ = ws
+    P(root)
+    rewrite_ledger(root, lambda lines: b"\n".join(lines[:-1]) + b"\n" + lines[-1].replace(b"propose", b"PROPOSE") + b"\n")
+    content = tmp_path / "c.txt"
+    content.write_text("a")
+    r = cli(root, "propose", "--kind", "linkedin_invite", "--person-url", URL, "--content-file", str(content), "--json")
+    assert r.exit_code == 1 and json.loads(r.stdout)["code"] == "ledger_corrupt"
+
+
+# --- transaction detail, clock, expiry, storage ------------------------------------------------------------------------------
+
+def test_proposal_and_supersession_are_one_append_call(ws, monkeypatch):
+    root, _ = ws
+    first = P(root)
+    calls = []
+    real = ledger.append_events
+    monkeypatch.setattr(ledger, "append_events", lambda r, specs: calls.append([s["type"] for s in specs]) or real(r, specs))
+    P(root, content="second")
+    assert calls == [["approval.proposed", "approval.superseded"]]
+
+
+def test_failed_batch_leaves_neither_proposal_nor_supersession(ws, monkeypatch):
+    root, _ = ws
+    first = P(root)
+    before = everything(root)
+    monkeypatch.setattr(ledger, "append_events", lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
+    with pytest.raises(OSError):
+        P(root, content="second")
+    monkeypatch.undo()
+    assert everything(root) == before and [e["type"] for e in approval_events(root)] == ["approval.proposed"]
+
+
+def test_backward_clock_on_a_pending_item_is_skew(ws):
+    root, _ = ws
+    got = P(root)
+    assert service.show(root, got.id, now="2026-10-05T00:00:00Z").clock_skew
+    assert not service.show(root, got.id, now=NOW).clock_skew
+
+
+def test_expired_approved_item_is_not_superseded(ws, monkeypatch):
+    root, _ = ws
+    first = P(root)
+    approve(root, first.id)
+    monkeypatch.setattr("careeros.core.models.utc_now", lambda: "2026-10-08T00:00:00Z")      # 24h+ after approval
+    second = P(root, content="later")
+    assert second.superseded == ()
+    assert [e["entity"] for e in approval_events(root) if e["type"] == "approval.superseded"] == []
+
+
+def test_unstorable_content_is_refused(ws, monkeypatch):
+    root, _ = ws
+    before = everything(root)
+    with pytest.raises(service.Refused) as exc:
+        P(root, content="lone surrogate \ud800")
+    assert exc.value.code == service.INVALID_INPUT
+    real = item_mod.parse_bytes
+    monkeypatch.setattr(item_mod, "parse_bytes", lambda raw, rel: (lambda parsed, p: (parsed and Item(parsed.id, parsed.kind, parsed.target, parsed.created_at, "x", parsed.manifest), p))(*real(raw, rel)))
+    with pytest.raises(service.Refused) as exc:
+        P(root)
+    assert "read back" in str(exc.value)
+    assert everything(root) == before
+
+
+# --- the approvals directory is untrusted --------------------------------------------------------------------------------------------
+
+def test_symlinked_and_oversized_item_files_are_apr001_and_never_read(ws, tmp_path):
+    root, _ = ws
+    got = P(root)
+    link = root / "approvals" / "apr_linkeditem.md"
+    link.symlink_to(root / got.rel)
+    big = root / "approvals" / "apr_hugeitem00.md"
+    big.write_bytes(b"x" * (service.MAX_ITEM_BYTES + 1))
+    found = issues(root, "APR001")
+    assert {i.path for i in found} == {"approvals/apr_linkeditem.md", "approvals/apr_hugeitem00.md"}
+    assert any("too large" in i.message for i in found) and any("symlink" in i.message for i in found)
+    assert service.show(root, got.id, now=NOW).usable
+
+
+def test_list_and_show_exit_1_on_a_corrupt_ledger_line(ws):
+    root, _ = ws
+    got = P(root)
+    with (root / "ledger.jsonl").open("ab") as handle:
+        handle.write(b"{not json\n")
+    assert cli(root, "list").exit_code == 1 and cli(root, "show", got.id).exit_code == 1

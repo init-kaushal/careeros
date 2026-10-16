@@ -9,7 +9,10 @@ such as `2026-10-15T09:00:00Z`), so one operation can read the clock once and us
 * `expired` is computed, never stored: an approved item is expired when `now >= approved_at + 24h`. A released item keeps
   its original `approved_at`. An unreadable `approved_at` counts as expired.
 * A proposal event names its kind and target in `action` as `propose <kind> for <target id>` and its file and action
-  hash in `artifacts` as `[rel, "sha256:<hex>"]`. Contract: the proposal event is written ONLY through
+  hash in `artifacts` as `[rel, "sha256:<hex>"]`; for linkedin_invite and linkedin_message ONLY it carries a third
+  element `url:<canonical profile URL>`, so the LEDGER (not the item files) is authoritative for person identity and for
+  the (kind, target) buckets every gate keys on. Wrong arity, a malformed or non-canonical url element, a url on a
+  submit and a missing url on a message kind are sequence errors (`APR005`). Contract: the proposal event is written ONLY through
   `proposal_event_fields`; `APR005` must fail when a proposal event does not parse, and `APR004`/`APR005` must
   cross-check the event's kind, target and hash against the item file.
 * Contract for `clock_skewed`: every caller must pass `ItemState.last_ts`; the fold alone does not detect a clock that
@@ -27,7 +30,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from careeros.core.approvals import rules
+from careeros.core.approvals import item, rules
 from careeros.core.approvals.model import ItemState, SequenceError, State
 
 _TS = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", re.ASCII)
@@ -95,9 +98,13 @@ def apply_transition(state: State | str, operation: str) -> State | Refusal:
 
 # --- events ----------------------------------------------------------------------------------------------------------
 
-def proposal_event_fields(kind: str, target_id: str, rel: str, action_hash: str) -> dict:
-    """The `action` and `artifacts` an `approval.proposed` event carries so the fold can read kind, target and hash."""
-    return {"action": f"propose {kind} for {target_id}", "artifacts": [rel, f"sha256:{action_hash}"]}
+def proposal_event_fields(kind: str, target_id: str, rel: str, action_hash: str, url: str | None = None) -> dict:
+    """The `action` and `artifacts` an `approval.proposed` event carries so the fold can read kind, target, hash and,
+    for invites and messages, the canonical profile URL (`url` is required for them and must be None for a submit)."""
+    arts = [rel, f"sha256:{action_hash}"]
+    if url is not None:
+        arts.append(f"url:{url}")
+    return {"action": f"propose {kind} for {target_id}", "artifacts": arts}
 
 
 def _order(indexed: tuple[int, dict]) -> tuple:
@@ -127,17 +134,30 @@ def filter_events(events: Iterable[object]) -> tuple[list[dict], list[SequenceEr
     return [e for _, e in kept], [e for _, e in errors]
 
 
-def _proposal(event: dict) -> tuple[str | None, str | None, str | None, str | None]:
-    """(kind, target_id, rel, action_hash) read from a proposal event; any part may be None."""
+def _proposal(event: dict) -> tuple[str | None, str | None, str | None, str | None, str | None, list[str]]:
+    """(kind, target_id, rel, action_hash, url, problems) read from a proposal event; any part may be None."""
     match = _PROPOSAL_ACTION.fullmatch(event.get("action") if isinstance(event.get("action"), str) else "")
     kind, target = (match[1], match[2]) if match else (None, None)
     arts = event.get("artifacts")
-    rel = digest = None
-    if isinstance(arts, list) and len(arts) == 2 and isinstance(arts[0], str) and isinstance(arts[1], str):
+    rel = digest = url = None
+    problems: list[str] = []
+    if isinstance(arts, list) and len(arts) in (2, 3) and all(isinstance(a, str) for a in arts):
         found = _HASH.fullmatch(arts[1])
         if found:
             rel, digest = arts[0], found[1]
-    return kind, target, rel, digest
+        if len(arts) == 3:
+            if not arts[2].startswith("url:") or item.canonical_profile_url(arts[2][4:]) != arts[2][4:]:
+                problems.append("the proposal's url element is not `url:<canonical profile URL>`")
+            else:
+                url = arts[2][4:]
+    elif arts is not None:
+        problems.append("the proposal's artifacts must be [rel, sha256, optional url]")
+    if kind in (rules.LINKEDIN_INVITE, rules.LINKEDIN_MESSAGE) and url is None and not problems:
+        problems.append(f"a {kind} proposal must carry the profile url")
+    if kind == rules.APPLICATION_SUBMIT and isinstance(arts, list) and len(arts) == 3:
+        problems.append("an application_submit proposal must not carry a url")
+        url = None
+    return kind, target, rel, digest, url, problems
 
 
 def _fold_one(events: list[dict], extra: list[SequenceError], now: str) -> ItemState:
@@ -150,13 +170,14 @@ def _fold_one(events: list[dict], extra: list[SequenceError], now: str) -> ItemS
             if raw is not None:
                 errors.append(f"seq {seq}: a second {etype} for the same item")
                 continue
-            kind, target, rel, digest = _proposal(event)
+            kind, target, rel, digest, url, bad = _proposal(event)
+            errors.extend(f"seq {seq}: {m}" for m in bad)
             if kind is None:
                 errors.append(f"seq {seq}: the proposal does not name a kind and target")
             if digest is None:
                 errors.append(f"seq {seq}: the proposal does not carry the item path and action hash")
             raw = rules.PENDING
-            fields.update(proposed_at=at, kind=kind, target_id=target, rel=rel, action_hash=digest)
+            fields.update(proposed_at=at, kind=kind, target_id=target, rel=rel, action_hash=digest, url=url)
         elif raw is None:
             errors.append(f"seq {seq}: {etype} before any proposal")
             continue

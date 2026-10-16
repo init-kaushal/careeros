@@ -17,12 +17,13 @@ recorded decision, not a security boundary.
 
 from __future__ import annotations
 
+import stat
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
 from careeros.core import ids, ledger, models
-from careeros.core.approvals import fold, item as item_mod, manifest, render, rules
+from careeros.core.approvals import fold, item as item_mod, manifest, rules
 from careeros.core.approvals.model import Item, ItemState, ManifestEntry, Target
 from careeros.core.memory.store import Transaction
 from careeros.core.models import Issue
@@ -30,6 +31,8 @@ from careeros.core.workspace import WorkspaceError, WorkspaceLock, ensure_writab
 
 APPROVALS_DIR = "approvals"
 INVALID_INPUT = "invalid_input"
+LEDGER_CORRUPT = "ledger_corrupt"
+MAX_ITEM_BYTES = 1 << 20
 ITEM_INVALID = "item_invalid"           # list/show problem codes that are not refusal codes
 EVENT_MISMATCH = "event_mismatch"
 SEQUENCE_ERROR = "sequence_error"
@@ -102,20 +105,36 @@ class _File:
 
 
 def _scan(root: Path) -> dict[str, _File]:
-    """Every `approvals/*.md`, parsed, keyed by file stem. Never raises, never writes."""
+    """Every `approvals/*.md`, parsed, keyed by file stem. Symlinks, non-regular files and files over `MAX_ITEM_BYTES` are
+    APR001 and never read whole. Never raises, never writes."""
     out: dict[str, _File] = {}
     base = Path(root) / APPROVALS_DIR
     try:
-        paths = sorted(p for p in base.glob("*.md") if p.is_file())
+        paths = sorted(base.glob("*.md"))
     except OSError:
         return out
+
+    def bad(rel: str, why: str) -> _File:
+        return _File(rel, None, (Issue("error", rules.APR001, rel, f"{rel} {why}", item_mod.FIX),))
+
     for path in paths:
         rel = f"{APPROVALS_DIR}/{path.name}"
         try:
-            parsed, found = item_mod.parse_bytes(path.read_bytes(), rel)
+            mode = path.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                out[path.stem] = bad(rel, "is a symlink: an approval item must be a regular file")
+            elif not stat.S_ISREG(mode):
+                out[path.stem] = bad(rel, "is not a regular file")
+            else:
+                with path.open("rb") as handle:
+                    raw = handle.read(MAX_ITEM_BYTES + 1)
+                if len(raw) > MAX_ITEM_BYTES:
+                    out[path.stem] = bad(rel, f"is too large (more than {MAX_ITEM_BYTES} bytes)")
+                else:
+                    parsed, found = item_mod.parse_bytes(raw, rel)
+                    out[path.stem] = _File(rel, parsed, tuple(found))
         except OSError as exc:
-            parsed, found = None, [Issue("error", rules.APR001, rel, f"{rel} cannot be read: {exc.strerror or exc}", item_mod._FIX)]
-        out[path.stem] = _File(rel, parsed, tuple(found))
+            out[path.stem] = bad(rel, f"cannot be read: {exc.strerror or exc}")
     return out
 
 
@@ -144,7 +163,7 @@ def _mismatches(item_id: str, st: ItemState, file: _File | None) -> list[str]:
     else:
         if st.action_hash is not None and item_mod.action_hash(file.item) != st.action_hash:
             problems.append(rules.HASH_MISMATCH)
-        if st.kind != file.item.kind or st.target_id != file.item.target.id:
+        if (st.kind, st.target_id, st.url) != (file.item.kind, file.item.target.id, file.item.target.url):
             problems.append(EVENT_MISMATCH)
     return list(dict.fromkeys(problems))
 
@@ -213,10 +232,7 @@ def propose(root: Path, *, kind: str, person_url: str | None, job_ref: str | Non
                 raise Refused(INVALID_INPUT, f"{person_url!r} is not a LinkedIn profile URL: use https://www.linkedin.com/in/<slug>")
             default_label, channel = url, CHANNEL_PERSON
         else:
-            try:
-                job = resolve_job(root, job_ref)
-            except WorkspaceError as exc:
-                raise Refused(INVALID_INPUT, str(exc)) from None
+            job = resolve_job(root, job_ref)       # an unresolvable ref is a usage error (exit 2), like `comp`
             url, default_label, channel = None, f"{job.company}, {job.title}", CHANNEL_SUBMIT
         label = default_label if label is None else label
         _header_problem(label, "label")
@@ -232,15 +248,24 @@ def propose(root: Path, *, kind: str, person_url: str | None, job_ref: str | Non
             except manifest.ManifestError as exc:
                 raise Refused(exc.code, f"manifest: {exc}") from None
 
+        broken = ledger.verify_chain(root)
+        if broken:
+            raise Refused(LEDGER_CORRUPT, f"the ledger's hash chain is broken ({broken[0].message}); nothing was proposed. "
+                                          "Restore ledger.jsonl from .careeros/backups or version control")
         now = models.utc_now()
         events = ledger.read_events(root)
         states = fold.fold_all(events, now)
         files = _scan(root)
         parsed = [f.item for f in files.values() if f.item is not None]
-        taken_people = {i.target.id for i in parsed if i.target.url is not None}
+        # identity comes from the LEDGER (every proposal event, whatever the state or the file); files are a cross-check
+        by_url: dict[str, str] = {}
+        for st in states.values():
+            if st.url is not None and st.target_id is not None:
+                by_url.setdefault(st.url, st.target_id)
+        taken_people = {i.target.id for i in parsed if i.target.url is not None} | set(by_url.values())
         taken_people |= {st.target_id for st in states.values() if st.target_id and st.target_id.startswith("per_")}
         if person:
-            target_id = item_mod.person_ids_by_url(parsed).get(url) or ids.new_id("person", taken_people)
+            target_id = by_url.get(url) or ids.new_id("person", taken_people)
         else:
             target_id = job.id
 
@@ -270,7 +295,7 @@ def propose(root: Path, *, kind: str, person_url: str | None, job_ref: str | Non
                           + ("; ".join(i.message for i in problems) or "the text contains characters that cannot be stored"))
         digest = item_mod.action_hash(built)
         specs = [{"type": rules.EV_PROPOSED, "actor": actor, "entity": new_id, "source": "cli", "new_state": rules.PENDING,
-                  **fold.proposal_event_fields(kind, target_id, rel, digest)}]
+                  **fold.proposal_event_fields(kind, target_id, rel, digest, url)}]
         specs += [{"type": rules.EV_SUPERSEDED, "actor": actor, "entity": i, "source": "cli", "prev_state": st.state.value,
                    "new_state": rules.SUPERSEDED, "reason": f"superseded by {new_id}", "action": f"superseded by {new_id}"}
                   for i, st in superseded]
@@ -314,7 +339,7 @@ def validate_workspace(root: Path, events: list, now: str | None = None) -> list
     try:
         return _validate(root, events, now)
     except Exception as exc:    # noqa: BLE001
-        return [Issue("error", rules.APR001, APPROVALS_DIR, f"approvals could not be checked: {exc!r}", item_mod._FIX)]
+        return [Issue("error", rules.APR001, APPROVALS_DIR, f"approvals could not be checked: {exc!r}", item_mod.FIX)]
 
 
 def _validate(root: Path, events: list, now: str) -> list[Issue]:
@@ -350,10 +375,10 @@ def _validate(root: Path, events: list, now: str) -> list[Issue]:
             if st.action_hash is not None and item_mod.action_hash(file.item) != st.action_hash:
                 issues.append(Issue("error", "APR004", rel, f"{rel} differs from what was proposed (the action hash no longer matches)",
                                     "restore the file from version control, or propose a new item"))
-            if st.kind != file.item.kind or st.target_id != file.item.target.id:
+            if (st.kind, st.target_id, st.url) != (file.item.kind, file.item.target.id, file.item.target.url):
                 issues.append(Issue("error", "APR005", rel,
-                                    f"{item_id}: the proposal event says {st.kind} for {st.target_id}, the file says "
-                                    f"{file.item.kind} for {file.item.target.id}",
+                                    f"{item_id}: the proposal event says {st.kind} for {st.target_id} (url {st.url}), the file says "
+                                    f"{file.item.kind} for {file.item.target.id} (url {file.item.target.url})",
                                     "restore ledger.jsonl and the file from version control"))
             if state in (rules.APPROVED, rules.IN_FLIGHT) and file.item.kind == rules.APPLICATION_SUBMIT:
                 try:
@@ -378,8 +403,10 @@ def _validate(root: Path, events: list, now: str) -> list[Issue]:
         if st.state is not None and kind == rules.APPLICATION_SUBMIT and target not in jobs:
             issues.append(Issue("error", "APR006", _expected_rel(item_id), f"{item_id} targets {target}, but no job has that id",
                                 "restore the job directory from version control; archive jobs instead of deleting them"))
-    parsed = [f.item for f in files.values() if f.item is not None]
-    for problem in item_mod.person_identity_problems(parsed):
+    identities = [f.item for f in files.values() if f.item is not None] + [
+        Item(i, st.kind, Target(st.target_id, "x", "x", st.url), "", "") for i, st in result.items.items()
+        if st.state is not None and st.url is not None and st.target_id is not None]
+    for problem in dict.fromkeys(item_mod.person_identity_problems(identities)):
         issues.append(Issue("error", "APR006", APPROVALS_DIR, problem,
                             "an approval item is immutable: restore the files from version control"))
     return issues

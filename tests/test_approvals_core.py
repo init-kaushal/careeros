@@ -557,8 +557,8 @@ def ev(seq, etype, entity, at, *, action=None, artifacts=None, reason=None):
 
 
 def proposed(seq, item_id, at, kind="application_submit", target=JOB):
-    return ev(seq, "approval.proposed", item_id, at, action=f"propose {kind} for {target}",
-              artifacts=[f"approvals/{item_id}.md", "sha256:" + "c" * 64])
+    arts = [f"approvals/{item_id}.md", "sha256:" + "c" * 64] + ([f"url:{URL}"] if kind != "application_submit" else [])
+    return ev(seq, "approval.proposed", item_id, at, action=f"propose {kind} for {target}", artifacts=arts)
 
 
 EV_FOR_OP = {"approve": "approval.approved", "decline": "approval.declined", "supersede": "approval.superseded",
@@ -1265,3 +1265,31 @@ def test_mark_only_slugs_are_refused_but_real_scripts_with_marks_pass():
 ])
 def test_nfkc_is_applied_before_lower(raw, expected):
     assert slug_of(raw) == expected and slug_of(raw, encode=True) == expected
+
+
+# --- the proposal event carries the profile url (the ledger is authoritative for identity) ------------------------------
+
+def _fold_prop(event):
+    return fold.fold_events([event], ts(1)).items[APR]
+
+
+def test_proposal_event_fields_carry_the_url_only_for_person_kinds():
+    got = fold.proposal_event_fields("linkedin_invite", PER, "approvals/x.md", "c" * 64, URL)
+    assert got["artifacts"] == ["approvals/x.md", "sha256:" + "c" * 64, f"url:{URL}"]
+    assert len(fold.proposal_event_fields("application_submit", JOB, "approvals/x.md", "c" * 64)["artifacts"]) == 2
+    st = _fold_prop(ev(1, "approval.proposed", APR, ts(0), action=f"propose linkedin_invite for {PER}", artifacts=got["artifacts"]))
+    assert st.url == URL and not st.errors
+
+
+def test_proposal_event_url_problems_are_errors():
+    sha = "sha256:" + "c" * 64
+    for kind, target, arts in [
+        ("linkedin_invite", PER, ["approvals/x.md", sha]),                               # missing url
+        ("linkedin_message", PER, ["approvals/x.md", sha, "url:https://example.com/in/a"]),   # not LinkedIn
+        ("linkedin_message", PER, ["approvals/x.md", sha, "https://www.linkedin.com/in/a"]),  # no url: prefix
+        ("linkedin_invite", PER, ["approvals/x.md", sha, "url:https://www.linkedin.com/in/A"]),   # not canonical
+        ("linkedin_invite", PER, ["approvals/x.md", sha, f"url:{URL}", "extra"]),         # arity
+        ("application_submit", JOB, ["approvals/x.md", sha, f"url:{URL}"]),               # url on a submit
+    ]:
+        st = _fold_prop(ev(1, "approval.proposed", APR, ts(0), action=f"propose {kind} for {target}", artifacts=arts))
+        assert st.errors, (kind, arts)

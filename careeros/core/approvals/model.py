@@ -60,6 +60,7 @@ class ItemState:
     last_ts: str | None = None          # ts of the latest event applied to the item
     kind: str | None = None
     target_id: str | None = None
+    url: str | None = None              # canonical profile URL from the proposal event (invites and messages only)
     action_hash: str | None = None      # from the proposal event's artifacts, without the `sha256:` prefix
     rel: str | None = None
     void_reason: str | None = None

@@ -74,7 +74,7 @@ def list_cmd(
     as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
     workspace: Optional[Path] = _util.WorkspaceOption,
 ) -> None:
-    """List approval items with their derived state. Changes nothing."""
+    """List approval items with their derived state. Changes nothing. Exits 1 when ledger.jsonl has a corrupt line."""
     root = _util.resolve_root(workspace)
     views = _guard(as_json, lambda: service.list_items(root, status))
     if as_json:
@@ -92,7 +92,7 @@ def show_cmd(
     as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
     workspace: Optional[Path] = _util.WorkspaceOption,
 ) -> None:
-    """Show an item's exact content, hash prefix and derived state. Changes nothing."""
+    """Show an item's exact content, hash prefix and derived state. Changes nothing. Exits 1 when ledger.jsonl has a corrupt line."""
     root = _util.resolve_root(workspace)
     view = _guard(as_json, lambda: service.show(root, item_id))
     if as_json:
