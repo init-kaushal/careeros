@@ -1,8 +1,9 @@
 """Terminal-safe display of untrusted text (spec section 6). Pure.
 
-Control characters, ANSI escape sequences, line separators, Unicode bidi controls and invisible or zero-width characters become visible `\\xNN` / `\\uNNNN`
-escapes and a literal backslash becomes `\\\\`, so the rendering is injective: a typed escape cannot be confused with a
-rendered one. Newlines are kept so a message shows as written.
+Control characters, ANSI escape sequences, line separators, Unicode bidi controls, invisible or zero-width characters
+and every Default_Ignorable_Code_Point (variation selectors included) become visible `\\xNN` / `\\uNNNN` escapes and a
+literal backslash becomes `\\\\`, so the rendering is injective: a typed escape cannot be confused with a rendered one.
+Newlines are kept so a message shows as written.
 """
 
 from __future__ import annotations
@@ -13,14 +14,29 @@ from careeros.core.approvals.model import Item
 
 _BIDI = frozenset([*range(0x202A, 0x202F), *range(0x2066, 0x206A), 0x200E, 0x200F, 0x061C, 0x2028, 0x2029])
 # invisible or zero-width characters that could hide or fake text
-_INVISIBLE = frozenset([0xAD, 0x34F, 0x180E, *range(0x200B, 0x200E), *range(0x2060, 0x2065), 0xFEFF, 0x3164, 0x115F, 0x1160, 0x17B4, 0x17B5, 0xFFA0,
-                        *range(0xE0000, 0xE0080)])
+_INVISIBLE = frozenset([0xAD, 0x34F, 0x180E, *range(0x200B, 0x200E), *range(0x2060, 0x2065), 0xFEFF, 0x3164,
+                        0x115F, 0x1160, 0x17B4, 0x17B5, 0xFFA0, *range(0xE0000, 0xE0080)])
+# Default_Ignorable_Code_Point (inclusive ranges) from Unicode 16.0 DerivedCoreProperties.txt
+# (https://www.unicode.org/Public/16.0.0/ucd/DerivedCoreProperties.txt): variation selectors, joiners, tag and other
+# characters that render as nothing, so two strings that look identical could differ.
+_DEFAULT_IGNORABLE_RANGES = (
+    (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F),
+    (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF),
+)
+_DEFAULT_IGNORABLE = frozenset(cp for lo, hi in _DEFAULT_IGNORABLE_RANGES for cp in range(lo, hi + 1))
+
+
+def default_ignorable(char: str) -> bool:
+    """True for a code point with the Unicode property Default_Ignorable_Code_Point."""
+    return ord(char) in _DEFAULT_IGNORABLE
 
 
 def needs_escape(char: str) -> bool:
     """True for every character except a plain printable one (a backslash and a newline are handled separately)."""
     code = ord(char)
-    return code < 0x20 or 0x7F <= code <= 0x9F or code in _BIDI or code in _INVISIBLE or 0xD800 <= code <= 0xDFFF
+    return (code < 0x20 or 0x7F <= code <= 0x9F or code in _BIDI or code in _INVISIBLE or code in _DEFAULT_IGNORABLE
+            or 0xD800 <= code <= 0xDFFF)
 
 
 def _escape(char: str) -> str:

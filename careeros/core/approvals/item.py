@@ -4,6 +4,13 @@ Pure: parsing takes text, hashing takes an `Item`; nothing here reads a file, th
 body exactly as written: line endings are normalised to LF and nothing else, so leading and trailing blank lines are
 significant. `APR001` covers an unreadable file, invalid frontmatter, an unknown or duplicate key, an alias, a bad kind
 or target shape, and a manifest that does not match the kind.
+
+Person identity (invites and messages) is the canonical profile URL from `canonical_profile_url`, which assumes:
+LinkedIn slugs are case-insensitive (the slug is lower-cased); NFKC-equivalent spellings are the same profile (the slug
+is NFKC-normalised before lower-casing); characters with the Unicode property Default_Ignorable_Code_Point (variation
+selectors, joiners, tags and the like render as nothing) are refused rather than stripped, so two slugs that look
+identical never get different person ids; and a slug with no letter or digit (only marks, `-` or `_`) is refused, since
+it is not a real profile. Ordinary combining marks of real scripts (Devanagari, Thai, accents) are kept.
 """
 
 from __future__ import annotations
@@ -58,10 +65,12 @@ def canonical_profile_url(raw: object) -> str | None:
     `/in/<slug>` with an optional trailing slash, and drops query and fragment. The slug is percent-decoded (strict
     UTF-8), normalised with NFKC and then lower-cased (`lower`, never `casefold`: the sharp s stays; a word-final capital
     sigma becomes the final sigma, so it equals the lower-case spelling but a medial sigma is a different slug); it may
-    contain letters, digits and combining marks of any script plus `-` and `_` (slugs of non-English members are real;
-    format characters such as joiners are not allowed), at most 100 characters counted after normalisation. Everything else is refused: other hosts and look-alikes,
-    userinfo, ports, IP literals, other paths, an empty slug, anything with controls, spaces, `/`, `.` or `%` left after
-    decoding, non-text input and very long input. Idempotent on its own output. The scheme is matched case-insensitively and lower-cased on purpose."""
+    contain letters, digits and combining marks of any script plus `-` and `_` (slugs of non-English members are real),
+    must contain at least one letter or digit, and is at most 100 characters counted after normalisation. Everything
+    else is refused: other hosts and look-alikes, userinfo, ports, IP literals, other paths, an empty slug, a slug of
+    only marks, `-` or `_`, any Default_Ignorable_Code_Point (variation selectors, joiners and other format characters),
+    anything with controls, spaces, `/`, `.` or `%` left after decoding, non-text input and very long input. Idempotent
+    on its own output. The scheme is matched case-insensitively and lower-cased on purpose."""
     if not isinstance(raw, str) or len(raw) > _MAX_URL:
         return None
     match = _URL.fullmatch(raw)
@@ -76,7 +85,9 @@ def canonical_profile_url(raw: object) -> str | None:
         return None
     if not slug or len(slug) > _MAX_SLUG or slug.lower() != slug or unicodedata.normalize("NFKC", slug) != slug:
         return None
-    if not all(unicodedata.category(c)[0] in "LNM" or c in "-_" for c in slug) or render.render_content(slug) != slug:
+    if not all((unicodedata.category(c)[0] in "LNM" or c in "-_") and not render.default_ignorable(c) for c in slug):
+        return None
+    if not any(unicodedata.category(c)[0] in "LN" for c in slug) or render.render_content(slug) != slug:
         return None
     return f"https://www.linkedin.com/in/{slug}"
 

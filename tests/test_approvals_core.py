@@ -1210,3 +1210,58 @@ def test_person_ids_by_url_first_id_wins():
     second = person_item(pid="per_bbbbbbbbbb")
     assert item.person_ids_by_url([first, second]) == {URL: "per_aaaaaaaaaa"}
     assert item.person_ids_by_url([second, first]) == {URL: "per_bbbbbbbbbb"}
+
+
+# --- fix round 4: default-ignorable code points, mark-only slugs, normalisation order ----------------------------------
+
+# Default_Ignorable_Code_Point, Unicode 16.0 DerivedCoreProperties.txt (independent copy of the list in render.py).
+DEFAULT_IGNORABLE_RANGES = [
+    (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F),
+    (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF),
+]
+DEFAULT_IGNORABLE = frozenset(cp for lo, hi in DEFAULT_IGNORABLE_RANGES for cp in range(lo, hi + 1))
+
+
+def test_every_default_ignorable_code_point_is_escaped_and_refused_in_labels():
+    for cp in sorted(DEFAULT_IGNORABLE):
+        out = render.render_content(chr(cp))
+        assert out.isascii() and out.startswith("\\") and decode(out) == chr(cp), hex(cp)
+        assert item.header_text_problem(f"a{chr(cp)}", "label") is not None, hex(cp)
+
+
+@pytest.mark.parametrize("cp", [0xFE00, 0xFE0F, 0x180B, 0x180D, 0x180F, 0xE0100, 0xE01EF, 0x1D173, 0x1BCA0, 0x2065,
+                                0xFFF0])
+def test_variation_selectors_and_other_default_ignorables_are_refused_in_slugs(cp):
+    assert slug_of("a" + chr(cp)) is None and slug_of("a" + chr(cp), encode=True) is None
+    assert slug_of("a") == "a"
+
+
+def test_full_code_point_probe_no_accepted_slug_contains_a_default_ignorable():
+    for cp in range(0x110000):
+        if 0xD800 <= cp <= 0xDFFF:
+            continue
+        for raw in ("a" + chr(cp), chr(cp)):
+            got = item.canonical_profile_url(P + raw)
+            if got is not None:
+                slug = got[len(P):]
+                assert not DEFAULT_IGNORABLE.intersection(map(ord, slug)), hex(cp)
+                assert any(unicodedata.category(c)[0] in "LN" for c in slug), hex(cp)
+
+
+def test_mark_only_slugs_are_refused_but_real_scripts_with_marks_pass():
+    for bad in ("́", "́̂", "ि", "ั", "्ि"):
+        assert slug_of(bad) is None and slug_of(bad, encode=True) is None, repr(bad)
+    for good in ("हिन्दी", "สวัสดี", "é", "josé",
+                 "नमस्ते", "ภาษาไทย", "a-b_c"):
+        got = slug_of(good)
+        assert got is not None and slug_of(got) == got, repr(good)
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("ᴬ", "a"),                 # MODIFIER LETTER CAPITAL A: lower() first leaves it, NFKC then gives "A"
+    ("Ϲ", "σ"),            # GREEK CAPITAL LUNATE SIGMA: NFKC -> capital sigma -> sigma; lower() first -> final sigma
+    ("xᴬ", "xa"),
+])
+def test_nfkc_is_applied_before_lower(raw, expected):
+    assert slug_of(raw) == expected and slug_of(raw, encode=True) == expected
