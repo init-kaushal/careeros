@@ -1,5 +1,6 @@
 import typer
 
+from careeros.cli.approval import approval_app
 from careeros.cli.approve import approve_cmd
 from careeros.cli.archive import archive_cmd
 from careeros.cli.check import check_cmd
@@ -36,6 +37,7 @@ app.command("archive")(archive_cmd)
 app.command("migrate")(migrate_cmd)
 app.command("upgrade")(upgrade_cmd)
 app.command("check")(check_cmd)
+app.add_typer(approval_app, name="approval")
 app.add_typer(ledger_app, name="ledger")
 app.add_typer(memory_app, name="memory")
 
