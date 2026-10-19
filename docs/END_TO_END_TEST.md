@@ -149,3 +149,39 @@ Not covered: the `evaluate`, `prep` and `browse` skills cannot be run live here;
 - The Python 3.11 run (3.11.16) used a freshly created venv, because the existing one had no pip or pytest.
 
 Not covered: the `browse` and `evaluate` skills cannot be run live here; they are covered by the wording tests only, and the migration steps were followed by a script, not by an agent. No real posting and no real workspace were used, so the quality of an agent's observations, quotes and migration answers on real text is untested.
+
+## Extended approvals (0.7.0)
+
+- Date: 2026-10-19
+- Commit under test: `3fb0a7b` (the end-to-end test and this record are added by the commit that follows it)
+- Method: `tests/test_approvals_e2e.py` drives the real CLI (`careeros approval ...`, `approve`, `transition`, `validate`) on brand-new invented workspaces in a temporary directory, with invented people, invented jobs and placeholder message text only. One settable clock supplies both the commands' `now` and the ledger stamps. `approve` and `resolve` need an interactive terminal; the walk plays it by patching the interactive check (the seam the other approval tests use), and separate tests run real subprocesses with closed or piped stdin. No real workspace was read, copied or touched.
+
+| # | Step | Exit | Result |
+|---|---|---|---|
+| 1 | `approval propose` (invite), `approve`, `approval begin`, `approval done` | 0 each | states `pending`, `approved`, `in_flight`, `consumed` |
+| 2 | `approval propose` (invite, same person, 5 URL spellings: same, other case, trailing slash, country subdomain, query) | 1 each | `invite_conflict` |
+| 3 | `approval propose` (message, URL variant) | 0 | same `per_` id as the invite |
+| 4 | `approve`, then `approval begin` at exactly 24 h | 0, 1 | `expired` |
+| 5 | `approval begin` again at 24 h | 1 | `expired`; no second `approval.rejected` (deduped) |
+| 6 | `approval begin` with the clock set back; `approval propose` with the clock set back | 1, 1 | `clock_skew`; the item is not revived |
+| 7 | submit with a 2-file manifest: `approve`, edit a file, `approval begin` | 0, 1 | `manifest_changed` |
+| 8 | re-propose, `approve`, `approval begin` | 0 | old item `superseded`, new item `in_flight` |
+| 9 | `approval propose` (submit, same job) | 1 | `in_flight_conflict` |
+| 10 | `validate`, `approval list`, `approval list --json`, `approval show` | 0 each | workspace identical (see below) |
+| 11 | `transition --to APPLIED` | 1 | `submission_unresolved` |
+| 12 | `approval resolve --sent`, then `transition --to APPLIED` | 0, 0 | `consumed`, then the transition succeeds |
+| 13 | second job: approve, `begin`, edit a manifest file, `resolve --not-sent` | 0 | `voided` |
+| 14 | `transition --to APPLIED` on that job | 1 | `submission_not_consumed` |
+| 15 | `approval show` and the `approve` queue on a draft with an escape sequence, a bidi override and a zero-width character | 0 | shown as `\x1b`, `‮`, `​`; no raw character in the output; queue `0 approved, 2 declined, 0 skipped` |
+| 16 | real subprocess `approve`, stdin closed, and stdin piped | 2, 2 | `not_interactive`; item still `pending` |
+| 17 | real subprocess `approval resolve --sent`, no terminal | 2 | item still `in_flight` |
+| 18 | two real processes racing `approval begin` on one approved item | 0, 1 | exactly one `approval.started`; the loser `wrong_state` |
+
+- Read-only commands: before and after `validate`, `validate --json`, `approval list`, `approval list --json` and `approval show`, the path list and the bytes and modification time of every path (including `ledger.jsonl` and `.careeros/`) were compared: identical, nothing created, changed or removed.
+- Events across the walk: 7 `approval.proposed`, 5 `approval.approved`, 2 `approval.declined`, 1 `approval.superseded`, 3 `approval.started`, 2 `approval.consumed`, 1 `approval.voided`, 3 `approval.rejected` (`expired`, `clock_skew`, `manifest_changed`; no identical repeat). Refusals of a new proposal and of `transition` append no `approval.rejected`. The ledger hash chain verifies.
+- Isolation: `career/`, the other job and every `jd.md` are byte-identical after the walk; the other job has no event beyond its import.
+- Automated tests: Python 3.14: 2620 passed (51 s); Python 3.11.16: 2620 passed (50 s). The focused approvals files (e2e, claims, state machine, propose) alone: 329 passed on 3.14.
+- Python 3.11 venv: freshly created for this run from `/Users/kaushal/.local/bin/python3.11` (3.11.16), `pip install -e ".[dev]"`, and `pip show click` reports that click is not installed. The first fresh 3.11 run found that `careeros/cli/approve.py` imported `click`, which is not a declared dependency and which the current typer no longer installs, so the CLI could not be imported. That was fixed in `3fb0a7b` and is now guarded by `tests/test_cli_dependencies.py`.
+- Release checks: `mkdocs build --strict` exit 0; wheel `careeros-0.7.0` contains `careeros/core/approvals/{__init__,fold,item,manifest,model,render,rules,service}.py`, `careeros/cli/approval.py` and the `outreach`, `follow-up` and `apply` skills; `git diff --check` exit 0.
+
+Not covered: the `outreach`, `follow-up` and `apply` skills were not run live (their wording is pinned by tests only); no real LinkedIn and no real ATS were used; the behaviour of an agent following the skills is untested; a real pty approval was not exercised (the interactive check was patched, and the non-interactive refusals were run through real processes). This feature is a recorded, content-bound decision, not a security boundary.
