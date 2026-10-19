@@ -40,7 +40,7 @@ Hi Alex, I saw Example Corp's platform work and would like to connect.
 | `manifest` | `application_submit` only: the final documents as `{path, sha256}`, workspace-relative regular files. Code computes the hashes |
 | body | the exact message, or for `application_submit` the exact answers text. Line endings are normalised to LF and nothing else is changed |
 
-The label must be plain text: control characters, invisible characters, bidi controls and emoji (including a trailing emoji presentation selector, U+FE0F) are refused.
+The label must be plain text. Control characters, bidi controls and invisible (default-ignorable) characters are refused, including the emoji presentation selector U+FE0F anywhere in the label. An ordinary emoji such as a smiley is accepted; keep labels to ordinary words.
 
 The **action hash** covers the kind, the target (id, channel, label and url), the exact content and the sorted manifest. It is stored in the `approval.proposed` event. A changed draft is a new item with a new id; `propose` never overwrites a file or reuses an id. Editing an item file after proposing is `APR004`.
 
@@ -88,7 +88,7 @@ An approval is valid while `now < approved_at + 24 hours`; at exactly 24 hours t
 
 ### The clock floor
 
-Every approval operation refuses `clock_skew` when the clock is earlier than the item's approval, than the item's latest event, or than the **clock floor**: the latest timestamp of any event of any type in the ledger (equal is allowed). A backward jump never extends or bypasses any other check. The remedy is to fix the system clock; if the latest event is future-dated by a wrong clock, restore `ledger.jsonl` from `.careeros/backups`. Because any event raises the floor, a stray future-dated event fails closed.
+Every operation that changes state (`propose`, `approve`, `begin`, `done`, `resolve`) refuses `clock_skew` when the clock is earlier than the item's approval, than the item's latest event, or than the **clock floor**: the latest timestamp of any event of any type in the ledger (equal is allowed). `approval list` and `approval show` only flag a skewed clock; they refuse nothing. A backward jump never extends or bypasses any other check. The remedy is to fix the system clock; if the latest event is future-dated by a wrong clock, restore `ledger.jsonl` from `.careeros/backups`. Because any event raises the floor, a stray future-dated event fails closed.
 
 ## Commands
 
@@ -106,7 +106,7 @@ Every approval operation refuses `clock_skew` when the clock is earlier than the
 
 `approve` and `resolve` need an interactive terminal; in Claude Code type `! careeros approve`. A non-interactive run is refused (`not_interactive`), and a closed stdin or stdout counts as non-interactive. For an `application_submit` item, your approval also records the job-level approval, in the same batch.
 
-**Exit codes:** `0` ok; `1` refused (a refusal code, a broken ledger, a lock timeout or a disk failure); `2` usage, no workspace, or a non-interactive terminal where an interactive one is required. Add `--json` to `propose`, `list`, `show`, `begin` and `done` for machine-readable output; a refusal prints `{"error": ..., "code": ...}`.
+**Exit codes:** `0` ok; `1` refused (a refusal code, a broken ledger, a lock timeout or a disk failure); `2` usage, no workspace, or a non-interactive terminal where an interactive one is required. Add `--json` to `propose`, `list`, `show`, `begin`, `done` and `resolve` for machine-readable output; a refusal prints `{"error": ..., "code": ...}`.
 
 Under the workspace lock, `begin` re-folds the state and requires the item to be `approved`, unexpired and free of `clock_skew`; recomputes the action hash from the file; for `application_submit`, revalidates and re-hashes every manifest file and requires the job to be at `APPROVAL_REQUIRED` and not archived, with its job-level approval recorded; and requires that no other item with the same kind and target is `in_flight`. For an invite it also requires that no invite to the same person is `consumed`; for a submission, that no submission for the job is `consumed`. Two racing `begin` calls have exactly one winner. Deciding on a submit item needs the same job state. Proposing is allowed at any time.
 
@@ -122,8 +122,8 @@ Stable codes used by `approval.rejected` reasons and command output.
 | `clock_skew` | the clock is earlier than the item's approval, its latest event or the ledger's clock floor |
 | `content_missing` | the item file is missing |
 | `hash_mismatch` | the item file no longer matches what was proposed |
-| `manifest_invalid` | a manifest path is absolute, uses `..`, is a symlink out of the workspace, or is not a regular file |
-| `manifest_changed` | a manifest file is missing or differs from the proposal |
+| `manifest_invalid` | a manifest path is absolute, uses `..`, is empty, contains a control character, resolves outside the workspace (a symlink), does not exist (including a file deleted after approval), cannot be read, is not a regular file, or is listed twice |
+| `manifest_changed` | a manifest file exists but its content differs from the proposal |
 | `invite_conflict` | an invite to this person is already sent |
 | `already_submitted` | a submission for this job is already consumed |
 | `in_flight_conflict` | an item of the same kind and target is `in_flight` |
@@ -149,13 +149,15 @@ A job with no `application_submit` item behaves exactly as before: `APPLIED` nee
 
 `done` and `resolve` never change the job. The apply skill's order is: propose, you approve, `begin`, click Submit, confirmation page, `done`, `careeros transition`. A crash between `done` and the transition leaves the job at `APPROVAL_REQUIRED`; the transition simply runs again. It never resubmits.
 
-Forced transitions (`--force`) are gated too, by design. If you applied outside CareerOS on a job that has submit items, settle the items first: propose an `application_submit` for the job, approve it, run `careeros approval begin`, then record what happened with `careeros approval resolve <id> --sent`; the transition then succeeds. A job that never had a submit item needs none of this.
+Forced transitions (`--force`) are gated too, by design. If you applied outside CareerOS on a job that has submit items, settle the items first: make sure the job is at `APPROVAL_REQUIRED` (deciding and `begin` need it), propose an `application_submit` for the job, approve it, run `careeros approval begin`, then record what happened with `careeros approval resolve <id> --sent`; the transition then succeeds. A job that never had a submit item needs none of this.
+
+The apply skill no longer writes an "Applied date" into the job file; the ledger and `activity.md` are the record of when it happened.
 
 ## Recovery
 
 | Situation | What happens |
 |---|---|
-| The action succeeded but the process died before `done` | The item stays `in_flight`. `begin` is refused. You run `resolve --sent` |
+| The action succeeded but the process died before `done`, or the confirmation page was already shown | The item stays `in_flight`. `begin` is refused. Either the agent runs `done` (while it still has the session) or you run `resolve --sent`; both record it as sent |
 | The outcome is uncertain (button not found, confirmation not seen) | The agent stops and never retries. You run `resolve --sent` or `resolve --not-sent` |
 | `resolve --sent` | Appends `approval.consumed` (actor `user`, source `tty`) |
 | `resolve --not-sent` | Revalidates the content hash, expiry with the current clock, the manifest hashes (submissions) and invite uniqueness. All pass: `approval.released` (back to `approved`). Only expiry fails: released, and the state reads `expired`. Anything else: `approval.voided` with the reason, and a new proposal is required |
@@ -167,7 +169,7 @@ Correctness does not rely on exception handlers: every crash state is safe by or
 
 ### Ledger integrity
 
-Every approval operation verifies the ledger's hash chain first. A broken chain is `ledger_corrupt` and nothing is written. `careeros validate` stays entirely read-only: it creates, modifies and removes nothing, including `.careeros/`.
+Every operation that changes state verifies the ledger's hash chain first; `approval list` and `approval show` do not verify it (they exit 1 only on a corrupt line). A broken chain is `ledger_corrupt` and nothing is written. `careeros validate` stays entirely read-only: it creates, modifies and removes nothing, including `.careeros/`.
 
 ## Validation codes
 

@@ -44,7 +44,8 @@ COMMON_PHRASES = (
     "`careeros approval begin <id>`",
     "`careeros approval done <id>",
 )
-LABEL_RULE = ("The label is plain text", "Control characters, invisible characters and emoji (including the U+FE0F variation selector) are refused.")
+LABEL_RULE = ("The label is plain text",
+              "Control, bidi and invisible characters are refused, including the emoji presentation selector U+FE0F anywhere in the label; keep the label to ordinary words.")
 
 
 @pytest.mark.parametrize("name", ("outreach", "follow-up"))
@@ -124,7 +125,7 @@ def test_apply_never_resubmits_and_never_forces() -> None:
 def test_apply_moves_the_job_to_approval_required_only_on_the_users_yes() -> None:
     body = text("apply")
     assert "Only if the user says yes, run `careeros transition <job> --to APPROVAL_REQUIRED`" in body
-    assert "If the user says no or it is refused, stop." in body
+    assert "If the user says no or a transition is refused, stop." in body
 
 
 def test_follow_up_covers_only_linkedin_messages_and_email_stays_out() -> None:
@@ -139,17 +140,119 @@ def sentences(body: str) -> list[str]:
 
 @pytest.mark.parametrize("name", APPROVAL_SKILLS)
 def test_no_approval_skill_runs_approve_or_resolve_itself(name: str) -> None:
-    for line in text(name).splitlines():
-        assert not re.match(r"[-*\d. ]*Run `careeros (approve|approval resolve)", line), line
-        if "careeros approve" in line or "approval resolve" in line:
-            assert re.search(r"\b(Tell|Never|ask|Ask|tell|Only the user)\b|^\s*>|\bthe user\b", line), line
+    for sentence in re.split(r"(?<=[.])\s+|\n+", text(name)):
+        if re.search(r"approv|careeros", sentence, re.I):
+            assert "yourself" not in sentence.lower(), sentence
+        for m in re.finditer(r"`(! )?careeros (approve\b|approval resolve\b)[^`]*`", sentence):
+            inside_user_command = bool(m.group(1))
+            guarded = re.search(r"^[-*\s]*(Never run|Tell the user|Ask the user|Only the user)|\b(ask the user to run|tell the user to run|Please run|to run `!)", sentence)
+            assert inside_user_command or guarded, sentence
+        assert not re.match(r"[-*\d. ]*Run `careeros (approve|approval resolve)", sentence), sentence
+
+
+FORBIDDEN = (r"\bretry once\b", r"continue anyway", r"\bmay (fix|polish|edit|tweak|change)\b", r"approved` or `pending",
+             r"greeting first", r"\bfix typos\b", r"\bfeel free to\b")
+
+
+@pytest.mark.parametrize("name", APPROVAL_SKILLS)
+def test_no_approval_skill_loosens_the_rules(name: str) -> None:
+    for pattern in FORBIDDEN:
+        assert not re.search(pattern, text(name), re.I), pattern
+
+
+STEP_SENTENCES = {
+    "outreach": (
+        "1. Run `careeros approval show <id>`. Continue only if the state is `approved`; otherwise stop.",
+        "2. Run `careeros approval begin <id>`. It claims the approval; if it exits non-zero, stop.",
+        "9. Paste the approved note using `form_input`. It must be exactly the approved text. Take the text to paste from `careeros approval show <id> --json` (the `content` field), never from your memory of the draft.",
+        "11. Confirm success (button disappears or confirmation message). If you cannot confirm it, do not retry: leave the item `in_flight` and ask the user to run `! careeros approval resolve <id> --sent` or `! careeros approval resolve <id> --not-sent`.",
+    ),
+    "follow-up": (
+        "After the user reports back, run `careeros approval show <id>` and continue only if the state is `approved`.",
+        "Then run `careeros approval begin <id>`; if it exits non-zero, stop.",
+        "paste the approved text exactly (take it from `careeros approval show <id> --json`, the `content` field, never from your memory of the draft)",
+        "If you cannot confirm it, do not retry: leave the item `in_flight` and ask the user to run `! careeros approval resolve <id> --sent` or `! careeros approval resolve <id> --not-sent`.",
+    ),
+    "apply": (
+        "1. Run `careeros approval begin <id>`. If it exits non-zero, stop and tell the user.",
+        "3. Confirm the submission confirmation page appeared. If you cannot confirm it, do not retry and do not click Submit again: leave the item `in_flight` and ask the user to run `! careeros approval resolve <id> --sent` or `--not-sent`.",
+        "After the user reports back, run `careeros approval show <id>` and continue only if the state is `approved`.",
+        "If the job is not at `READY_TO_APPLY` either, say so and ask the user whether to move it there; only if the user says yes, run `careeros transition <job> --to READY_TO_APPLY` first.",
+        "The wait can time out an open ATS form.",
+        "re-open it and re-verify every field and document against the approved documents and answers; never submit different content.",
+        "take the answers from `careeros approval show <id> --json` (the `content` field), never from your memory of the draft.",
+        "If the item is `in_flight`, either run `careeros approval done <id>` or ask the user to run `! careeros approval resolve <id> --sent`; both record it as sent.",
+    ),
+}
+
+
+@pytest.mark.parametrize("name,sentence", [(n, s) for n, ss in STEP_SENTENCES.items() for s in ss])
+def test_step_level_safety_sentences_are_pinned_exactly(name: str, sentence: str) -> None:
+    assert sentence in text(name)
+
+
+def command_spans(name: str) -> list[list[str]]:
+    out = []
+    for m in re.finditer(r"`(?:! )?(careeros (?:approval|approve|transition)\b[^`]*)`", text(name)):
+        out.append(shlex.split(re.sub(r"<([^>]*)>", lambda g: "<" + g.group(1).replace(" ", "_") + ">", m.group(1))))
+    return out
+
+
+def parse_cli(argv: list[str]) -> None:
+    """Parse `argv` (without the program name) with the real click command tree; raises click.UsageError."""
+    import typer.main
+    cmd = typer.main.get_command(app)
+    ctx = cmd.make_context("careeros", [], resilient_parsing=False)
+    args = list(argv)
+    while hasattr(cmd, "resolve_command"):
+        name, sub, args = cmd.resolve_command(ctx, args)
+        if hasattr(sub, "resolve_command"):
+            cmd = sub
+            continue
+        sub.make_context(name, args, parent=ctx)   # raises click.UsageError for an unknown option or a missing required one
+        return
+
+
+@pytest.mark.parametrize("name", APPROVAL_SKILLS)
+def test_every_command_line_in_the_skills_parses(name: str) -> None:
+    spans = [s for s in command_spans(name) if s not in (["careeros", "approval"], ["careeros", "approval", "resolve"], ["careeros", "approval", "done"])]   # bare names in prose ("Never run ...")
+    assert len(spans) >= 5
+    for argv in spans:
+        parse_cli(argv[1:])
+        joined = " ".join(argv)
+        if "approval resolve" in joined:
+            assert "--sent" in argv or "--not-sent" in argv, joined
+        if "approval propose" in joined:
+            assert "--kind" in argv and "--content-file" in argv, joined
+
+
+def test_the_parser_helper_rejects_a_bad_line() -> None:
+    from typer._click.exceptions import UsageError
+    with pytest.raises(UsageError):
+        parse_cli(["approval", "propose", "--kind", "x"])
+    with pytest.raises(UsageError):
+        parse_cli(["approval", "nonsense"])
 
 
 @pytest.mark.parametrize("name", APPROVAL_SKILLS)
 def test_a_transition_in_an_approval_skill_is_conditional(name: str) -> None:
     for sentence in sentences(text(name)):
         if "careeros transition" in sentence:
-            assert re.match(r"[-* ]*(Only if the user|Only if `careeros approval done` exited 0)\b", sentence), sentence
+            done_ok = name == "apply" and "--to APPLIED" in sentence and sentence.lstrip("-* ").startswith("Only if `careeros approval done` exited 0")
+            ready_ok = name == "apply" and "--to READY_TO_APPLY" in sentence and "only if the user says yes" in sentence
+            assert re.match(r"[-* ]*Only if the user\b", sentence) or done_ok or ready_ok, sentence
+
+
+PROMISES = (r"\b(is|as) a security boundary", r"without your approval", r"\bno agent can\b", r"\bagents? (cannot|can't|can not)\b",
+            r"cannot be bypassed", r"\benforces? (the )?approval", r"\bguarantees? that (no|the agent)")
+
+
+def test_no_shipped_text_promises_what_the_feature_does_not_do() -> None:
+    files = [*SKILLS.glob("*/SKILL.md"), DOC, ROOT / "README.md", ROOT / "CHANGELOG.md"]
+    for path in files:
+        for sentence in sentences(path.read_text(encoding="utf-8")):
+            for pattern in PROMISES:
+                assert not re.search(pattern, sentence, re.I), (path.name, sentence)
 
 
 def test_no_shipped_skill_or_doc_claims_a_security_boundary() -> None:
@@ -215,6 +318,32 @@ def test_the_doc_states_the_ttl_and_the_stale_days_from_the_code() -> None:
     assert f"{rules.APPROVAL_TTL_HOURS} hours" in body
     assert f"{rules.PENDING_STALE_DAYS} days" in body
     assert "now < approved_at + " + f"{rules.APPROVAL_TTL_HOURS} hours" in body
+
+
+def test_every_hours_and_days_number_in_the_docs_is_a_constant() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme_section = readme.split("## Approvals", 1)[1].split("\n## ", 1)[0]
+    for body in (doc(), readme_section):
+        assert {int(n) for n in re.findall(r"(\d+) hours", body)} == {rules.APPROVAL_TTL_HOURS}
+        assert {int(n) for n in re.findall(r"(\d+) days", body)} <= {rules.PENDING_STALE_DAYS}
+    assert {int(n) for n in re.findall(r"(\d+) days", doc())} == {rules.PENDING_STALE_DAYS}
+    changelog_head = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").split("\n## ", 2)[1]
+    assert {int(n) for n in re.findall(r"(\d+) hours", changelog_head)} <= {rules.APPROVAL_TTL_HOURS}
+
+
+def test_the_doc_states_the_label_and_manifest_codes_exactly() -> None:
+    body = doc()
+    assert "An ordinary emoji such as a smiley is accepted" in body
+    assert "emoji (including" not in body
+    row = next(l for l in body.splitlines() if l.startswith("| `manifest_invalid` |"))
+    for word in ("absolute", "`..`", "empty", "control character", "outside the workspace", "does not exist", "not a regular file", "listed twice"):
+        assert word in row, word
+    assert "exists but its content differs" in next(l for l in body.splitlines() if l.startswith("| `manifest_changed` |"))
+    assert "`approval list` and `approval show` only flag a skewed clock" in body
+    assert "`approval list` and `approval show` do not verify it" in body
+    assert "`list`, `show`, `begin`, `done` and `resolve`" in body
+    assert "make sure the job is at `APPROVAL_REQUIRED`" in body
+    assert "Either the agent runs `done`" in body
 
 
 def test_the_apr_table_matches_the_code() -> None:

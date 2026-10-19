@@ -153,7 +153,7 @@ Take a screenshot with `computer` and show it.
 Say:
 > "Ready to submit. Here's what's filled in: [field summary]. I'll propose this submission for your approval."
 
-1. Deciding on a submission and `approval begin` need the job at `APPROVAL_REQUIRED`. If it is not there, ask the user whether to move it. Only if the user says yes, run `careeros transition <job> --to APPROVAL_REQUIRED` (it is legal only from `READY_TO_APPLY`). If the user says no or it is refused, stop.
+1. Deciding on a submission and `approval begin` need the job at `APPROVAL_REQUIRED`. If it is not there, ask the user whether to move it. Only if the user says yes, run `careeros transition <job> --to APPROVAL_REQUIRED` (it is legal only from `READY_TO_APPLY`). If the job is not at `READY_TO_APPLY` either, say so and ask the user whether to move it there; only if the user says yes, run `careeros transition <job> --to READY_TO_APPLY` first. If the user says no or a transition is refused, stop.
 2. Save the answers text you typed into the form to a file (the free-text answers, in the order of the form) and run, for example:
 
 ```bash
@@ -163,7 +163,7 @@ careeros approval propose --kind application_submit --job example-corp-platform 
 3. It prints the item id (`apr_...`). A refusal (`already_submitted`, `in_flight_conflict`) means stop and tell the user.
 4. Tell the user: "I proposed this submission: [documents and answers]. Please run `! careeros approve` to review and approve it, then tell me."
 
-**Stop and wait.** Do not click Submit. After the user reports back, run `careeros approval show <id>` and continue only if the state is `approved`.
+**Stop and wait.** Do not click Submit. The wait can time out an open ATS form. After the user reports back, run `careeros approval show <id>` and continue only if the state is `approved`. If the form timed out or was reset, tell the user, re-open it and re-verify every field and document against the approved documents and answers; never submit different content.
 
 ---
 
@@ -171,7 +171,7 @@ careeros approval propose --kind application_submit --job example-corp-platform 
 
 On a recorded approval:
 1. Run `careeros approval begin <id>`. If it exits non-zero, stop and tell the user.
-2. Click Submit / Finish.
+2. Click Submit / Finish. Everything in the form must be exactly the approved documents and answers; take the answers from `careeros approval show <id> --json` (the `content` field), never from your memory of the draft.
 3. Confirm the submission confirmation page appeared. If you cannot confirm it, do not retry and do not click Submit again: leave the item `in_flight` and ask the user to run `! careeros approval resolve <id> --sent` or `--not-sent`.
 4. Run `careeros approval done <id> --note "confirmation page shown"`.
 5. Only if `careeros approval done` exited 0, run `careeros transition <job> --to APPLIED`. It also updates the job file and `jobs/pipeline.md`. If it refuses, stop and tell the user why; never use `--force` to get past it.
@@ -188,5 +188,5 @@ Append to `activity.md`:
 - Never click Submit without a recorded approval (`approval show` says `approved` and `approval begin` exited 0) — this is an irreversible external action.
 - Never enter a password, complete a password reset, or authenticate into any account on the user's behalf — always hand that back to the user, on any site, at any step.
 - If the form has a resume/cover-letter upload field, flag it — and if it's inside an iframe (common on iCIMS and similar ATSs), don't try to automate it at all: a file input's picker is a native OS dialog with no accessibility-tree ref to target, especially one nested in a cross-frame document. Tell the user exactly which prepared file to pick and from where: "There's a resume upload field — please click Replace Resume and pick `[path]`, then tell me when done."
-- If the application was already submitted (confirmation page already shown), never resubmit. If the item is `in_flight`, run `careeros approval done <id>`; if it is in any other state, tell the user. Log it and stop.
+- If the application was already submitted (confirmation page already shown), never resubmit. If the item is `in_flight`, either run `careeros approval done <id>` or ask the user to run `! careeros approval resolve <id> --sent`; both record it as sent. If it is in any other state, tell the user. Log it and stop.
 - Close the tab after a successful submission.

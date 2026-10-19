@@ -27,7 +27,7 @@ Re-run the check after every edit. Never skip it and never ignore a failure.
 **Applies to:** every LinkedIn invitation (A4 and A5). A recorded approval is required before it is sent. Email is not covered: CareerOS does not send email.
 
 - Propose the exact text with `careeros approval propose --kind linkedin_invite --person-url <profile url> --label "<plain label>" --content-file <file>`, where the file holds the note that passed the evidence check. It prints the item id.
-- The label is plain text, for example a name and company. Control characters, invisible characters and emoji (including the U+FE0F variation selector) are refused.
+- The label is plain text, for example a name and company. Control, bidi and invisible characters are refused, including the emoji presentation selector U+FE0F anywhere in the label; keep the label to ordinary words.
 - Tell the user to run `! careeros approve` themselves and to say when they have decided.
 - **Stop and wait.** Do not assume it was approved because you suggested the command or because the user says they will run it. Only the user's own `careeros approve` decides.
 - After the user reports back, run `careeros approval show <id>` and continue only if the state is `approved`. If it is `declined`, `expired`, `superseded`, `voided` or anything else, stop and tell the user.
@@ -101,9 +101,9 @@ careeros approval propose --kind linkedin_invite --person-url https://www.linked
 6. Find the "Connect" button. If it shows "Follow" instead, look for "More" → "Connect".
 7. Click Connect.
 8. If a modal appears with "Add a note" — click it.
-9. Paste the approved note using `form_input`. It must be exactly the approved text.
+9. Paste the approved note using `form_input`. It must be exactly the approved text. Take the text to paste from `careeros approval show <id> --json` (the `content` field), never from your memory of the draft.
 10. Click "Send invitation" / "Send".
-11. Confirm success (button disappears or confirmation message). If you cannot confirm it, do not retry: leave the item `in_flight` and ask the user to run `! careeros approval resolve <id>`.
+11. Confirm success (button disappears or confirmation message). If you cannot confirm it, do not retry: leave the item `in_flight` and ask the user to run `! careeros approval resolve <id> --sent` or `! careeros approval resolve <id> --not-sent`.
 12. Run `careeros approval done <id> --note "invitation sent"`.
 
 ### A6 — Log

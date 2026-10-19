@@ -202,7 +202,11 @@ def test_every_transition_sentence_in_every_skill_is_conditional() -> None:
         for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
             if "careeros transition" in sentence:
                 seen += 1
-                assert re.match(r"[-* ]*(Only if the user|Only if `careeros approval done` exited 0|Ask)\b", sentence), (path.parent.name, sentence)
+                done_ok = (path.parent.name == "apply" and "--to APPLIED" in sentence
+                           and sentence.lstrip("-* ").startswith("Only if `careeros approval done` exited 0"))
+                ready_ok = (path.parent.name == "apply" and "--to READY_TO_APPLY" in sentence
+                            and "only if the user says yes" in sentence)
+                assert re.match(r"[-* ]*(Only if the user|Ask)\b", sentence) or done_ok or ready_ok, (path.parent.name, sentence)
     assert seen >= 4
 
 
