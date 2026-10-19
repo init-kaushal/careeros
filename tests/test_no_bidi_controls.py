@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-BIDI = re.compile("[‪-‮⁦-⁩]")
+BIDI = re.compile("[\u202a-\u202e\u2066-\u2069]")
 SCANNED = ("docs/", "tests/", "careeros/", "README", "CHANGELOG")
 
 
@@ -39,4 +39,4 @@ def test_the_scan_sees_the_files_it_is_meant_to_cover() -> None:
 def test_the_pattern_matches_the_characters_it_forbids() -> None:
     for code in [*range(0x202A, 0x202F), *range(0x2066, 0x206A)]:
         assert BIDI.search(chr(code))
-    assert not BIDI.search("plain text ​")
+    assert not BIDI.search("plain text \u200b")
