@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from careeros.core import ledger, models
+from careeros.core.approvals import fold, rules
+from careeros.core.approvals.service import clock_floor, clock_skew_of
 from careeros.core.models import Job, State
 from careeros.core.workspace import (
     RECOVERY_REL,
@@ -173,6 +175,33 @@ def _restore(root: Path, originals: dict[Path, bytes], written: list[Path], job_
         raise first_failure
 
 
+def submission_gate(events: list[dict], job_id: str, now: str) -> tuple[str, str] | None:
+    """(code, message) when application_submit items forbid APPLIED, else None (no submit item: no change). Set
+    semantics over the folded items. An approved item past its 24 h is resolved, unless `now` is behind the ledger's
+    clock floor or the item's own events: then it stays unresolved, so a backward clock cannot let APPLIED through."""
+    floor = clock_floor(events)
+    submits = [(i, st) for i, st in fold.fold_all(events, now).items()
+               if st.state is not None and st.kind == rules.APPLICATION_SUBMIT and st.target_id == job_id]
+    unresolved = [(i, "approved" if st.state.value == rules.EXPIRED and clock_skew_of(st, now, floor) else st.state.value)
+                  for i, st in submits
+                  if st.state.value in rules.UNRESOLVED_STATES
+                  or (st.state.value == rules.EXPIRED and clock_skew_of(st, now, floor))]
+    status = fold.SubmissionStatus(
+        consumed=tuple(i for i, st in submits if st.state.value == rules.CONSUMED),
+        unresolved=tuple(unresolved), total=len(submits))
+    code = fold.submission_refusal(status)
+    if code == rules.SUBMISSION_UNRESOLVED:
+        listed = ", ".join(f"{i} ({s})" for i, s in unresolved)
+        message = f"unresolved application submissions for this job: {listed}"
+        if any(s == rules.IN_FLIGHT for _, s in unresolved):
+            message += ("; an in_flight item means the external action was interrupted, and only the user settles it "
+                        "with `careeros approval resolve <item>`")
+        return code, message
+    if code == rules.SUBMISSION_NOT_CONSUMED:
+        return code, "no application submission for this job was consumed; the submission must be done before APPLIED"
+    return None
+
+
 def _reject(root: Path, job: Job, to_state: State, actor: str, code: str, message: str, events: list[dict]) -> None:
     reason = f"{code}: {message}"
     last = next((e for e in reversed(events) if e.get("entity") == job.id), None)
@@ -242,6 +271,8 @@ def apply_transition(
         if to_state == State.APPLIED and approval_status(events, job.id) != "approved":
             _reject(root, job, to_state, actor, "approval_required",
                     "approval required — ask the user to run `careeros approve <job>` themselves", events)
+        if to_state == State.APPLIED and (refusal := submission_gate(events, job.id, models.utc_now())):
+            _reject(root, job, to_state, actor, *refusal, events)
         return _write_transition(root, job, to_state, actor=actor, reason=reason, corrected=corrected)
 
 
@@ -272,6 +303,8 @@ def _repair(
     if current == State.APPLIED and approval_status(events, job.id) != "approved":
         _reject(root, job, current, actor, "approval_required",
                 "approval required — ask the user to run `careeros approve <job>` themselves", events)
+    if current == State.APPLIED and (refusal := submission_gate(events, job.id, models.utc_now())):
+        _reject(root, job, current, actor, *refusal, events)
     if is_legal(recorded, current):
         kind, outcome, note = "job.status_changed", "repaired", None
     elif force and (reason or "").strip():
