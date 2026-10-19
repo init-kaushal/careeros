@@ -166,6 +166,13 @@ def from_text(text: str, rel: str = rules.COMPENSATION_FILE, raw: bytes | None =
     return Loaded(rel, raw, text, fm, text[rest:])
 
 
+def strict_frontmatter(text: str, rel: str = "frontmatter") -> tuple[dict, str]:
+    """The strict frontmatter reader for other record formats: `(mapping, body)` read exactly as `from_text` reads it
+    (aliases, merge keys and duplicate keys refused, CRLF read as LF). `RecordError` when it cannot be read."""
+    loaded = from_text(text, rel)
+    return loaded.fm, loaded.body
+
+
 def load(path: Path, root: Path) -> Loaded:
     """Read `path`; `root` makes `rel` workspace-relative. `RecordError` (CMP001) when unreadable or unusable."""
     path = Path(path)

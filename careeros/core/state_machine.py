@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from careeros.core import ledger, models
+from careeros.core.approvals import fold, rules
 from careeros.core.models import Job, State
 from careeros.core.workspace import (
     RECOVERY_REL,
@@ -173,6 +174,56 @@ def _restore(root: Path, originals: dict[Path, bytes], written: list[Path], job_
         raise first_failure
 
 
+SKEW_HINT = ("the system clock is earlier than the latest recorded event; fix the clock. If that event is future-dated "
+             "by a wrong clock, restore ledger.jsonl from .careeros/backups")
+
+
+def submission_gate(events: list[dict], job_id: str, now: str) -> tuple[str, str] | None:
+    """(code, message) when application_submit items forbid APPLIED, else None (no submit item: no change). Set
+    semantics, classified by `fold.submission_status`; a backward clock keeps an expired approval unresolved. A forced
+    transition is gated too, by design: a user who applied outside CareerOS must first settle the items."""
+    status = fold.submission_status(events, job_id, now, guard_clock=True)
+    code = fold.submission_refusal(status)
+    if code == rules.SUBMISSION_UNRESOLVED:
+        listed = ", ".join(f"{i} ({s.value}{'; the clock is behind the latest ledger event' if i in status.skewed else ''})"
+                           for i, s in status.unresolved)
+        message = f"unresolved application submissions for this job: {listed}"
+        if any(s is fold.State.IN_FLIGHT for _, s in status.unresolved):
+            message += ("; an in_flight item means the external action was interrupted, and only the user settles it "
+                        "with `careeros approval resolve <item>`")
+        if status.skewed:
+            message += f"; {SKEW_HINT}"
+        return code, message
+    if code == rules.SUBMISSION_NOT_CONSUMED:
+        listed = ", ".join(f"{i} ({s.value})" for i, s in status.resolved)
+        return code, (f"no submission has completed for this job ({listed}); propose an application_submit with "
+                      "`careeros approval propose` and complete it: the user runs `careeros approve`, then "
+                      "`approval begin`, submit, `approval done`")
+    return None
+
+
+def _approval_required_message(events: list[dict], job_id: str, now: str) -> str:
+    message = "approval required — ask the user to run `careeros approve <job>` themselves"
+    if fold.submission_status(events, job_id, now).total > 0:
+        message += ("; this job has application_submit items, and the user decides each item with "
+                    "`careeros approve <apr_id>`")
+    return message
+
+
+def _require_intact_chain(root: Path, events: list[dict], job_id: str, now: str) -> None:
+    """A job with application_submit items reaches APPLIED only on a ledger whose hash chain verifies: the gate trusts
+    approval events, so hand-appended ones must not count. Raises WITHOUT `_reject`: nothing is written to a broken
+    ledger. Jobs without submit items are not checked (unchanged behaviour)."""
+    if fold.submission_status(events, job_id, now).total == 0:
+        return
+    if broken := ledger.verify_chain(root):
+        raise TransitionError(
+            "ledger_corrupt",
+            f"the ledger's hash chain is broken ({broken[0].message}); this job has application submissions, so it "
+            "cannot move to APPLIED and nothing was written. Restore ledger.jsonl from .careeros/backups or "
+            "version control")
+
+
 def _reject(root: Path, job: Job, to_state: State, actor: str, code: str, message: str, events: list[dict]) -> None:
     reason = f"{code}: {message}"
     last = next((e for e in reversed(events) if e.get("entity") == job.id), None)
@@ -208,6 +259,8 @@ def apply_transition(
         ensure_writable(root)
         job = resolve_job(root, ref)
         events = ledger.read_events(root)
+        # the one clock read of the APPLIED gate: the chain check, the refusal message and the classification share it
+        now = models.utc_now() if to_state == State.APPLIED else None
         current = job.status
         recorded = recorded_state(events, job.id)
         if job.archived:
@@ -215,7 +268,7 @@ def apply_transition(
                     "the job is archived; run `careeros archive <job> --undo` first", events)
         if current == to_state:
             if recorded is not None and recorded != current.value:
-                return _repair(root, job, current, State(recorded), events, actor, reason, force)
+                return _repair(root, job, current, State(recorded), events, actor, reason, force, now)
             _resync_pipeline(root, job, current)
             return TransitionResult("unchanged", job.id, current, to_state)
 
@@ -239,9 +292,13 @@ def apply_transition(
                 _reject(root, job, to_state, actor, "terminal",
                         f"{current.value} is terminal and cannot be changed", events)
             corrected = True
+        if to_state == State.APPLIED:
+            _require_intact_chain(root, events, job.id, now)
         if to_state == State.APPLIED and approval_status(events, job.id) != "approved":
             _reject(root, job, to_state, actor, "approval_required",
-                    "approval required — ask the user to run `careeros approve <job>` themselves", events)
+                    _approval_required_message(events, job.id, now), events)
+        if to_state == State.APPLIED and (refusal := submission_gate(events, job.id, now)):
+            _reject(root, job, to_state, actor, *refusal, events)
         return _write_transition(root, job, to_state, actor=actor, reason=reason, corrected=corrected)
 
 
@@ -263,15 +320,19 @@ def _resync_pipeline(root: Path, job: Job, state: State) -> None:
 
 def _repair(
     root: Path, job: Job, current: State, recorded: State, events: list[dict],
-    actor: str, reason: str | None, force: bool,
+    actor: str, reason: str | None, force: bool, now: str | None,
 ) -> TransitionResult:
     """The job file already shows `current` but the ledger last recorded `recorded`."""
     if recorded in TERMINAL:
         _reject(root, job, current, actor, "terminal",
                 f"{recorded.value} is terminal and cannot be changed", events)
+    if current == State.APPLIED:
+        _require_intact_chain(root, events, job.id, now)
     if current == State.APPLIED and approval_status(events, job.id) != "approved":
         _reject(root, job, current, actor, "approval_required",
-                "approval required — ask the user to run `careeros approve <job>` themselves", events)
+                _approval_required_message(events, job.id, now), events)
+    if current == State.APPLIED and (refusal := submission_gate(events, job.id, now)):
+        _reject(root, job, current, actor, *refusal, events)
     if is_legal(recorded, current):
         kind, outcome, note = "job.status_changed", "repaired", None
     elif force and (reason or "").strip():

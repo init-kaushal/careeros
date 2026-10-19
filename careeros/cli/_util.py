@@ -40,8 +40,15 @@ def echo_json(data: object) -> None:
     typer.echo(json.dumps(data, indent=2, ensure_ascii=False))
 
 
+BUSY = "the workspace is busy: another careeros command holds its lock. Try again in a moment"
+
+
 def is_interactive() -> bool:
-    return sys.stdin.isatty() and sys.stdout.isatty()
+    """Both stdin and stdout are terminals. A missing or closed stream counts as not interactive."""
+    try:
+        return bool(sys.stdin is not None and sys.stdout is not None and sys.stdin.isatty() and sys.stdout.isatty())
+    except (ValueError, OSError, AttributeError):
+        return False
 
 
 def default_actor() -> str:
