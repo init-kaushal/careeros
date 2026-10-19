@@ -401,3 +401,102 @@ def test_approval_required_message_names_the_item_command_only_with_submit_items
         to_applied(root, job)
     assert exc.value.code == "approval_required"
     assert "careeros approve <job>" in str(exc.value) and "careeros approve <apr_id>" in str(exc.value)
+
+
+# --- one clock read per APPLIED transition ---------------------------------------------------------------------------
+
+@pytest.fixture
+def reads(monkeypatch: pytest.MonkeyPatch):
+    """Counts `models.utc_now` calls made from state_machine.py, by calling function; the clock is controllable."""
+    log: list[str] = []
+    box = {"values": None, "fixed": T0}
+
+    def fake() -> str:
+        caller = sys._getframe(1)
+        if caller.f_globals.get("__name__") == "careeros.core.state_machine":
+            log.append(caller.f_code.co_name)
+        if box["values"] is not None:
+            return next(box["values"])
+        return box["fixed"]
+
+    monkeypatch.setattr("careeros.core.models.utc_now", fake)
+    return log, box
+
+
+def hand_edit_applied(job) -> None:
+    frontmatter, body = ws.split_frontmatter(job["path"].read_text(encoding="utf-8"))
+    frontmatter["status"] = "APPLIED"
+    job["path"].write_text(ws.join_frontmatter(frontmatter, body), encoding="utf-8")
+
+
+def test_refused_main_path_reads_the_clock_once(env, reads):
+    root, job = env
+    item(root, job["id"], "pending")
+    approve(root, job)
+    log, _ = reads
+    log.clear()
+    with pytest.raises(sm.TransitionError) as exc:
+        to_applied(root, job)
+    assert exc.value.code == rules.SUBMISSION_UNRESOLVED and log == ["apply_transition"]
+
+
+def test_refused_approval_required_reads_the_clock_once(env, reads):
+    root, job = env
+    item(root, job["id"], "pending")
+    log, _ = reads
+    log.clear()
+    with pytest.raises(sm.TransitionError) as exc:
+        to_applied(root, job)
+    assert exc.value.code == "approval_required" and log == ["apply_transition"]
+
+
+def test_refused_repair_path_reads_the_clock_once(env, reads):
+    root, job = env
+    item(root, job["id"], "in_flight")
+    approve(root, job)
+    hand_edit_applied(job)
+    log, _ = reads
+    log.clear()
+    with pytest.raises(sm.TransitionError) as exc:
+        to_applied(root, job)
+    assert exc.value.code == rules.SUBMISSION_UNRESOLVED and log == ["apply_transition"]
+
+
+def test_repair_path_ledger_corrupt_reads_the_clock_once(env, reads):
+    root, job = env
+    item(root, job["id"], "consumed")
+    approve(root, job)
+    hand_edit_applied(job)
+    path = root / "ledger.jsonl"
+    lines = path.read_bytes().split(b"\n")[:-1]
+    assert b'"actor":"system"' in lines[0]
+    path.write_bytes(b"\n".join([lines[0].replace(b'"actor":"system"', b'"actor":"agent:x"'), *lines[1:]]) + b"\n")
+    log, _ = reads
+    log.clear()
+    with pytest.raises(sm.TransitionError) as exc:
+        to_applied(root, job)
+    assert exc.value.code == "ledger_corrupt" and log == ["apply_transition"]
+
+
+def test_allowed_transition_gate_phase_is_one_read(env, reads):
+    root, job = env
+    item(root, job["id"], "consumed")
+    approve(root, job)
+    log, _ = reads
+    log.clear()
+    assert to_applied(root, job).outcome == "changed"
+    assert [n for n in log if n != "_write_transition"] == ["apply_transition"]
+
+
+def test_a_moving_clock_cannot_split_the_gates_decisions(env, reads):
+    root, job = env
+    (apr,) = make_items(root, Clock(), job["id"], ("approved",))      # approved at T0 (the clock fixture is not used here)
+    approve(root, job)
+    log, box = reads
+    # the first read is one second before expiry; every later read is past it
+    box["values"] = iter([shift(T0, hours=24, seconds=-1)] + [shift(T0, hours=25)] * 50)
+    log.clear()
+    with pytest.raises(sm.TransitionError) as exc:
+        to_applied(root, job)
+    assert exc.value.code == rules.SUBMISSION_UNRESOLVED and apr in str(exc.value)
+    assert log == ["apply_transition"]

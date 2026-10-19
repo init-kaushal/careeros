@@ -202,19 +202,19 @@ def submission_gate(events: list[dict], job_id: str, now: str) -> tuple[str, str
     return None
 
 
-def _approval_required_message(events: list[dict], job_id: str) -> str:
+def _approval_required_message(events: list[dict], job_id: str, now: str) -> str:
     message = "approval required — ask the user to run `careeros approve <job>` themselves"
-    if fold.submission_status(events, job_id, models.utc_now()).total > 0:
+    if fold.submission_status(events, job_id, now).total > 0:
         message += ("; this job has application_submit items, and the user decides each item with "
                     "`careeros approve <apr_id>`")
     return message
 
 
-def _require_intact_chain(root: Path, events: list[dict], job_id: str) -> None:
+def _require_intact_chain(root: Path, events: list[dict], job_id: str, now: str) -> None:
     """A job with application_submit items reaches APPLIED only on a ledger whose hash chain verifies: the gate trusts
     approval events, so hand-appended ones must not count. Raises WITHOUT `_reject`: nothing is written to a broken
     ledger. Jobs without submit items are not checked (unchanged behaviour)."""
-    if fold.submission_status(events, job_id, models.utc_now()).total == 0:
+    if fold.submission_status(events, job_id, now).total == 0:
         return
     if broken := ledger.verify_chain(root):
         raise TransitionError(
@@ -259,6 +259,8 @@ def apply_transition(
         ensure_writable(root)
         job = resolve_job(root, ref)
         events = ledger.read_events(root)
+        # the one clock read of the APPLIED gate: the chain check, the refusal message and the classification share it
+        now = models.utc_now() if to_state == State.APPLIED else None
         current = job.status
         recorded = recorded_state(events, job.id)
         if job.archived:
@@ -266,7 +268,7 @@ def apply_transition(
                     "the job is archived; run `careeros archive <job> --undo` first", events)
         if current == to_state:
             if recorded is not None and recorded != current.value:
-                return _repair(root, job, current, State(recorded), events, actor, reason, force)
+                return _repair(root, job, current, State(recorded), events, actor, reason, force, now)
             _resync_pipeline(root, job, current)
             return TransitionResult("unchanged", job.id, current, to_state)
 
@@ -291,11 +293,11 @@ def apply_transition(
                         f"{current.value} is terminal and cannot be changed", events)
             corrected = True
         if to_state == State.APPLIED:
-            _require_intact_chain(root, events, job.id)
+            _require_intact_chain(root, events, job.id, now)
         if to_state == State.APPLIED and approval_status(events, job.id) != "approved":
             _reject(root, job, to_state, actor, "approval_required",
-                    _approval_required_message(events, job.id), events)
-        if to_state == State.APPLIED and (refusal := submission_gate(events, job.id, models.utc_now())):
+                    _approval_required_message(events, job.id, now), events)
+        if to_state == State.APPLIED and (refusal := submission_gate(events, job.id, now)):
             _reject(root, job, to_state, actor, *refusal, events)
         return _write_transition(root, job, to_state, actor=actor, reason=reason, corrected=corrected)
 
@@ -318,18 +320,18 @@ def _resync_pipeline(root: Path, job: Job, state: State) -> None:
 
 def _repair(
     root: Path, job: Job, current: State, recorded: State, events: list[dict],
-    actor: str, reason: str | None, force: bool,
+    actor: str, reason: str | None, force: bool, now: str | None,
 ) -> TransitionResult:
     """The job file already shows `current` but the ledger last recorded `recorded`."""
     if recorded in TERMINAL:
         _reject(root, job, current, actor, "terminal",
                 f"{recorded.value} is terminal and cannot be changed", events)
     if current == State.APPLIED:
-        _require_intact_chain(root, events, job.id)
+        _require_intact_chain(root, events, job.id, now)
     if current == State.APPLIED and approval_status(events, job.id) != "approved":
         _reject(root, job, current, actor, "approval_required",
-                _approval_required_message(events, job.id), events)
-    if current == State.APPLIED and (refusal := submission_gate(events, job.id, models.utc_now())):
+                _approval_required_message(events, job.id, now), events)
+    if current == State.APPLIED and (refusal := submission_gate(events, job.id, now)):
         _reject(root, job, current, actor, *refusal, events)
     if is_legal(recorded, current):
         kind, outcome, note = "job.status_changed", "repaired", None
