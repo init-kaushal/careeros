@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-import click
 import typer
 
 from careeros.cli import _util
@@ -102,7 +101,7 @@ def _report(r: service.QueueResult) -> None:
 def _queue(root: Path) -> None:
     try:
         results = _guard(lambda: service.queue(root, prompt=_ask, clock=models.utc_now, report=_report))
-    except (click.exceptions.Abort, typer.Abort):
+    except typer.Abort:
         typer.echo("\nStopped. Decisions already confirmed above stay recorded; the current and later items are unchanged.",
                    err=True)
         raise typer.Exit(_util.EXIT_FAIL) from None
