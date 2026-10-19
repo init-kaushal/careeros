@@ -61,16 +61,21 @@ def S(root, job, content="Answers: 5 years of Go.\n"):
                            content_text=content, manifest_paths=[job["resume"], job["cover"]], actor="agent:test")
 
 
+def at(ts):
+    """A clock that always reads `ts` (the service reads its clock once per operation, under the lock)."""
+    return lambda: ts
+
+
 def decide(root, apr, choice="approve", now=NOW):
-    return service.decide(root, apr, confirm=lambda text: choice, now=now)
+    return service.decide(root, apr, confirm=lambda text: choice, clock=at(now))
 
 
 def begin(root, apr, now=NOW, actor="agent:test"):
-    return service.begin(root, apr, actor=actor, now=now)
+    return service.begin(root, apr, actor=actor, clock=at(now))
 
 
 def done(root, apr, now=NOW, note=None):
-    return service.done(root, apr, actor="agent:test", note=note, now=now)
+    return service.done(root, apr, actor="agent:test", note=note, clock=at(now))
 
 
 def folded(root, apr, now=NOW):
@@ -378,7 +383,7 @@ def test_queue_detects_a_draft_changed_between_display_and_confirm(ws):
             path.write_bytes(path.read_bytes().replace(b"small world", b"SMALL WORLD"))
         return "approve"
 
-    results = service.queue(root, prompt=prompt, now=NOW)
+    results = service.queue(root, prompt=prompt, clock=at(NOW))
     assert [(x.id, x.outcome, x.code) for x in results] == [(a.id, "refused", "hash_mismatch"), (b.id, "approved", None)]
     assert current(root, a.id) == "pending" and current(root, b.id) == "approved"
     assert rejections(root, a.id)[0]["reason"].startswith("hash_mismatch")
@@ -392,7 +397,7 @@ def test_queue_reports_a_state_change_during_the_decision(ws):
         P(root, content="a newer draft")        # supersedes `a` while the user is deciding (the lock is not held)
         return "approve"
 
-    (result,) = [x for x in service.queue(root, prompt=prompt, now=NOW) if x.id == a.id]
+    (result,) = [x for x in service.queue(root, prompt=prompt, clock=at(NOW)) if x.id == a.id]
     assert result.outcome == "refused" and result.code == "wrong_state" and "superseded" in result.message
     assert current(root, a.id) == "superseded"
 
@@ -407,7 +412,7 @@ def test_queue_skips_items_that_left_pending_before_their_turn(ws):
             P(root, url=URL2, content="Hi Sam, newer")       # supersedes b before it is shown
         return "approve"
 
-    results = service.queue(root, prompt=prompt, now=NOW)
+    results = service.queue(root, prompt=prompt, clock=at(NOW))
     assert [(x.id, x.outcome) for x in results] == [(a.id, "approved"), (b.id, "changed")]
     assert not rejections(root, b.id)
 
@@ -438,7 +443,7 @@ def test_single_item_decision_does_not_hold_the_lock_while_asking(ws):
         t.join()
         return "approve"
 
-    assert service.decide(root, a.id, confirm=confirm, now=NOW).outcome == "approved"
+    assert service.decide(root, a.id, confirm=confirm, clock=at(NOW)).outcome == "approved"
     assert took == [True]
 
 
@@ -452,7 +457,7 @@ def test_single_decision_detects_a_changed_draft(ws):
         path.write_bytes(path.read_bytes().replace(b"small world", b"big world"))
         return "approve"
 
-    exc = refused(service.decide, root, a.id, confirm=confirm, now=NOW)
+    exc = refused(service.decide, root, a.id, confirm=confirm, clock=at(NOW))
     assert exc.code == "hash_mismatch" and current(root, a.id) == "pending"
 
 
@@ -464,7 +469,7 @@ def test_decide_refuses_an_already_changed_draft_before_asking(ws):
     def confirm(text):
         raise AssertionError("must not ask about a changed draft")
 
-    assert refused(service.decide, root, a.id, confirm=confirm, now=NOW).code == "hash_mismatch"
+    assert refused(service.decide, root, a.id, confirm=confirm, clock=at(NOW)).code == "hash_mismatch"
 
 
 def test_skip_records_nothing(ws):
@@ -533,7 +538,7 @@ def test_submit_job_change_during_the_decision_is_reported(ws):
         sm.apply_transition(root, job["id"], State.WITHDRAWN, actor="user")
         return "approve"
 
-    assert refused(service.decide, root, got.id, confirm=confirm, now=NOW).code == "job_not_awaiting_approval"
+    assert refused(service.decide, root, got.id, confirm=confirm, clock=at(NOW)).code == "job_not_awaiting_approval"
     assert current(root, got.id) == "pending"
 
 
@@ -716,7 +721,7 @@ def test_resolve_sent_records_the_user(ws):
     root, _ = ws
     got = P(root)
     decide(root, got.id), begin(root, got.id)
-    result = service.resolve(root, got.id, sent=True, now=NOW)
+    result = service.resolve(root, got.id, sent=True, clock=at(NOW))
     assert result.outcome == "consumed"
     last = item_events(root, got.id)[-1]
     assert (last["type"], last["actor"], last["source"]) == (rules.EV_CONSUMED, "user", "tty")
@@ -741,7 +746,7 @@ def test_resolve_not_sent_after_expiry_releases_into_expired(ws):
     got = P(root)
     decide(root, got.id), begin(root, got.id)
     late = shift(folded(root, got.id).approved_at, hours=24)
-    result = service.resolve(root, got.id, sent=False, now=late)
+    result = service.resolve(root, got.id, sent=False, clock=at(late))
     assert result.outcome == "expired"
     assert item_events(root, got.id)[-1]["type"] == rules.EV_RELEASED
     assert current(root, got.id, now=late) == "expired"
@@ -762,7 +767,7 @@ def test_resolve_not_sent_voids_on_a_failed_revalidation(ws, failure, code):
     else:
         (root / job["cover"]).unlink()
     late = shift(folded(root, got.id).approved_at, hours=30)      # expiry also failed: any other failure still voids
-    result = service.resolve(root, got.id, sent=False, now=late if failure == "hash" else NOW)
+    result = service.resolve(root, got.id, sent=False, clock=at(late if failure == "hash" else NOW))
     assert result.outcome == "voided" and result.reason.startswith(code)
     last = item_events(root, got.id)[-1]
     assert last["type"] == rules.EV_VOIDED and last["reason"].startswith(code)
@@ -777,7 +782,7 @@ def test_resolve_not_sent_voids_on_invite_uniqueness(ws):
     twin = craft(root, rules.LINKEDIN_INVITE, person, url=URL)
     for t in (rules.EV_APPROVED, rules.EV_STARTED, rules.EV_CONSUMED):      # a raced/hand-made twin that was sent
         raw_event(root, t, twin)
-    result = service.resolve(root, a.id, sent=False, now=NOW)
+    result = service.resolve(root, a.id, sent=False, clock=at(NOW))
     assert result.outcome == "voided" and result.reason.startswith("invite_conflict")
 
 
@@ -785,9 +790,9 @@ def test_resolve_refuses_non_in_flight(ws):
     root, _ = ws
     a = P(root)
     for sent in (True, False):
-        assert refused(service.resolve, root, a.id, sent=sent, now=NOW).code == "wrong_state"
+        assert refused(service.resolve, root, a.id, sent=sent, clock=at(NOW)).code == "wrong_state"
     decide(root, a.id), begin(root, a.id), done(root, a.id)
-    assert refused(service.resolve, root, a.id, sent=True, now=NOW).code == "wrong_state"
+    assert refused(service.resolve, root, a.id, sent=True, clock=at(NOW)).code == "wrong_state"
 
 
 # --- ledger failure injection ----------------------------------------------------------------------------------------------------
@@ -810,8 +815,8 @@ def test_a_failing_append_changes_nothing_and_the_next_run_succeeds(ws, monkeypa
         "submit_approve": lambda: decide(root, got.id),
         "begin": lambda: begin(root, got.id),
         "done": lambda: done(root, got.id),
-        "resolve_sent": lambda: service.resolve(root, got.id, sent=True, now=NOW),
-        "resolve_not_sent": lambda: service.resolve(root, got.id, sent=False, now=NOW),
+        "resolve_sent": lambda: service.resolve(root, got.id, sent=True, clock=at(NOW)),
+        "resolve_not_sent": lambda: service.resolve(root, got.id, sent=False, clock=at(NOW)),
     }[op]
     before = state(root)
     was = current(root, got.id)
@@ -857,11 +862,11 @@ def test_every_state_change_fails_closed_on_a_broken_chain(ws, op):
         raise AssertionError("must not ask on a broken chain")
 
     run = {
-        "decide": lambda: service.decide(root, got.id, confirm=never, now=NOW),
-        "queue": lambda: service.queue(root, prompt=never, now=NOW),
+        "decide": lambda: service.decide(root, got.id, confirm=never, clock=at(NOW)),
+        "queue": lambda: service.queue(root, prompt=never, clock=at(NOW)),
         "begin": lambda: begin(root, got.id),
         "done": lambda: done(root, got.id),
-        "resolve": lambda: service.resolve(root, got.id, sent=True, now=NOW),
+        "resolve": lambda: service.resolve(root, got.id, sent=True, clock=at(NOW)),
     }[op]
     assert refused(run).code == "ledger_corrupt"
     assert state(root) == before
@@ -893,20 +898,37 @@ def _count_clock_reads(monkeypatch) -> list[str]:
     return reads
 
 
-def test_service_operations_never_read_the_clock(ws, monkeypatch):
+def test_service_operations_read_their_clock_once_and_never_the_global_clock(ws, monkeypatch):
     root, job = ws
     a, b = P(root), S(root, job)
+    c = P(root, url=URL3, content="Hi Kim")      # stays pending for the queue
     reads = _count_clock_reads(monkeypatch)
-    decide(root, a.id), decide(root, b.id)
-    service.queue(root, prompt=lambda text: "skip", now=NOW)
-    begin(root, a.id), done(root, a.id)
-    begin(root, b.id), service.resolve(root, b.id, sent=False, now=NOW)
+    calls: list[int] = []
+
+    def counting():
+        calls.append(1)
+        return NOW
+
+    def once(fn):
+        calls.clear()
+        fn()
+        return len(calls)
+
+    assert once(lambda: service.decide(root, a.id, confirm=lambda t: "approve", clock=counting)) == 1
+    assert once(lambda: service.decide(root, b.id, confirm=lambda t: "approve", clock=counting)) == 1
+    assert once(lambda: service.queue(root, prompt=lambda text: "skip", clock=counting)) == 2     # the listing + 1 item
+    assert current(root, c.id) == "pending"
+    assert once(lambda: service.begin(root, a.id, actor="agent:t", clock=counting)) == 1
+    assert once(lambda: service.done(root, a.id, actor="agent:t", clock=counting)) == 1
+    assert once(lambda: service.begin(root, b.id, actor="agent:t", clock=counting)) == 1
+    assert once(lambda: service.resolve(root, b.id, sent=False, clock=counting)) == 1
     assert reads == []
 
 
-@pytest.mark.parametrize("args", [("approval", "begin", "{id}"), ("approval", "done", "{id}"),
-                                  ("approval", "resolve", "{id}", "--not-sent"), ("approve", "{id}"), ("approve",)])
-def test_each_cli_operation_reads_the_clock_once(ws, monkeypatch, interactive, args):
+@pytest.mark.parametrize("args,expected", [(("approval", "begin", "{id}"), 1), (("approval", "done", "{id}"), 1),
+                                           (("approval", "resolve", "{id}", "--not-sent"), 1), (("approve", "{id}"), 1),
+                                           (("approve",), 2)])
+def test_each_cli_operation_reads_the_clock_once_inside_the_service(ws, monkeypatch, interactive, args, expected):
     root, _ = ws
     got = P(root)
     if args[1:2] in (("begin",), ("done",), ("resolve",)):
@@ -916,14 +938,253 @@ def test_each_cli_operation_reads_the_clock_once(ws, monkeypatch, interactive, a
     reads = _count_clock_reads(monkeypatch)
     r = cli(root, *[a.format(id=got.id) for a in args], input="a\n")
     assert r.exit_code == 0, r.output
-    assert reads == ["careeros.cli.approval" if args[0] == "approval" else "careeros.cli.approve"]
+    # read by the service under the lock (the queue: once for its listing, then once per item)
+    assert reads == ["careeros.core.approvals.service"] * expected
+
+
+# --- the clock floor: the latest ts of ANY event in the ledger ------------------------------------------------------------------
+
+class Wall:
+    """ONE settable clock that drives both the service's `now` and the ledger's own event stamps."""
+
+    def __init__(self, ts: str) -> None:
+        self.ts = ts
+
+    def __call__(self) -> str:
+        return self.ts
+
+    def set(self, ts: str) -> None:
+        self.ts = ts
+
+    def advance(self, **delta) -> None:
+        self.ts = shift(self.ts, **delta)
+
+
+T0 = "2026-10-06T09:00:00Z"
+
+
+@pytest.fixture
+def wall(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    clock = Wall(T0)
+    monkeypatch.setattr(models, "utc_now", clock)
+    root = make_workspace(tmp_path / "ws")
+    job = add_job(root, "example-platform", status=State.APPROVAL_REQUIRED, bullet="approval-required")
+    (job["path"].parent / "resume.pdf").write_bytes(b"%PDF resume")
+    job["resume"] = "jobs/discovered/example-platform/resume.pdf"
+    return root, job, clock
+
+
+def wall_item(root, clock):
+    got = P(root)
+    service.decide(root, got.id, confirm=lambda t: "approve", clock=clock)
+    return got.id, folded(root, got.id, clock()).approved_at
+
+
+def test_floor_refuses_revival_after_an_expired_begin(wall):
+    root, _, clock = wall
+    apr, t = wall_item(root, clock)
+    clock.set(shift(t, hours=25))
+    assert refused(service.begin, root, apr, actor="agent:t", clock=clock).code == "expired"   # the rejection is stamped T+25h
+    clock.set(shift(t, hours=1))
+    exc = refused(service.begin, root, apr, actor="agent:t", clock=clock)
+    assert exc.code == "clock_skew" and shift(t, hours=25) in str(exc)
+    assert not started_events(root)
+
+
+def test_floor_refuses_revival_after_an_unrelated_later_event(wall):
+    root, _, clock = wall
+    apr, t = wall_item(root, clock)
+    clock.set(shift(t, hours=25))
+    ledger.append_event(root, type="note.added", actor="user", action="an unrelated note")
+    clock.set(shift(t, hours=1))
+    assert refused(service.begin, root, apr, actor="agent:t", clock=clock).code == "clock_skew"
+
+
+def test_a_deduped_rejection_still_leaves_the_floor(wall):
+    root, _, clock = wall
+    apr, t = wall_item(root, clock)
+    clock.set(shift(t, hours=25))
+    refused(service.begin, root, apr, actor="agent:t", clock=clock)
+    clock.set(shift(t, hours=26))
+    assert refused(service.begin, root, apr, actor="agent:t", clock=clock).code == "expired"
+    (rej,) = rejections(root, apr)                       # the second, identical refusal was deduped...
+    assert rej["ts"] == shift(t, hours=25)
+    clock.set(shift(t, hours=1))
+    assert refused(service.begin, root, apr, actor="agent:t", clock=clock).code == "clock_skew"   # ...the floor stays
+
+
+def test_now_equal_to_the_floor_is_allowed(wall):
+    root, _, clock = wall
+    apr, t = wall_item(root, clock)
+    assert clock() == clock_floor(root) == t
+    assert service.begin(root, apr, actor="agent:t", clock=clock).id == apr
+
+
+def test_a_future_dated_event_names_the_floor(wall):
+    root, _, clock = wall
+    apr, t = wall_item(root, clock)
+    future = shift(t, days=10)
+    clock.set(future)
+    ledger.append_event(root, type="note.added", actor="user", action="written under a wrong clock")
+    clock.set(shift(t, hours=1))
+    exc = refused(service.begin, root, apr, actor="agent:t", clock=clock)
+    assert exc.code == "clock_skew" and future in str(exc) and "Fix the clock" in str(exc) and "restore" in str(exc)
+    for op in (lambda: service.decide(root, P(root, url=URL2).id, confirm=lambda x: "approve", clock=clock),):
+        with pytest.raises(service.Refused) as again:
+            op()
+        assert again.value.code == "clock_skew"
+
+
+def test_propose_refuses_a_clock_behind_the_floor(wall):
+    root, _, clock = wall
+    wall_item(root, clock)
+    clock.set(shift(T0, days=3))
+    ledger.append_event(root, type="note.added", actor="user", action="later")
+    clock.set(T0)
+    before = state(root)
+    assert refused(P, root, url=URL2).code == "clock_skew"
+    assert state(root) == before
+
+
+def test_list_and_show_report_the_floor_skew(wall):
+    root, _, clock = wall
+    apr, t = wall_item(root, clock)
+    clock.set(shift(t, days=2))
+    ledger.append_event(root, type="note.added", actor="user", action="later")
+    clock.set(shift(t, hours=1))
+    assert service.show(root, apr).clock_skew and "clock_skew" in service.show(root, apr).problems
+    assert [v.clock_skew for v in service.list_items(root)] == [True]
+
+
+def test_queue_at_five_seconds_per_answer_records_everything(wall):
+    root, _, clock = wall
+    ids_ = [P(root, url=u, content=f"Hi {n}").id for n, u in enumerate((URL, URL2, URL3))]
+
+    def prompt(text):
+        clock.advance(seconds=5)          # the user takes 5 s per answer; each decision stamps a later event
+        return "approve"
+
+    results = service.queue(root, prompt=prompt, clock=clock)
+    assert [(r.outcome, r.code) for r in results] == [("approved", None)] * 3
+    assert [current(root, i, clock()) for i in ids_] == ["approved"] * 3
+
+
+def test_an_agent_proposal_during_a_decision_is_not_skew(wall):
+    root, _, clock = wall
+    a = P(root)
+
+    def confirm(text):
+        clock.advance(seconds=30)
+        P(root, url=URL2, content="the agent keeps working meanwhile")    # stamped after the phase-1 time
+        return "approve"
+
+    assert service.decide(root, a.id, confirm=confirm, clock=clock).outcome == "approved"
+
+
+def test_known_limit_truncating_the_ledger_tail_revives(wall):
+    """KNOWN LIMIT (documented): a hash chain cannot detect a deleted FINAL line, and with the evidence gone the floor
+    falls back, so the expired approval is usable again under a backward clock."""
+    root, _, clock = wall
+    apr, t = wall_item(root, clock)
+    clock.set(shift(t, hours=25))
+    refused(service.begin, root, apr, actor="agent:t", clock=clock)
+    rewrite_ledger(root, lambda lines: b"\n".join(lines[:-1]) + b"\n")      # drop the rejection: the chain stays valid
+    assert not ledger.verify_chain(root)
+    clock.set(shift(t, hours=1))
+    assert service.begin(root, apr, actor="agent:t", clock=clock).id == apr
+
+
+def clock_floor(root):
+    return service.clock_floor(ledger.read_events(root))
+
+
+# --- CLI minors -------------------------------------------------------------------------------------------------------------------
+
+def test_not_interactive_tag_is_printed_once(ws):
+    root, _ = ws
+    got = P(root)
+    decide(root, got.id), begin(root, got.id)
+    r = cli(root, "approval", "resolve", got.id, "--sent")
+    assert r.exit_code == 2 and r.output.count("not_interactive") == 1
+    r = cli(root, "approval", "resolve", got.id, "--sent", "--json")
+    out = json.loads(r.stdout)
+    assert out["code"] == "not_interactive" and "not_interactive" not in out["error"]
+    r = cli(root, "approve", got.id)
+    assert r.exit_code == 2 and r.output.count("not_interactive") == 1
+
+
+@pytest.mark.parametrize("stream", ["stdin", "stdout"])
+@pytest.mark.parametrize("how", ["none", "closed"])
+def test_is_interactive_survives_missing_or_closed_streams(monkeypatch, stream, how):
+    import io
+
+    if how == "none":
+        monkeypatch.setattr(sys, stream, None)
+    else:
+        closed = io.StringIO()
+        closed.close()
+        monkeypatch.setattr(sys, stream, closed)
+    assert _util.is_interactive() is False
+
+
+def test_whitespace_only_answers_re_prompt(ws, interactive):
+    root, _ = ws
+    a = P(root)
+    r = cli(root, "approve", input="   \n\t\n")
+    assert r.exit_code == 1 and current(root, a.id) == "pending"
+    assert r.output.count("Answer a (approve), d (decline) or s (skip).") == 2
+
+
+def test_queue_confirms_each_decision_as_written_and_explains_an_abort(ws, interactive):
+    root, _ = ws
+    a = P(root)
+    b = P(root, url=URL2, content="Hi Sam")
+    c = P(root, url=URL3, content="Hi Kim")
+    r = cli(root, "approve", input="a\nd\n")          # EOF at the third item
+    assert r.exit_code == 1
+    assert f"approved {a.id}" in r.output and f"declined {b.id}" in r.output
+    assert r.output.index(f"approved {a.id}") < r.output.index(c.id)       # printed before the next item is shown
+    assert "stay recorded" in r.output and "current and later items are unchanged" in r.output
+    assert [current(root, x.id) for x in (a, b, c)] == ["approved", "declined", "pending"]
+    r = cli(root, "approve", input="s\n")
+    assert f"skipped {c.id}" in r.output
+
+
+@pytest.mark.parametrize("args", [("approval", "begin", "{id}"), ("approve", "{id}")])
+def test_a_busy_workspace_exits_1(ws, interactive, args):
+    root, _ = ws
+    got = P(root)
+    decide(root, got.id)
+    holder_ready, release = threading.Event(), threading.Event()
+
+    def hold():
+        with WorkspaceLock(root):
+            holder_ready.set()
+            release.wait(30)
+
+    t = threading.Thread(target=hold)
+    t.start()
+    holder_ready.wait(5)
+    import careeros.core.workspace as wsmod
+    real_init = wsmod.WorkspaceLock.__init__
+    try:
+        wsmod.WorkspaceLock.__init__ = lambda self, root, timeout=10.0: real_init(self, root, 0.2)
+        r = cli(root, *[a.format(id=got.id) for a in args], input="a\n")
+    finally:
+        wsmod.WorkspaceLock.__init__ = real_init
+        release.set()
+        t.join()
+    assert r.exit_code == 1 and "busy" in r.output
 
 
 # --- real cross-process races --------------------------------------------------------------------------------------------------
 
 CHILD = r"""
 import os, sys, time
+from careeros.cli import _util
 from careeros.cli.main import app
+if os.environ.get("CAREEROS_TEST_TTY"):
+    _util.is_interactive = lambda: True        # the test plays the user's terminal
 if os.environ.get("CAREEROS_TEST_WIDEN"):
     # widen the window between reading the ledger and appending, inside the command's critical section
     from careeros.core.approvals import fold
@@ -933,55 +1194,94 @@ if os.environ.get("CAREEROS_TEST_WIDEN"):
         time.sleep(0.3)
         return out
     fold.fold_events = slow
-go = sys.argv[1]
+ready, go = sys.argv[1], sys.argv[2]
+open(ready, "w").close()
 while not os.path.exists(go):
     time.sleep(0.001)
-sys.argv = ["careeros", *sys.argv[2:]]
+time.sleep(float(os.environ.get("CAREEROS_TEST_DELAY") or 0))
+sys.argv = ["careeros", *sys.argv[3:]]
 app()
 """
 
 
-def race(tmp_path: Path, commands: list[list[str]], widen: bool) -> list[tuple[int, dict]]:
-    """Start one OS process per command, release them together, return (exit code, JSON output) each."""
+def Cmd(*args, tty=False, delay=0.0, input=""):
+    return {"args": list(args), "tty": tty, "delay": delay, "input": input}
+
+
+def race_many(tmp_path: Path, rounds: list[list[dict]], widen: bool) -> list[list[tuple[int, dict]]]:
+    """Start one OS process per command of every round at once (each round on its own workspace), wait until every
+    child is ready, release them together, and return (exit code, JSON output or raw text) per command per round."""
     script = tmp_path / "child.py"
     script.write_text(CHILD)
-    go = tmp_path / f"go-{time.monotonic_ns()}"
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
-    env.pop("CAREEROS_TEST_WIDEN", None)
-    if widen:
-        env["CAREEROS_TEST_WIDEN"] = "1"
-    procs = [subprocess.Popen([sys.executable, str(script), str(go), *cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              env=env, stdin=subprocess.DEVNULL) for cmd in commands]
-    time.sleep(1.0)          # every child has imported careeros and is spinning on the barrier
+    stamp = time.monotonic_ns()
+    go = tmp_path / f"go-{stamp}"
+    procs = []
+    for r, round_ in enumerate(rounds):
+        for c, cmd in enumerate(round_):
+            env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+            for key in ("CAREEROS_TEST_WIDEN", "CAREEROS_TEST_TTY", "CAREEROS_TEST_DELAY"):
+                env.pop(key, None)
+            if widen:
+                env["CAREEROS_TEST_WIDEN"] = "1"
+            if cmd["tty"]:
+                env["CAREEROS_TEST_TTY"] = "1"
+            if cmd["delay"]:
+                env["CAREEROS_TEST_DELAY"] = str(cmd["delay"])
+            stdin = tmp_path / f"in-{stamp}-{r}-{c}"
+            stdin.write_text(cmd["input"])
+            ready = tmp_path / f"ready-{stamp}-{r}-{c}"
+            with stdin.open("rb") as handle:
+                proc = subprocess.Popen([sys.executable, str(script), str(ready), str(go), *cmd["args"]], stdin=handle,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+            procs.append((r, ready, proc))
+    deadline = time.monotonic() + 120
+    while not all(ready.exists() for _, ready, _ in procs):
+        assert time.monotonic() < deadline, "children did not start"
+        time.sleep(0.01)
     go.write_text("go")
-    out = []
-    for p in procs:
-        stdout, stderr = p.communicate(timeout=60)
+    out: list[list[tuple[int, dict]]] = [[] for _ in rounds]
+    for r, _, proc in procs:
+        stdout, stderr = proc.communicate(timeout=120)
         try:
             data = json.loads(stdout)
         except ValueError:
-            data = {"raw": stdout.decode(), "stderr": stderr.decode()}
-        out.append((p.returncode, data))
+            data = {"raw": stdout.decode() + stderr.decode()}
+        out[r].append((proc.returncode, data))
     return out
 
 
 @pytest.fixture
 def real_ws(tmp_path: Path):
     """No `clock` fixture: the children use the real clock, so the parent does too."""
-    root = make_workspace(tmp_path / "ws")
+    return real_workspace(tmp_path / "ws")
+
+
+def real_workspace(root: Path):
+    root = make_workspace(root)
     job = add_job(root, "example-platform", status=State.APPROVAL_REQUIRED, bullet="approval-required")
-    folder = job["path"].parent
-    (folder / "resume.pdf").write_bytes(b"%PDF resume")
+    (job["path"].parent / "resume.pdf").write_bytes(b"%PDF resume")
     job["resume"] = "jobs/discovered/example-platform/resume.pdf"
     return root, job
 
 
 def real_decide(root, apr):
-    return service.decide(root, apr, confirm=lambda text: "approve", now=models.utc_now())
+    return service.decide(root, apr, confirm=lambda text: "approve", clock=models.utc_now)
 
 
 def started_events(root):
     return [e for e in ledger.read_events(root) if e["type"] == rules.EV_STARTED]
+
+
+def codes_of(results):
+    return sorted(d.get("code", "ok") if code else "ok" for code, d in results)
+
+
+def apr005(root):
+    return [i for i in validate_all(root) if i.code == "APR005"]
+
+
+def W(root):
+    return ["--workspace", str(root)]
 
 
 @pytest.mark.parametrize("widen", [False, True])
@@ -989,9 +1289,9 @@ def test_race_two_begins_on_one_item(real_ws, tmp_path, widen):
     root, _ = real_ws
     got = P(root)
     real_decide(root, got.id)
-    results = race(tmp_path, [["approval", "begin", got.id, "--json", "--workspace", str(root)]] * 3, widen)
+    (results,) = race_many(tmp_path, [[Cmd("approval", "begin", got.id, "--json", *W(root))] * 3], widen)
     assert sorted(code for code, _ in results) == [0, 1, 1], results
-    assert sorted(d.get("code", "ok") for _, d in results) == ["ok", "wrong_state", "wrong_state"]
+    assert codes_of(results) == ["ok", "wrong_state", "wrong_state"]
     assert len(started_events(root)) == 1
     assert not ledger.verify_chain(root)
 
@@ -1002,8 +1302,8 @@ def test_race_two_approved_invites_for_one_person(real_ws, tmp_path, widen):
     a = P(root)
     twin = craft(root, rules.LINKEDIN_INVITE, folded(root, a.id, models.utc_now()).target_id, url=URL)
     real_decide(root, a.id), real_decide(root, twin)
-    results = race(tmp_path, [["approval", "begin", x, "--json", "--workspace", str(root)] for x in (a.id, twin)], widen)
-    assert sorted(d.get("code", "ok") for _, d in results) == ["in_flight_conflict", "ok"], results
+    (results,) = race_many(tmp_path, [[Cmd("approval", "begin", x, "--json", *W(root)) for x in (a.id, twin)]], widen)
+    assert codes_of(results) == ["in_flight_conflict", "ok"], results
     assert len(started_events(root)) == 1
 
 
@@ -1014,8 +1314,8 @@ def test_race_two_approved_submits_for_one_job(real_ws, tmp_path, widen):
                         content_text="Answers", manifest_paths=[job["resume"]], actor="agent:test")
     twin = craft(root, rules.APPLICATION_SUBMIT, job["id"], entries=manifest.hash_files(root, [job["resume"]]))
     real_decide(root, a.id), real_decide(root, twin)
-    results = race(tmp_path, [["approval", "begin", x, "--json", "--workspace", str(root)] for x in (a.id, twin)], widen)
-    assert sorted(d.get("code", "ok") for _, d in results) == ["in_flight_conflict", "ok"], results
+    (results,) = race_many(tmp_path, [[Cmd("approval", "begin", x, "--json", *W(root)) for x in (a.id, twin)]], widen)
+    assert codes_of(results) == ["in_flight_conflict", "ok"], results
     assert len(started_events(root)) == 1
 
 
@@ -1026,20 +1326,105 @@ def test_race_propose_against_begin(real_ws, tmp_path, widen):
     real_decide(root, a.id)
     content = tmp_path / "newer.txt"
     content.write_text("a newer draft")
-    results = race(tmp_path, [
-        ["approval", "begin", a.id, "--json", "--workspace", str(root)],
-        ["approval", "propose", "--kind", "linkedin_invite", "--person-url", URL, "--content-file", str(content),
-         "--json", "--workspace", str(root)],
-    ], widen)
-    (begin_code, begin_out), (propose_code, propose_out) = results
-    now = models.utc_now()
-    states = {i: st.state.value for i, st in fold.fold_all(ledger.read_events(root), now).items()}
+    ((begin_r, propose_r),) = race_many(tmp_path, [[
+        Cmd("approval", "begin", a.id, "--json", *W(root)),
+        Cmd("approval", "propose", "--kind", "linkedin_invite", "--person-url", URL, "--content-file", str(content),
+            "--json", *W(root)),
+    ]], widen)
+    (begin_code, begin_out), (propose_code, propose_out) = begin_r, propose_r
+    states = {i: st.state.value for i, st in fold.fold_all(ledger.read_events(root), models.utc_now()).items()}
     if begin_code == 0:
-        # the claim won: the proposal was refused and nothing new exists
-        assert propose_code == 1 and propose_out["code"] == "in_flight_conflict", results
+        assert propose_code == 1 and propose_out["code"] == "in_flight_conflict", (begin_r, propose_r)
         assert states == {a.id: "in_flight"}
     else:
-        # the proposal won: it superseded the approval before the claim, which then failed
-        assert begin_out["code"] == "wrong_state" and propose_code == 0, results
+        assert begin_out["code"] == "wrong_state" and propose_code == 0, (begin_r, propose_r)
         assert states == {a.id: "superseded", propose_out["id"]: "pending"}
-    assert not (states.get(a.id) == "in_flight" and any(s in ("pending", "approved") for s in states.values()))
+
+
+ROUNDS = 20
+
+
+def _rounds(tmp_path: Path, setup, n: int = ROUNDS):
+    """`n` independent workspaces prepared by `setup(root) -> list[Cmd]`."""
+    made = []
+    for k in range(n):
+        root, job = real_workspace(tmp_path / f"ws{k}")
+        made.append((root, setup(root, job)))
+    return made
+
+
+def test_race_begins_never_report_clock_skew_20_rounds(tmp_path):
+    def setup(root, job):
+        a = P(root)
+        twin = craft(root, rules.LINKEDIN_INVITE, folded(root, a.id, models.utc_now()).target_id, url=URL)
+        real_decide(root, a.id), real_decide(root, twin)
+        return [Cmd("approval", "begin", a.id, "--json", *W(root)), Cmd("approval", "begin", a.id, "--json", *W(root)),
+                Cmd("approval", "begin", twin, "--json", *W(root))]
+
+    made = _rounds(tmp_path, setup)
+    results = race_many(tmp_path, [cmds for _, cmds in made], widen=False)
+    for (root, _), res in zip(made, results):
+        assert codes_of(res) in (["in_flight_conflict", "in_flight_conflict", "ok"],
+                                 ["in_flight_conflict", "ok", "wrong_state"]), res
+        assert len(started_events(root)) == 1
+
+
+def test_race_done_against_resolve_sent(tmp_path):
+    def setup(root, job):
+        a = P(root)
+        real_decide(root, a.id)
+        service.begin(root, a.id, actor="agent:t", clock=models.utc_now)
+        return [Cmd("approval", "done", a.id, "--json", *W(root)),
+                Cmd("approval", "resolve", a.id, "--sent", "--json", *W(root), tty=True)]
+
+    made = _rounds(tmp_path, setup)
+    for (root, _), res in zip(made, race_many(tmp_path, [c for _, c in made], widen=True)):
+        assert codes_of(res) == ["ok", "wrong_state"], res
+        assert [e["type"] for e in ledger.read_events(root)].count(rules.EV_CONSUMED) == 1
+        assert not apr005(root)
+
+
+def test_race_done_against_resolve_not_sent(tmp_path):
+    def setup(root, job):
+        a = P(root)
+        real_decide(root, a.id)
+        service.begin(root, a.id, actor="agent:t", clock=models.utc_now)
+        return [Cmd("approval", "done", a.id, "--json", *W(root)),
+                Cmd("approval", "resolve", a.id, "--not-sent", "--json", *W(root), tty=True)]
+
+    made = _rounds(tmp_path, setup)
+    for (root, _), res in zip(made, race_many(tmp_path, [c for _, c in made], widen=True)):
+        assert codes_of(res) == ["ok", "wrong_state"], res
+        kinds = [e["type"] for e in ledger.read_events(root)]
+        assert kinds.count(rules.EV_CONSUMED) + kinds.count(rules.EV_RELEASED) == 1
+        assert not apr005(root)
+
+
+def test_race_two_terminals_deciding_one_item(tmp_path):
+    def setup(root, job):
+        a = P(root)
+        return [Cmd("approve", a.id, *W(root), tty=True, input="a\n")] * 2
+
+    made = _rounds(tmp_path, setup)
+    for (root, _), res in zip(made, race_many(tmp_path, [c for _, c in made], widen=True)):
+        assert sorted(code for code, _ in res) == [0, 1], res
+        assert [e["type"] for e in ledger.read_events(root)].count(rules.EV_APPROVED) == 1
+        assert not apr005(root)
+
+
+def test_race_decision_phase_2_against_propose(tmp_path):
+    content = tmp_path / "newer.txt"
+    content.write_text("a newer draft")
+
+    def setup(root, job):
+        a = P(root)
+        return [Cmd("approve", a.id, *W(root), tty=True, input="a\n"),
+                Cmd("approval", "propose", "--kind", "linkedin_invite", "--person-url", URL, "--content-file", str(content),
+                    "--json", *W(root), delay=0.05)]
+
+    made = _rounds(tmp_path, setup)
+    for (root, _), res in zip(made, race_many(tmp_path, [c for _, c in made], widen=True)):
+        (decide_code, _), (propose_code, _) = res
+        assert propose_code == 0, res                    # a newer proposal supersedes a pending or an approved item
+        assert decide_code in (0, 1)
+        assert not apr005(root), res

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+import click
 import typer
 
 from careeros.cli import _util
@@ -12,7 +13,7 @@ from careeros.core import ids, models
 from careeros.core import state_machine as sm
 from careeros.core.approvals import rules, service
 from careeros.core.ledger import LedgerError
-from careeros.core.workspace import WorkspaceError
+from careeros.core.workspace import LockTimeout, WorkspaceError
 
 _ANSWERS = {"a": "approve", "approve": "approve", "d": "decline", "decline": "decline", "s": "skip", "skip": "skip"}
 
@@ -33,10 +34,10 @@ def approve_cmd(
     if target is not None and not target.startswith(f"{ids.PREFIXES['approval']}_"):
         _approve_job(root, target)
         return
-    now = models.utc_now()
     if not _util.is_interactive():
         if target is not None:
-            service.refuse_not_interactive(root, target, operation="approve", actor=_util.default_actor(), now=now)
+            service.refuse_not_interactive(root, target, operation="approve", actor=_util.default_actor(),
+                                           clock=models.utc_now)
         hint = "! careeros approve" + (f" {target}" if target and ids.is_valid_id("approval", target) else "")
         typer.echo(
             "careeros approve records YOUR decision and needs an interactive terminal. "
@@ -45,9 +46,9 @@ def approve_cmd(
         )
         raise typer.Exit(_util.EXIT_USAGE)
     if target is None:
-        _queue(root, now)
+        _queue(root)
     else:
-        _single(root, target, now)
+        _single(root, target)
 
 
 def _ask(text: str) -> str:
@@ -68,14 +69,16 @@ def _guard(fn):
         _util.fail(f"{exc} [{exc.code}]")
     except LedgerError as exc:
         _util.fail(str(exc))
+    except LockTimeout:
+        _util.fail(_util.BUSY)
     except WorkspaceError as exc:
         _util.fail(str(exc), _util.EXIT_USAGE)
     except OSError as exc:
         _util.fail(f"could not complete: {exc}")
 
 
-def _single(root: Path, item_id: str, now: str) -> None:
-    decision = _guard(lambda: service.decide(root, item_id, confirm=_ask, now=now))
+def _single(root: Path, item_id: str) -> None:
+    decision = _guard(lambda: service.decide(root, item_id, confirm=_ask, clock=models.utc_now))
     if decision.outcome == "approved":
         typer.echo(f"Approved {item_id}. It may be used once, within {rules.APPROVAL_TTL_HOURS} hours.")
         return
@@ -86,16 +89,26 @@ def _single(root: Path, item_id: str, now: str) -> None:
     raise typer.Exit(_util.EXIT_FAIL)
 
 
-def _queue(root: Path, now: str) -> None:
-    results = _guard(lambda: service.queue(root, prompt=_ask, now=now))
+def _report(r: service.QueueResult) -> None:
+    """One line per item, printed as soon as its decision is written (or refused)."""
+    if r.outcome == "refused":
+        typer.echo(f"not recorded {r.id}: {r.message} [{r.code}]")
+    elif r.outcome == "changed":
+        typer.echo(f"skipped {r.id}: no longer pending")
+    else:
+        typer.echo(f"{r.outcome} {r.id}")
+
+
+def _queue(root: Path) -> None:
+    try:
+        results = _guard(lambda: service.queue(root, prompt=_ask, clock=models.utc_now, report=_report))
+    except (click.exceptions.Abort, typer.Abort):
+        typer.echo("\nStopped. Decisions already confirmed above stay recorded; the current and later items are unchanged.",
+                   err=True)
+        raise typer.Exit(_util.EXIT_FAIL) from None
     if not results:
         typer.echo("nothing to approve: no pending items")
         return
-    for r in results:
-        if r.outcome == "refused":
-            typer.echo(f"{r.id}: not recorded: {r.message} [{r.code}]")
-        elif r.outcome == "changed":
-            typer.echo(f"{r.id}: no longer pending; skipped")
     count = {o: sum(r.outcome == o for r in results) for o in ("approved", "declined", "skipped")}
     typer.echo(f"{count['approved']} approved, {count['declined']} declined, {count['skipped']} skipped")
     if any(r.outcome == "refused" for r in results):

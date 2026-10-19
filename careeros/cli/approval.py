@@ -12,7 +12,7 @@ from careeros.cli import _util
 from careeros.core import ids, models
 from careeros.core.approvals import render, rules, service
 from careeros.core.ledger import LedgerError
-from careeros.core.workspace import WorkspaceError
+from careeros.core.workspace import LockTimeout, WorkspaceError
 
 approval_app = typer.Typer(help="Propose, list, show, begin, done and resolve approval items for outward messages and "
                                 "application submissions.",
@@ -34,6 +34,8 @@ def _guard(as_json: bool, fn):
         _fail(str(exc), _util.EXIT_FAIL, as_json, exc.code)
     except LedgerError as exc:
         _fail(str(exc), _util.EXIT_FAIL, as_json)
+    except LockTimeout:
+        _fail(_util.BUSY, _util.EXIT_FAIL, as_json)
     except WorkspaceError as exc:
         _fail(str(exc), _util.EXIT_USAGE, as_json)
     except OSError as exc:
@@ -122,8 +124,7 @@ def begin_cmd(
     """Claim an approved item immediately before acting (approval.started). Refused, exit 1, unless it is approved,
     unexpired and unchanged, and nothing else for the same target is in flight."""
     root = _util.resolve_root(workspace)
-    now = models.utc_now()
-    got = _guard(as_json, lambda: service.begin(root, item_id, actor=actor or _util.default_actor(), now=now))
+    got = _guard(as_json, lambda: service.begin(root, item_id, actor=actor or _util.default_actor(), clock=models.utc_now))
     if as_json:
         _util.echo_json({"outcome": "started", "id": got.id, "kind": got.kind, "target": got.target_id, "path": got.rel,
                          "hash": got.hash, "state": rules.IN_FLIGHT, "url": got.item.target.url,
@@ -145,8 +146,8 @@ def done_cmd(
 ) -> None:
     """Record that the claimed action happened (approval.consumed). Never changes the job."""
     root = _util.resolve_root(workspace)
-    now = models.utc_now()
-    got = _guard(as_json, lambda: service.done(root, item_id, actor=actor or _util.default_actor(), note=note, now=now))
+    got = _guard(as_json, lambda: service.done(root, item_id, actor=actor or _util.default_actor(), note=note,
+                                               clock=models.utc_now))
     if as_json:
         _util.echo_json({"outcome": "consumed", "id": got.id, "state": rules.CONSUMED})
         return
@@ -166,14 +167,14 @@ def resolve_cmd(
     root = _util.resolve_root(workspace)
     if sent == not_sent:
         _fail("use exactly one of --sent or --not-sent", _util.EXIT_USAGE, as_json)
-    now = models.utc_now()
     if not _util.is_interactive():
-        service.refuse_not_interactive(root, item_id, operation="resolve", actor=_util.default_actor(), now=now)
+        service.refuse_not_interactive(root, item_id, operation="resolve", actor=_util.default_actor(),
+                                       clock=models.utc_now)
         shown = item_id if ids.is_valid_id("approval", item_id) else "<id>"
         _fail("careeros approval resolve records YOUR account of what happened and needs an interactive terminal. "
               f"Ask the user to run it themselves (in Claude Code: `! careeros approval resolve {shown} --sent` or "
-              f"`--not-sent`). [{rules.NOT_INTERACTIVE}]", _util.EXIT_USAGE, as_json, rules.NOT_INTERACTIVE)
-    got = _guard(as_json, lambda: service.resolve(root, item_id, sent=sent, now=now))
+              "`--not-sent`).", _util.EXIT_USAGE, as_json, rules.NOT_INTERACTIVE)
+    got = _guard(as_json, lambda: service.resolve(root, item_id, sent=sent, clock=models.utc_now))
     if as_json:
         _util.echo_json({"outcome": got.outcome, "id": got.id, "reason": got.reason, "expires_at": got.expires_at})
         return

@@ -11,10 +11,12 @@ orphan).
 
 `decide` and `queue` (the user, interactive), `begin` and `done` (the agent) and `resolve` (the user, interactive)
 change state. Each takes the workspace lock, verifies the hash chain (`ledger_corrupt`, nothing written) and folds the
-ledger before deciding anything, and takes `now` from its caller (one clock read per operation, by the CLI). As in
-`approve_job`, a decision does not hold the lock while the user decides and re-checks everything under the lock
-before writing. A refusal of an existing item appends an audit-only, deduped `approval.rejected`; an id that names no
-item appends nothing.
+ledger before deciding anything. Each reads the clock ONCE, after taking the lock, through the `clock` callable its caller
+passes (`models.utc_now` by default), and refuses `clock_skew` when that time is earlier than the item's approval, its
+latest event or the ledger's clock floor (the latest `ts` of any event). As in `approve_job`, a decision does not hold
+the lock while the user decides and re-checks everything under the lock before writing, keeping its phase-1 time and
+floor; each queue item is its own operation. A refusal of an existing item appends an audit-only, deduped
+`approval.rejected`; an id that names no item appends nothing.
 
 `list_items` and `show` fold the ledger and read the item files; `validate_workspace` does the same and adds the `APR`
 codes. None of the three takes the lock or writes anything. Each takes `now` once and passes it down; every
@@ -39,7 +41,7 @@ from careeros.core.workspace import WorkspaceError, WorkspaceLock, ensure_writab
 
 APPROVALS_DIR = "approvals"
 INVALID_INPUT = "invalid_input"
-LEDGER_CORRUPT = "ledger_corrupt"
+LEDGER_CORRUPT = rules.LEDGER_CORRUPT
 MAX_ITEM_BYTES = 1 << 20
 ITEM_INVALID = "item_invalid"           # list/show problem codes that are not refusal codes
 EVENT_MISMATCH = "event_mismatch"
@@ -51,8 +53,7 @@ _TERMINAL = (rules.CONSUMED, rules.DECLINED, rules.EXPIRED, rules.SUPERSEDED, ru
 
 
 class Refused(WorkspaceError):
-    """A refusal (exit 1): `code` is a stable code from `rules.REFUSAL_CODES`, or `invalid_input`, `ledger_corrupt` or
-    `job_not_awaiting_approval` (defined here, outside the spec's list)."""
+    """A refusal (exit 1): `code` is a stable code from `rules.REFUSAL_CODES`, or `invalid_input`."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -177,17 +178,25 @@ def _mismatches(item_id: str, st: ItemState, file: _File | None) -> list[str]:
     return list(dict.fromkeys(problems))
 
 
-def _view(item_id: str, st: ItemState, file: _File | None, now: str) -> View:
-    skew = clock_skew_of(st, now)
+def _view(item_id: str, st: ItemState, file: _File | None, now: str, floor: str | None = None) -> View:
+    skew = clock_skew_of(st, now, floor)
     problems = _mismatches(item_id, st, file) + ([rules.CLOCK_SKEW] if skew else [])
     return View(item_id, _expected_rel(item_id), st.state.value if st.state else "unknown", st.kind, st.target_id,
                 st.action_hash, st.proposed_at, st.approved_at, _expires_at(st), tuple(problems), skew,
                 file.item if file else None)
 
 
-def clock_skew_of(st: ItemState, now: str) -> bool:
-    """`now` earlier than the approval or than the item's latest event (callers always pass `ItemState.last_ts`)."""
-    return fold.clock_skewed(st.approved_at, now, st.last_ts)
+def clock_floor(events: list) -> str | None:
+    """The latest `ts` of every parseable event of ANY type in the ledger (rejections and unrelated events included).
+    A clock behind it has moved backwards. Only the clock check reads it; no fold, gate, supersession or APR005 result
+    does, so rejections stay audit-only for state."""
+    stamps = [e["ts"] for e in events if isinstance(e, dict) and fold.parse_ts(e.get("ts")) is not None]
+    return max(stamps) if stamps else None       # one fixed-width UTC format: text order is time order
+
+
+def clock_skew_of(st: ItemState, now: str, floor: str | None = None) -> bool:
+    """`now` earlier than the approval, the item's latest event (`ItemState.last_ts`) or the ledger's clock floor."""
+    return fold.clock_skewed(st.approved_at, now, st.last_ts) or fold.clock_skewed(None, now, floor)
 
 
 def list_items(root: Path, status: str | None = None, now: str | None = None) -> list[View]:
@@ -196,8 +205,9 @@ def list_items(root: Path, status: str | None = None, now: str | None = None) ->
         raise WorkspaceError(f"unknown status {status!r}: use one of {', '.join(rules.STATES)}")
     now = now or models.utc_now()
     files = _scan(root)
-    result = fold.fold_events(ledger.read_events(root), now)
-    views = [_view(i, st, files.get(i), now) for i, st in result.items.items() if st.state is not None]
+    events = ledger.read_events(root)
+    result, floor = fold.fold_events(events, now), clock_floor(events)
+    views = [_view(i, st, files.get(i), now, floor) for i, st in result.items.items() if st.state is not None]
     return [v for v in views if status is None or v.state == status]
 
 
@@ -205,10 +215,11 @@ def show(root: Path, item_id: str, now: str | None = None) -> View:
     """One item with its content; read-only. `Refused(not_found)` when no proposal event names it (an orphan file too)."""
     now = now or models.utc_now()
     files = _scan(root)
-    st = fold.fold_events(ledger.read_events(root), now).items.get(item_id)
+    events = ledger.read_events(root)
+    st = fold.fold_events(events, now).items.get(item_id)
     if st is None or st.state is None:
         raise Refused(rules.NOT_FOUND, f"no approval item {item_id!r} (an item exists only once its approval.proposed event is recorded)")
-    return _view(item_id, st, files.get(item_id), now)
+    return _view(item_id, st, files.get(item_id), now, clock_floor(events))
 
 
 # --- propose -------------------------------------------------------------------------------------------------------------
@@ -257,12 +268,12 @@ def propose(root: Path, *, kind: str, person_url: str | None, job_ref: str | Non
             except manifest.ManifestError as exc:
                 raise Refused(exc.code, f"manifest: {exc}") from None
 
-        broken = ledger.verify_chain(root)
-        if broken:
-            raise Refused(LEDGER_CORRUPT, f"the ledger's hash chain is broken ({broken[0].message}); nothing was proposed. "
-                                          "Restore ledger.jsonl from .careeros/backups or version control")
-        now = models.utc_now()
+        _chain_ok(root, "proposed")
+        now = models.utc_now()          # the one clock read, under the lock
         events = ledger.read_events(root)
+        floor = clock_floor(events)
+        if fold.clock_skewed(None, now, floor):
+            raise Refused(rules.CLOCK_SKEW, _skew_message(floor, "proposed"))
         states = fold.fold_all(events, now)
         files = _scan(root)
         parsed = [f.item for f in files.values() if f.item is not None]
@@ -327,8 +338,7 @@ def propose(root: Path, *, kind: str, person_url: str | None, job_ref: str | Non
 
 # --- decisions, claims and recovery ----------------------------------------------------------------------------------------
 
-JOB_NOT_AWAITING = "job_not_awaiting_approval"
-CHOICES = ("approve", "decline", "skip")
+JOB_NOT_AWAITING = rules.JOB_NOT_AWAITING_APPROVAL
 _NEEDS = {rules.OP_APPROVE: rules.PENDING, rules.OP_DECLINE: rules.PENDING, rules.OP_BEGIN: rules.APPROVED,
           rules.OP_DONE: rules.IN_FLIGHT, rules.OP_RELEASE: rules.IN_FLIGHT}
 
@@ -380,6 +390,12 @@ class _Ctx:
     states: dict[str, ItemState]
     st: ItemState
     file: _File | None
+    floor: str | None
+
+
+def _skew_message(ts: str | None, what: str) -> str:
+    return (f"the system clock is earlier than the latest recorded event ({ts}); nothing was {what}. Fix the clock; "
+            "if that event is future-dated by a wrong clock, restore ledger.jsonl from .careeros/backups")
 
 
 def _chain_ok(root: Path, what: str) -> None:
@@ -399,7 +415,7 @@ def _load(root: Path, item_id: str, now: str, what: str) -> _Ctx:
     st = states.get(item_id)
     if st is None or st.state is None:
         raise Refused(rules.NOT_FOUND, f"no approval item {item_id!r} (an item exists only once its approval.proposed event is recorded)")
-    return _Ctx(events, states, st, _scan(root).get(item_id))
+    return _Ctx(events, states, st, _scan(root).get(item_id), clock_floor(events))
 
 
 def _refuse(root: Path, ctx: _Ctx, item_id: str, operation: str, actor: str, source: str, code: str, message: str):
@@ -419,9 +435,9 @@ def _refuse(root: Path, ctx: _Ctx, item_id: str, operation: str, actor: str, sou
     raise Refused(code, message)
 
 
-def _state_problem(item_id: str, st: ItemState, operation: str, now: str) -> tuple[str, str] | None:
+def _state_problem(item_id: str, st: ItemState, operation: str, now: str, floor: str | None) -> tuple[str, str] | None:
     """The item's history is legal, the table allows `operation` from the effective state, and the clock is not behind
-    the item's approval or latest event (`ItemState.last_ts`)."""
+    the item's approval, its latest event (`ItemState.last_ts`) or the ledger's clock floor (strictly: equal is fine)."""
     state = st.state.value
     if st.errors:
         return rules.WRONG_STATE, f"{item_id} is {state} but its event history is illegal (careeros validate reports APR005)"
@@ -431,9 +447,9 @@ def _state_problem(item_id: str, st: ItemState, operation: str, now: str) -> tup
             return got.code, (f"{item_id} expired at {_expires_at(st)}: an approval lasts {rules.APPROVAL_TTL_HOURS} hours; "
                               "propose it again")
         return got.code, f"{item_id} is {state}, not {_NEEDS[operation]}"
-    if clock_skew_of(st, now):
-        return rules.CLOCK_SKEW, (f"the clock is earlier than {item_id}'s latest recorded event ({st.last_ts}); "
-                                  "check the system clock")
+    if clock_skew_of(st, now, floor):
+        latest = max(t for t in (st.approved_at, st.last_ts, floor) if fold.parse_ts(t) is not None)
+        return rules.CLOCK_SKEW, _skew_message(latest, "recorded")
     return None
 
 
@@ -516,9 +532,9 @@ def _first(*checks) -> tuple[str, str] | None:
     return None
 
 
-def _decidable(root: Path, ctx: _Ctx, item_id: str, now: str) -> tuple[Item, str] | tuple[str, str]:
+def _decidable(root: Path, ctx: _Ctx, item_id: str, now: str, floor: str | None) -> tuple[Item, str]:
     st = ctx.st
-    problem = _first(lambda: _state_problem(item_id, st, rules.OP_APPROVE, now),
+    problem = _first(lambda: _state_problem(item_id, st, rules.OP_APPROVE, now, floor),
                      lambda: _content_problem(item_id, st, ctx.file),
                      lambda: _job_problem(root, st.target_id, ctx.events, require_approved=False)
                      if st.kind == rules.APPLICATION_SUBMIT else None)
@@ -527,22 +543,23 @@ def _decidable(root: Path, ctx: _Ctx, item_id: str, now: str) -> tuple[Item, str
     return ctx.file.item, st.action_hash
 
 
-def _decide(root: Path, item_id: str, confirm, now: str, *, in_queue: bool) -> Decision:
+def _decide(root: Path, item_id: str, confirm, clock, *, in_queue: bool) -> Decision:
     root = Path(root)
     with WorkspaceLock(root):
+        now = (clock or models.utc_now)()       # the one clock read, under the lock
         ctx = _load(root, item_id, now, "decided")
+        floor = ctx.floor
         if in_queue and ctx.st.state.value != rules.PENDING:
             return Decision(item_id, "changed")
-        shown, digest = _decidable(root, ctx, item_id, now)
+        shown, digest = _decidable(root, ctx, item_id, now, floor)
     choice = confirm(render.summary(shown, digest))       # the lock is NOT held while the user decides
     if choice not in ("approve", "decline"):
         return Decision(item_id, "skipped")
     with WorkspaceLock(root):
         ctx = _load(root, item_id, now, "decided")
-        again, digest_again = _decidable(root, ctx, item_id, now)     # re-checked: state, content, job
-        if again != shown or digest_again != digest:
-            _refuse(root, ctx, item_id, "approve", "user", "tty", rules.HASH_MISMATCH,
-                    f"{_expected_rel(item_id)} changed while you were deciding; nothing was recorded")
+        # re-checked: state, content (the hash the proposal recorded, so a draft changed meanwhile is hash_mismatch) and
+        # the job. The phase-1 clock floor is kept: events others appended while the user decided are not clock skew.
+        _decidable(root, ctx, item_id, now, floor)
         st, approve = ctx.st, choice == "approve"
         rel = _expected_rel(item_id)
         verb = "approved" if approve else "declined"
@@ -559,36 +576,40 @@ def _decide(root: Path, item_id: str, confirm, now: str, *, in_queue: bool) -> D
         return Decision(item_id, verb, tuple(events))
 
 
-def decide(root: Path, item_id: str, *, confirm, now: str) -> Decision:
+def decide(root: Path, item_id: str, *, confirm, clock=None) -> Decision:
     """The user decides one pending item. `confirm(text)` gets the escaped display (`render.summary`) and returns
     "approve", "decline" or anything else (skip: nothing is written). As in `approve_job`, the lock is not held while
     the user decides; state, content and (submit) job are re-checked under the lock before writing, and a draft that
     changed in between is `hash_mismatch`. A submit decision appends the paired job-level event in the same batch."""
-    return _decide(root, item_id, confirm, now, in_queue=False)
+    return _decide(root, item_id, confirm, clock, in_queue=False)
 
 
-def queue(root: Path, *, prompt, now: str) -> list[QueueResult]:
-    """Every item pending at the start, in proposal order, each shown in full through `prompt` (see `decide`). An item
-    that left `pending` before its turn is `changed`; a refusal is reported and the queue goes on. Each decision is
-    written when it is made; an interrupted queue (EOF, Ctrl-C) leaves the current and later items pending."""
+def queue(root: Path, *, prompt, clock=None, report=None) -> list[QueueResult]:
+    """Every item pending at the start, in proposal order, each shown in full through `prompt` (see `decide`) and each
+    its own operation (its own clock read and floor). An item that left `pending` before its turn is `changed`; a
+    refusal is reported and the queue goes on. Each decision is written when it is made and passed to `report`; an
+    interrupted queue (EOF, Ctrl-C) leaves the current and later items unchanged."""
     root = Path(root)
     with WorkspaceLock(root):
         ensure_writable(root)
         _chain_ok(root, "decided")
-        pending = [i for i, st in fold.fold_all(ledger.read_events(root), now).items()
+        pending = [i for i, st in fold.fold_all(ledger.read_events(root), (clock or models.utc_now)()).items()
                    if st.state is not None and st.state.value == rules.PENDING]
     results: list[QueueResult] = []
     for item_id in pending:
         try:
-            results.append(QueueResult(item_id, _decide(root, item_id, prompt, now, in_queue=True).outcome))
+            result = QueueResult(item_id, _decide(root, item_id, prompt, clock, in_queue=True).outcome)
         except Refused as exc:
             if exc.code == LEDGER_CORRUPT:
                 raise
-            results.append(QueueResult(item_id, "refused", exc.code, str(exc)))
+            result = QueueResult(item_id, "refused", exc.code, str(exc))
+        results.append(result)
+        if report is not None:
+            report(result)
     return results
 
 
-def begin(root: Path, item_id: str, *, actor: str, now: str) -> Started:
+def begin(root: Path, item_id: str, *, actor: str, clock=None) -> Started:
     """The claim, immediately before acting. Under the lock, in the spec's order: state approved, unexpired, no clock
     skew; the file's action hash equals the proposal's; (submit) every manifest file re-validated and re-hashed; no
     other item of the same kind and target in flight; (invite) no other invite to the person consumed; (submit) no
@@ -596,9 +617,10 @@ def begin(root: Path, item_id: str, *, actor: str, now: str) -> Started:
     `approval.started`. A refusal of an existing item appends a deduped `approval.rejected`."""
     root = Path(root)
     with WorkspaceLock(root):
+        now = (clock or models.utc_now)()       # the one clock read, under the lock
         ctx = _load(root, item_id, now, "started")
         st = ctx.st
-        problem = _first(lambda: _state_problem(item_id, st, rules.OP_BEGIN, now),
+        problem = _first(lambda: _state_problem(item_id, st, rules.OP_BEGIN, now, ctx.floor),
                          lambda: _content_problem(item_id, st, ctx.file),
                          lambda: _manifest_problem(root, ctx.file.item),
                          lambda: _in_flight_problem(item_id, st, ctx.states),
@@ -616,13 +638,14 @@ def begin(root: Path, item_id: str, *, actor: str, now: str) -> Started:
         return Started(item_id, st.kind, st.target_id, rel, st.action_hash, ctx.file.item, event)
 
 
-def done(root: Path, item_id: str, *, actor: str, note: str | None = None, now: str) -> Done:
+def done(root: Path, item_id: str, *, actor: str, note: str | None = None, clock=None) -> Done:
     """`in_flight` -> `consumed`: the action happened. Never touches the job. A refusal appends a deduped rejection."""
     root = Path(root)
     with WorkspaceLock(root):
+        now = (clock or models.utc_now)()       # the one clock read, under the lock
         ctx = _load(root, item_id, now, "recorded")
         st = ctx.st
-        problem = _state_problem(item_id, st, rules.OP_DONE, now)
+        problem = _state_problem(item_id, st, rules.OP_DONE, now, ctx.floor)
         if problem:
             _refuse(root, ctx, item_id, rules.OP_DONE, actor, "cli", *problem)
         (event,) = ledger.append_events(root, [{
@@ -631,16 +654,17 @@ def done(root: Path, item_id: str, *, actor: str, note: str | None = None, now: 
         return Done(item_id, event)
 
 
-def resolve(root: Path, item_id: str, *, sent: bool, now: str) -> Resolved:
+def resolve(root: Path, item_id: str, *, sent: bool, clock=None) -> Resolved:
     """The user's account of an in-flight item (the CLI allows it only in an interactive terminal). `sent`: consumed.
     Not sent: revalidate the content hash, the manifest (submit) and invite uniqueness; all pass -> `approval.released`
     (approved again with its original `approved_at`, or computed `expired` when that has passed); any other failure ->
     `approval.voided` with the reason, so the old approval is never silently reused."""
     root = Path(root)
     with WorkspaceLock(root):
+        now = (clock or models.utc_now)()       # the one clock read, under the lock
         ctx = _load(root, item_id, now, "recorded")
         st = ctx.st
-        problem = _state_problem(item_id, st, rules.OP_DONE, now)
+        problem = _state_problem(item_id, st, rules.OP_DONE, now, ctx.floor)
         if problem:
             _refuse(root, ctx, item_id, "resolve", "user", "tty", *problem)
         base = {"actor": "user", "entity": item_id, "source": "tty", "prev_state": rules.IN_FLIGHT}
@@ -663,13 +687,13 @@ def resolve(root: Path, item_id: str, *, sent: bool, now: str) -> Resolved:
                         _expires_at(st))
 
 
-def refuse_not_interactive(root: Path, item_id: str, *, operation: str, actor: str, now: str) -> None:
+def refuse_not_interactive(root: Path, item_id: str, *, operation: str, actor: str, clock=None) -> None:
     """Record the deduped `approval.rejected` (`not_interactive`) when `item_id` names an existing item; an unknown id,
     a broken chain or a failed write records nothing. Never raises: the caller refuses anyway."""
     root = Path(root)
     try:
         with WorkspaceLock(root):
-            ctx = _load(root, item_id, now, "recorded")
+            ctx = _load(root, item_id, (clock or models.utc_now)(), "recorded")
             _refuse(root, ctx, item_id, operation, actor, "cli", rules.NOT_INTERACTIVE,
                     f"{operation} needs an interactive terminal: the user runs it")
     except (WorkspaceError, OSError):

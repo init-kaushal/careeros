@@ -60,9 +60,11 @@ IN_FLIGHT_CONFLICT = "in_flight_conflict"
 SUBMISSION_UNRESOLVED = "submission_unresolved"
 SUBMISSION_NOT_CONSUMED = "submission_not_consumed"
 NOT_INTERACTIVE = "not_interactive"
+LEDGER_CORRUPT = "ledger_corrupt"                         # the ledger's hash chain is broken: nothing is written
+JOB_NOT_AWAITING_APPROVAL = "job_not_awaiting_approval"   # a submit item's job is not at APPROVAL_REQUIRED (or archived)
 REFUSAL_CODES = (NOT_FOUND, WRONG_STATE, EXPIRED_CODE, CLOCK_SKEW, CONTENT_MISSING, HASH_MISMATCH, MANIFEST_INVALID,
                  MANIFEST_CHANGED, INVITE_CONFLICT, ALREADY_SUBMITTED, IN_FLIGHT_CONFLICT, SUBMISSION_UNRESOLVED,
-                 SUBMISSION_NOT_CONSUMED, NOT_INTERACTIVE)
+                 SUBMISSION_NOT_CONSUMED, NOT_INTERACTIVE, LEDGER_CORRUPT, JOB_NOT_AWAITING_APPROVAL)
 
 # --- validation codes owned by the item parser
 APR001 = "APR001"
