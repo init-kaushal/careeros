@@ -4,6 +4,7 @@ unresolved and, if it has any, at least one is consumed. Set semantics: there is
 from __future__ import annotations
 
 import itertools
+import json
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -319,3 +320,84 @@ def test_interrupted_submission_end_to_end(env, clock):
     assert exc.value.code == rules.SUBMISSION_UNRESOLVED and "careeros approval resolve" in str(exc.value)
     service.resolve(root, got.id, sent=True, clock=clock)
     assert to_applied(root, job).outcome == "changed"
+
+
+# --- the APPLIED gate verifies the hash chain when the job has submit items --------------------------------------
+
+def _forge(root, job_id: str, apr: str) -> None:
+    """Hand-append four events with a zero `prev` (what an agent editing ledger.jsonl would do)."""
+    path = root / ws.LEDGER_REL
+    last = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+    lines = []
+    for n, (etype, entity) in enumerate([(rules.EV_APPROVED, apr), (rules.EV_STARTED, apr), (rules.EV_CONSUMED, apr),
+                                         ("application.approved", job_id)], 1):
+        lines.append(json.dumps({
+            "id": ids.new_id("event"), "seq": last["seq"] + n, "ts": T0, "type": etype, "actor": "agent:forger",
+            "entity": entity, "prev_state": None, "new_state": None, "action": "forged", "reason": None,
+            "approval": "not_required", "artifacts": [], "source": "cli", "prev": "0" * 64,
+        }, sort_keys=True))
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+
+
+def _mark_applied_in_file(job) -> None:
+    frontmatter, body = ws.split_frontmatter(job["path"].read_text(encoding="utf-8"))
+    frontmatter["status"] = "APPLIED"
+    job["path"].write_text(ws.join_frontmatter(frontmatter, body), encoding="utf-8")
+
+
+def test_forged_approval_events_do_not_open_the_gate(env, clock):
+    root, job = env
+    (apr,) = make_items(root, clock, job["id"], ("pending",))
+    _forge(root, job["id"], apr)
+    assert ledger.verify_chain(root)
+    before = (root / ws.LEDGER_REL).read_bytes()
+    with pytest.raises(sm.TransitionError) as exc:
+        to_applied(root, job)
+    assert exc.value.code == "ledger_corrupt"
+    assert ".careeros/backups" in str(exc.value)
+    assert (root / ws.LEDGER_REL).read_bytes() == before            # nothing appended, not even a rejection
+    assert job_status(root, job) == "APPROVAL_REQUIRED"
+
+
+def test_forged_events_are_refused_on_the_repair_path_too(env, clock):
+    root, job = env
+    (apr,) = make_items(root, clock, job["id"], ("pending",))
+    _forge(root, job["id"], apr)
+    _mark_applied_in_file(job)
+    before = (root / ws.LEDGER_REL).read_bytes()
+    with pytest.raises(sm.TransitionError) as exc:
+        to_applied(root, job)
+    assert exc.value.code == "ledger_corrupt"
+    assert (root / ws.LEDGER_REL).read_bytes() == before
+
+
+def test_forced_transition_is_also_chain_checked(env, clock):
+    root, job = env
+    (apr,) = make_items(root, clock, job["id"], ("pending",))
+    _forge(root, job["id"], apr)
+    with pytest.raises(sm.TransitionError) as exc:
+        to_applied(root, job, force=True, reason="applied by email")
+    assert exc.value.code == "ledger_corrupt"
+
+
+def test_job_without_submit_items_gets_no_chain_check(env, clock):
+    root, job = env
+    approve(root, job)
+    path = root / ws.LEDGER_REL
+    with open(path, "a", encoding="utf-8") as handle:                # break the chain: a stray unrelated forged line
+        handle.write(json.dumps({"seq": 999, "prev": "0" * 64, "type": "note.added", "entity": "x"}) + "\n")
+    assert ledger.verify_chain(root)
+    assert to_applied(root, job).outcome == "changed"                # unchanged 0.6.0 behaviour
+
+
+def test_approval_required_message_names_the_item_command_only_with_submit_items(env, clock):
+    root, job = env
+    with pytest.raises(sm.TransitionError) as exc:
+        to_applied(root, job)
+    assert exc.value.code == "approval_required" and "<apr_id>" not in str(exc.value)
+    make_items(root, clock, job["id"], ("pending",))
+    with pytest.raises(sm.TransitionError) as exc:
+        to_applied(root, job)
+    assert exc.value.code == "approval_required"
+    assert "careeros approve <job>" in str(exc.value) and "careeros approve <apr_id>" in str(exc.value)

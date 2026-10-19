@@ -41,7 +41,7 @@ ALEX_VARIANTS = [
 ]
 SAM = "https://www.linkedin.com/in/sam-example"
 KIM = "https://www.linkedin.com/in/kim-example"
-RAW_BAD = ("\x1b", "‮", "​")
+RAW_BAD = ("\x1b", "\u202e", "\u200b")
 
 
 def shift(ts: str, **delta) -> str:
@@ -168,8 +168,9 @@ def test_extended_approvals_end_to_end(tmp_path: Path, monkeypatch: pytest.Monke
     w.now = shift(T0, hours=1)
     _, code = w.run("approval", "begin", sam["id"], "--json", expect=1)
     assert code == "clock_skew" and w.state_of(sam["id"]) == "approved"  # derived at the earlier time; nothing revived
-    w.run("approval", "propose", "--kind", "linkedin_invite", "--person-url", KIM, "--label", "Kim Example",
-          "--content-file", str(root / "draft.txt"), expect=1)           # state changes refuse the skewed clock too
+    _, code = w.run("approval", "propose", "--kind", "linkedin_invite", "--person-url", KIM, "--label", "Kim Example",
+                    "--content-file", str(root / "draft.txt"), expect=1)  # state changes refuse the skewed clock too
+    assert code == "clock_skew"
     w.now = shift(T0, hours=25)
     assert w.state_of(sam["id"]) == "expired"
 
@@ -213,7 +214,7 @@ def test_extended_approvals_end_to_end(tmp_path: Path, monkeypatch: pytest.Monke
     assert code == "submission_not_consumed"
 
     # (e) a draft with terminal escapes, bidi and zero-width characters is shown escaped
-    evil = "Hi \x1b[31mred\x1b[0m ‮ rtl ​ zero\n"
+    evil = "Hi \x1b[31mred\x1b[0m \u202e rtl \u200b zero\n"
     msg2, _ = w.propose("linkedin_message", url=KIM, label="Kim Example", content=evil)
     shown, _ = w.run("approval", "show", msg2["id"], expect=0)
     assert not any(c in shown.output for c in RAW_BAD) and "\\x1b" in shown.output

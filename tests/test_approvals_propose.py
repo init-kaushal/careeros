@@ -320,12 +320,20 @@ def test_variant_cannot_bypass_invite_or_in_flight_rules(ws):
     assert exc.value.code == rules.INVITE_CONFLICT
 
 
+def write_rogue(root, rogue):
+    """A hand-made item file together with its proposal event (an orphan file with no event is not an item)."""
+    (root / "approvals" / f"{rogue.id}.md").write_bytes(item_mod.to_bytes(rogue))
+    fields = fold.proposal_event_fields(rogue.kind, rogue.target.id, f"approvals/{rogue.id}.md", item_mod.action_hash(rogue),
+                                        rogue.target.url)
+    ledger.append_event(root, type=rules.EV_PROPOSED, actor="agent:test", entity=rogue.id, source="cli", **fields)
+
+
 def test_same_url_under_two_person_ids_is_apr006(ws):
     root, _ = ws
     got = P(root)
     parsed, _ = item_mod.parse_bytes((root / got.rel).read_bytes(), got.rel)
     rogue = Item(ids.new_id("approval"), rules.LINKEDIN_MESSAGE, Target(ids.new_id("person"), "linkedin", "x", URL), "2026-10-06T09:00:00Z", "hi")
-    (root / "approvals" / f"{rogue.id}.md").write_bytes(item_mod.to_bytes(rogue))
+    write_rogue(root, rogue)
     assert "APR006" in codes(root)
     assert any("more than one person id" in i.message for i in issues(root, "APR006"))
 
@@ -336,7 +344,7 @@ def test_one_person_id_with_two_urls_is_apr006(ws):
     pid = person_of(root, got)[0]
     rogue = Item(ids.new_id("approval"), rules.LINKEDIN_MESSAGE, Target(pid, "linkedin", "x", "https://www.linkedin.com/in/other"),
                  "2026-10-06T09:00:00Z", "hi")
-    (root / "approvals" / f"{rogue.id}.md").write_bytes(item_mod.to_bytes(rogue))
+    write_rogue(root, rogue)
     assert any("more than one profile URL" in i.message for i in issues(root, "APR006"))
 
 
@@ -384,6 +392,18 @@ def test_crash_between_file_and_event_leaves_an_orphan(ws, monkeypatch):
         service.show(root, orphan.stem, now=NOW)
     assert P(root).id                                    # the next proposal is unaffected
     assert [v.id for v in service.list_items(root, now=NOW)] != []
+
+
+def test_reproposing_after_a_crash_orphan_raises_no_false_apr006(ws, monkeypatch):
+    root, _ = ws
+    monkeypatch.setattr("careeros.core.memory.store.Transaction.rollback", lambda self: None)
+    monkeypatch.setattr(ledger, "append_events", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()))
+    with pytest.raises(KeyboardInterrupt):
+        P(root)
+    monkeypatch.undo()
+    again = P(root)                                      # same URL: a new per_ id, the orphan has no event
+    assert len(issues(root, "APR002")) == 1 and again.id
+    assert issues(root, "APR006") == []
 
 
 # --- list and show ---------------------------------------------------------------------------------------------------------------

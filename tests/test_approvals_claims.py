@@ -419,10 +419,10 @@ def test_queue_skips_items_that_left_pending_before_their_turn(ws):
 
 def test_queue_shows_terminal_escapes_escaped(ws, interactive):
     root, _ = ws
-    a = P(root, content="Hi \x1b[31mred\x1b[0m ‮evil")
+    a = P(root, content="Hi \x1b[31mred\x1b[0m \u202eevil")
     r = cli(root, "approve", input="s\n")
     assert r.exit_code == 0
-    assert "\x1b" not in r.output and "‮" not in r.output
+    assert "\x1b" not in r.output and "\u202e" not in r.output
     assert "\\x1b[31mred" in r.output and "\\u202e" in r.output
     show = cli(root, "approval", "show", a.id)
     assert "\x1b" not in show.output and "\\x1b[31mred" in show.output

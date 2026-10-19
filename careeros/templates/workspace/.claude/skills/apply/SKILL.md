@@ -170,8 +170,8 @@ careeros approval propose --kind application_submit --job example-corp-platform 
 ## STEP 6 — SUBMIT AND LOG
 
 On a recorded approval:
-1. Run `careeros approval begin <id>`. If it exits non-zero, stop and tell the user.
-2. Click Submit / Finish. Everything in the form must be exactly the approved documents and answers; take the answers from `careeros approval show <id> --json` (the `content` field), never from your memory of the draft.
+1. Run `careeros approval begin <id> --json`. If it exits non-zero, stop and tell the user. Its `content` and `manifest` (path and sha256 of each document) were checked under the lock at claim time.
+2. Click Submit / Finish. Everything in the form must be exactly the approved documents and answers; take the answers from the `content` field of the `careeros approval begin <id> --json` output, and the documents from its `manifest`, never from `approval show` or your memory of the draft.
 3. Confirm the submission confirmation page appeared. If you cannot confirm it, do not retry and do not click Submit again: leave the item `in_flight` and ask the user to run `! careeros approval resolve <id> --sent` or `--not-sent`.
 4. Run `careeros approval done <id> --note "confirmation page shown"`.
 5. Only if `careeros approval done` exited 0, run `careeros transition <job> --to APPLIED`. It also updates the job file and `jobs/pipeline.md`. If it refuses, stop and tell the user why; never use `--force` to get past it.

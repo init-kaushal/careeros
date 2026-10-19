@@ -6,8 +6,8 @@ is put back on any exception (`append_events` restores the ledger itself). A pro
 orphan file, which `APR002` reports and nothing treats as actionable. The `approval.proposed` event is written only via
 `fold.proposal_event_fields`, together with one `approval.superseded` per earlier pending or approved item of the same
 kind and target, in one batch. Persons have no records: a person is identified by the canonical profile URL, and the
-`per_` id is allocated for the first proposal of a URL and reused by every later one (any parsed item file counts, even an
-orphan).
+`per_` id is allocated for the first proposal of a URL and reused by every later one. Identity comes from the ledger (the
+URL on the `approval.proposed` event); an orphan file with no proposal event is not an item and does not count.
 
 `decide` and `queue` (the user, interactive), `begin` and `done` (the agent) and `resolve` (the user, interactive)
 change state. Each takes the workspace lock, verifies the hash chain (`ledger_corrupt`, nothing written) and folds the
@@ -777,7 +777,9 @@ def _validate(root: Path, events: list, now: str) -> list[Issue]:
         if st.state is not None and kind == rules.APPLICATION_SUBMIT and target not in jobs:
             issues.append(Issue("error", "APR006", _expected_rel(item_id), f"{item_id} targets {target}, but no job has that id",
                                 "restore the job directory from version control; archive jobs instead of deleting them"))
-    identities = [f.item for f in files.values() if f.item is not None] + [
+    # an orphan file (no proposal event) is not an item: only item files with a proposal event take part
+    identities = [f.item for i, f in files.items() if f.item is not None and i in result.items
+                  and result.items[i].state is not None] + [
         Item(i, st.kind, Target(st.target_id, "x", "x", st.url), "", "") for i, st in result.items.items()
         if st.state is not None and st.url is not None and st.target_id is not None]
     for problem in dict.fromkeys(item_mod.person_identity_problems(identities)):

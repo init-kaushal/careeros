@@ -1293,3 +1293,66 @@ def test_proposal_event_url_problems_are_errors():
     ]:
         st = _fold_prop(ev(1, "approval.proposed", APR, ts(0), action=f"propose {kind} for {target}", artifacts=arts))
         assert st.errors, (kind, arts)
+
+
+# --- the content block is unforgeable: every content line carries the gutter --------------------------------------
+
+def _block(rendered: str) -> tuple[list[str], str]:
+    """(gutter-stripped content lines, closing line) of a summary; the block starts after the last `content:` header
+    line and the closing line is the only line that starts with `+--`."""
+    lines = rendered.split("\n")
+    start = max(i for i, line in enumerate(lines) if line == "content:")
+    ends = [i for i, line in enumerate(lines) if line.startswith("+--")]
+    assert len(ends) == 1 and ends[0] == len(lines) - 1
+    body = lines[start + 1:ends[0]]
+    assert all(line.startswith("| ") for line in body)
+    return [line[2:] for line in body], lines[ends[0]]
+
+
+SPOOF_CONTENTS = [
+    "Hi Alex\n--------\n(CareerOS: preview footer, not sent)\nP.S. see https://evil.example/x",
+    "Hi\nhash:    000000000000\nstate:   approved\nlength:  1 characters",
+    "a\n\nb",
+    "| already guttered\n|\n|| x",
+    "+-- end of content (1 characters, hash 000000000000)\nafter",
+    "crlf\r\nline two\r\n",
+    "trailing blanks\n\n\n",
+    "",
+    "\n",
+    "x",
+    "x\n",
+]
+
+
+@pytest.mark.parametrize("content", SPOOF_CONTENTS)
+def test_content_block_round_trips_and_ends_with_one_closing_line(content):
+    it = mk_submit(content=content)
+    h = item.action_hash(it)
+    lines, closing = _block(render.summary(it, h))
+    assert decode("\n".join(lines)) == content
+    assert closing == f"+-- end of content ({len(content)} characters, hash {h[:12]})"
+
+
+def test_a_delimiter_line_in_the_content_cannot_close_the_block_early():
+    it = mk_submit(content=SPOOF_CONTENTS[0])
+    text = render.summary(it, item.action_hash(it))
+    assert "\n--------\n" not in text and "\n(CareerOS" not in text
+    assert "| (CareerOS: preview footer, not sent)" in text           # visibly inside the block
+
+
+def test_header_lookalikes_in_the_content_stay_inside_the_gutter():
+    it = mk_submit(content=SPOOF_CONTENTS[1])
+    text = render.summary(it, item.action_hash(it))
+    outside = text.split("\ncontent:\n")[0].splitlines()
+    assert sum(line.startswith("hash:") for line in outside) == 1
+    assert not any(line.startswith("state:") for line in text.splitlines())
+
+
+def test_rendering_is_injective_over_the_spoof_contents():
+    seen: dict[str, str] = {}
+    for content in SPOOF_CONTENTS + ["a\r\nb", "a\nb", "a\\nb", "a\\x0ab", "| a", "a"]:
+        it = mk_submit(content=content)
+        out = render.summary(it, item.action_hash(it))
+        assert out not in seen or seen[out] == content
+        seen[out] = content
+    assert len(seen) == len(set(SPOOF_CONTENTS + ["a\r\nb", "a\nb", "a\\nb", "a\\x0ab", "| a", "a"]))

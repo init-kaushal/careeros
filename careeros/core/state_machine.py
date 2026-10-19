@@ -202,6 +202,28 @@ def submission_gate(events: list[dict], job_id: str, now: str) -> tuple[str, str
     return None
 
 
+def _approval_required_message(events: list[dict], job_id: str) -> str:
+    message = "approval required — ask the user to run `careeros approve <job>` themselves"
+    if fold.submission_status(events, job_id, models.utc_now()).total > 0:
+        message += ("; this job has application_submit items, and the user decides each item with "
+                    "`careeros approve <apr_id>`")
+    return message
+
+
+def _require_intact_chain(root: Path, events: list[dict], job_id: str) -> None:
+    """A job with application_submit items reaches APPLIED only on a ledger whose hash chain verifies: the gate trusts
+    approval events, so hand-appended ones must not count. Raises WITHOUT `_reject`: nothing is written to a broken
+    ledger. Jobs without submit items are not checked (unchanged behaviour)."""
+    if fold.submission_status(events, job_id, models.utc_now()).total == 0:
+        return
+    if broken := ledger.verify_chain(root):
+        raise TransitionError(
+            "ledger_corrupt",
+            f"the ledger's hash chain is broken ({broken[0].message}); this job has application submissions, so it "
+            "cannot move to APPLIED and nothing was written. Restore ledger.jsonl from .careeros/backups or "
+            "version control")
+
+
 def _reject(root: Path, job: Job, to_state: State, actor: str, code: str, message: str, events: list[dict]) -> None:
     reason = f"{code}: {message}"
     last = next((e for e in reversed(events) if e.get("entity") == job.id), None)
@@ -268,9 +290,11 @@ def apply_transition(
                 _reject(root, job, to_state, actor, "terminal",
                         f"{current.value} is terminal and cannot be changed", events)
             corrected = True
+        if to_state == State.APPLIED:
+            _require_intact_chain(root, events, job.id)
         if to_state == State.APPLIED and approval_status(events, job.id) != "approved":
             _reject(root, job, to_state, actor, "approval_required",
-                    "approval required — ask the user to run `careeros approve <job>` themselves", events)
+                    _approval_required_message(events, job.id), events)
         if to_state == State.APPLIED and (refusal := submission_gate(events, job.id, models.utc_now())):
             _reject(root, job, to_state, actor, *refusal, events)
         return _write_transition(root, job, to_state, actor=actor, reason=reason, corrected=corrected)
@@ -300,9 +324,11 @@ def _repair(
     if recorded in TERMINAL:
         _reject(root, job, current, actor, "terminal",
                 f"{recorded.value} is terminal and cannot be changed", events)
+    if current == State.APPLIED:
+        _require_intact_chain(root, events, job.id)
     if current == State.APPLIED and approval_status(events, job.id) != "approved":
         _reject(root, job, current, actor, "approval_required",
-                "approval required — ask the user to run `careeros approve <job>` themselves", events)
+                _approval_required_message(events, job.id), events)
     if current == State.APPLIED and (refusal := submission_gate(events, job.id, models.utc_now())):
         _reject(root, job, current, actor, *refusal, events)
     if is_legal(recorded, current):

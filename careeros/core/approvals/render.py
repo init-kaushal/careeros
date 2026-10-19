@@ -4,6 +4,10 @@ Control characters, ANSI escape sequences, line separators, Unicode bidi control
 and every Default_Ignorable_Code_Point (variation selectors included) become visible `\\xNN` / `\\uNNNN` escapes and a
 literal backslash becomes `\\\\`, so the rendering is injective: a typed escape cannot be confused with a rendered one.
 Newlines are kept so a message shows as written.
+
+In `summary` every content line carries the gutter `| `, and the block ends with a `+-- end of content ...` line.
+Content cannot forge that line (or any header line): each of its own lines is gutter-prefixed, so a fake delimiter,
+header or footer stays visibly inside the block. Distinct contents render distinctly (one gutter line per content line).
 """
 
 from __future__ import annotations
@@ -69,6 +73,9 @@ def _header(text: str) -> str:
     return render_content(text).replace("\n", "\\x0a")
 
 
+GUTTER = "| "
+
+
 def summary(item: Item, action_hash: str) -> str:
     """What the user sees before deciding: kind, target, content length, the hash prefix and the exact content."""
     lines = [
@@ -82,5 +89,7 @@ def summary(item: Item, action_hash: str) -> str:
     if item.manifest:
         lines.append("manifest:")
         lines += [f"  {_header(m.path)}  {m.sha256[:12]}" for m in item.manifest]
-    lines += ["content:", "--------", render_content(item.content), "--------"]
+    lines.append("content:")
+    lines += [GUTTER + line for line in render_content(item.content).split("\n")]
+    lines.append(f"+-- end of content ({len(item.content)} characters, hash {hash_prefix(action_hash)})")
     return "\n".join(lines)

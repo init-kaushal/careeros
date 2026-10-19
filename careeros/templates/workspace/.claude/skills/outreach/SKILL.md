@@ -94,14 +94,14 @@ careeros approval propose --kind linkedin_invite --person-url https://www.linked
 ### A5 — Send the invitation
 
 1. Run `careeros approval show <id>`. Continue only if the state is `approved`; otherwise stop.
-2. Run `careeros approval begin <id>`. It claims the approval; if it exits non-zero, stop.
+2. Run `careeros approval begin <id> --json`. It claims the approval; if it exits non-zero, stop. Its output is the only source for the text to send: read the `content` field (the text checked under the lock at claim time).
 3. `tabs_create_mcp` — new tab.
 4. `navigate` to the person's LinkedIn URL.
 5. Wait 3–4 seconds.
 6. Find the "Connect" button. If it shows "Follow" instead, look for "More" → "Connect".
 7. Click Connect.
 8. If a modal appears with "Add a note" — click it.
-9. Paste the approved note using `form_input`. It must be exactly the approved text. Take the text to paste from `careeros approval show <id> --json` (the `content` field), never from your memory of the draft.
+9. Paste the approved note using `form_input`. It must be exactly the approved text. Take the text to paste from the `content` field of the `careeros approval begin <id> --json` output, never from `approval show` (it is not checked at claim time) or your memory of the draft.
 10. Click "Send invitation" / "Send".
 11. Confirm success (button disappears or confirmation message). If you cannot confirm it, do not retry: leave the item `in_flight` and ask the user to run `! careeros approval resolve <id> --sent` or `! careeros approval resolve <id> --not-sent`.
 12. Run `careeros approval done <id> --note "invitation sent"`.

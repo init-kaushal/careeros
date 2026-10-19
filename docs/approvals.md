@@ -50,6 +50,8 @@ CareerOS has no person records. A person is identified by the canonical LinkedIn
 
 Two assumptions sit behind this: LinkedIn slugs are case-insensitive, and NFKC-equivalent spellings are the same profile. If either is wrong for a profile, two spellings would count as two people.
 
+Two further assumptions: one person reachable through a member-id URL (`/in/ACoAA...`) and through a vanity slug, or whose slug was renamed, counts as two people, so a second invite to them is allowed. Member ids are case-sensitive on LinkedIn but are lower-cased here, so two member ids that differ only in case would count as one person.
+
 For an application, the target is the job (`job_` id), which must exist.
 
 ## Lifecycle
@@ -96,13 +98,15 @@ Every operation that changes state (`propose`, `approve`, `begin`, `done`, `reso
 |---|---|---|
 | `careeros approval propose --kind K (--person-url URL \| --job REF) [--label L] --content-file F [--manifest M]...` | agent | validates the target and manifest, writes `approvals/<id>.md`, then appends `approval.proposed` (and `approval.superseded` for each replaced item) in one batch |
 | `careeros approval list [--status S] [--json]` | anyone | the items with their derived state; changes nothing |
-| `careeros approval show <id> [--json]` | anyone | the exact content (control characters, ANSI escapes and bidi overrides are shown as visible escapes), its length, the first 12 hex characters of the action hash and the state; changes nothing |
+| `careeros approval show <id> [--json]` | anyone | the exact content (control characters, ANSI escapes, bidi overrides, zero-width and other invisible characters are shown as visible escapes), its length, the first 12 hex characters of the action hash and the state; changes nothing |
 | `careeros approve` | you | the queue: every pending item is shown in full with approve / decline / skip |
 | `careeros approve <apr_id>` | you | decide one item |
 | `careeros approve <job>` | you | the original job-level approval, unchanged |
-| `careeros approval begin <id>` | agent | claims an approved item immediately before acting (`approval.started`) |
+| `careeros approval begin <id>` | agent | claims an approved item immediately before acting (`approval.started`). With `--json` it returns the `content` and the `manifest` that were checked under the lock at claim time: the agent sends that text, not the output of `show` (which is unlocked and runs after the claim) |
 | `careeros approval done <id> [--note T]` | agent | records that the claimed action happened (`approval.consumed`); never changes the job |
 | `careeros approval resolve <id> --sent \| --not-sent` | you | records your account of an `in_flight` item |
+
+On screen (`show`, the `approve` queue), the content is a block: every content line is prefixed with the gutter `| `, and the block ends with `+-- end of content (N characters, hash xxxxxxxxxxxx)`. Content cannot forge that closing line or a header line, because each of its own lines carries the gutter; a line of dashes or `hash:` inside the content stays visibly inside the block.
 
 `approve` and `resolve` need an interactive terminal; in Claude Code type `! careeros approve`. A non-interactive run is refused (`not_interactive`), and a closed stdin or stdout counts as non-interactive. For an `application_submit` item, your approval also records the job-level approval, in the same batch.
 
@@ -136,6 +140,16 @@ Stable codes used by `approval.rejected` reasons and command output.
 
 A refusal of an existing item appends an audit-only, deduped `approval.rejected`. A refusal of an id that names no item appends nothing.
 
+### Problem codes in list and show
+
+`approval list` and `approval show` (text and `--json`) report why an item is not usable in `problems`. Besides the refusal codes `content_missing`, `hash_mismatch` and `clock_skew`, three codes exist only here:
+
+| Code | Meaning |
+|---|---|
+| `item_invalid` | the item file cannot be parsed as an approval item |
+| `event_mismatch` | the proposal event and the item file disagree (the file path, kind, target or profile URL) |
+| `sequence_error` | the item's `approval.*` events break the lifecycle, or an unknown `approval.*` event type names it |
+
 ### Audit-only rejections
 
 `approval.rejected` (and the job-level `job.transition_rejected`) never change a state. The fold, `approved_at`, supersession, every conflict check, the `APPLIED` gate and the `APR005` sequence check ignore them. Only the deduplication reads them, to skip an identical repeat. Like any event they can raise the clock floor, which fails closed.
@@ -144,6 +158,8 @@ A refusal of an existing item appends an audit-only, deduped `approval.rejected`
 
 A job with no `application_submit` item behaves exactly as before: `APPLIED` needs `careeros approve <job>` and nothing else. Once a job has any `application_submit` item, `careeros transition <job> --to APPLIED` also requires that **no submit item for the job is unresolved and at least one is `consumed`**. There is no notion of a "latest" item: an unresolved item blocks the transition whichever is newest, and a consumed item never lets an unresolved sibling through.
 
+- Refusal order: a job with a pending submit item and no job-level approval is refused `approval_required` first (the message says that the user decides a submit item with `careeros approve <apr_id>`), then `submission_unresolved`.
+- The gate trusts approval events, so for a job that has submit items it first verifies the ledger's hash chain, on both the normal path and the repair path, and with `--force`. A broken chain is `ledger_corrupt`: nothing is appended (not even a rejection), and the message says to restore `ledger.jsonl` from `.careeros/backups`. Jobs without submit items are not checked.
 - `submission_unresolved` names each unresolved item and its state, and for an `in_flight` item points at `careeros approval resolve`. It takes precedence.
 - `submission_not_consumed` means only declined, expired, superseded or voided items exist.
 
