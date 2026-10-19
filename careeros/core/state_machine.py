@@ -9,7 +9,6 @@ from pathlib import Path
 
 from careeros.core import ledger, models
 from careeros.core.approvals import fold, rules
-from careeros.core.approvals.service import clock_floor, clock_skew_of
 from careeros.core.models import Job, State
 from careeros.core.workspace import (
     RECOVERY_REL,
@@ -175,30 +174,31 @@ def _restore(root: Path, originals: dict[Path, bytes], written: list[Path], job_
         raise first_failure
 
 
+SKEW_HINT = ("the system clock is earlier than the latest recorded event; fix the clock. If that event is future-dated "
+             "by a wrong clock, restore ledger.jsonl from .careeros/backups")
+
+
 def submission_gate(events: list[dict], job_id: str, now: str) -> tuple[str, str] | None:
     """(code, message) when application_submit items forbid APPLIED, else None (no submit item: no change). Set
-    semantics over the folded items. An approved item past its 24 h is resolved, unless `now` is behind the ledger's
-    clock floor or the item's own events: then it stays unresolved, so a backward clock cannot let APPLIED through."""
-    floor = clock_floor(events)
-    submits = [(i, st) for i, st in fold.fold_all(events, now).items()
-               if st.state is not None and st.kind == rules.APPLICATION_SUBMIT and st.target_id == job_id]
-    unresolved = [(i, "approved" if st.state.value == rules.EXPIRED and clock_skew_of(st, now, floor) else st.state.value)
-                  for i, st in submits
-                  if st.state.value in rules.UNRESOLVED_STATES
-                  or (st.state.value == rules.EXPIRED and clock_skew_of(st, now, floor))]
-    status = fold.SubmissionStatus(
-        consumed=tuple(i for i, st in submits if st.state.value == rules.CONSUMED),
-        unresolved=tuple(unresolved), total=len(submits))
+    semantics, classified by `fold.submission_status`; a backward clock keeps an expired approval unresolved. A forced
+    transition is gated too, by design: a user who applied outside CareerOS must first settle the items."""
+    status = fold.submission_status(events, job_id, now, guard_clock=True)
     code = fold.submission_refusal(status)
     if code == rules.SUBMISSION_UNRESOLVED:
-        listed = ", ".join(f"{i} ({s})" for i, s in unresolved)
+        listed = ", ".join(f"{i} ({s.value}{'; the clock is behind the latest ledger event' if i in status.skewed else ''})"
+                           for i, s in status.unresolved)
         message = f"unresolved application submissions for this job: {listed}"
-        if any(s == rules.IN_FLIGHT for _, s in unresolved):
+        if any(s is fold.State.IN_FLIGHT for _, s in status.unresolved):
             message += ("; an in_flight item means the external action was interrupted, and only the user settles it "
                         "with `careeros approval resolve <item>`")
+        if status.skewed:
+            message += f"; {SKEW_HINT}"
         return code, message
     if code == rules.SUBMISSION_NOT_CONSUMED:
-        return code, "no application submission for this job was consumed; the submission must be done before APPLIED"
+        listed = ", ".join(f"{i} ({s.value})" for i, s in status.resolved)
+        return code, (f"no submission has completed for this job ({listed}); propose an application_submit with "
+                      "`careeros approval propose` and complete it: the user runs `careeros approve`, then "
+                      "`approval begin`, submit, `approval done`")
     return None
 
 

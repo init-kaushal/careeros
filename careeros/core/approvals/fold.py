@@ -52,6 +52,8 @@ class SubmissionStatus:
     consumed: tuple[str, ...]
     unresolved: tuple[tuple[str, State], ...]
     total: int = 0          # submit items for the job in any state; 0 means the job behaves as before approvals existed
+    resolved: tuple[tuple[str, State], ...] = ()   # the submit items that are neither unresolved nor consumed
+    skewed: tuple[str, ...] = ()   # unresolved items counted only because the clock is behind (see `submission_status`)
 
 
 # --- time ----------------------------------------------------------------------------------------------------------
@@ -248,14 +250,44 @@ def live_items(events: Iterable[object], kind: str, target_id: str, now: str) ->
 
 # --- the APPLIED rule (set semantics: there is no "latest" item) --------------------------------------------------------
 
-def submission_status(events: Iterable[object], job_id: str, now: str) -> SubmissionStatus:
-    submits = [(item_id, st) for item_id, st in fold_all(events, now).items()
-               if st.state is not None and st.kind == rules.APPLICATION_SUBMIT and st.target_id == job_id]
-    return SubmissionStatus(
-        consumed=tuple(i for i, st in submits if st.state is State.CONSUMED),
-        unresolved=tuple((i, st.state) for i, st in submits if st.state.value in rules.UNRESOLVED_STATES),
-        total=len(submits),
-    )
+def clock_floor(events: Iterable[object]) -> str | None:
+    """The latest `ts` of every parseable event of ANY type in the ledger (rejections and unrelated events included).
+    A clock behind it has moved backwards. Only the clock check reads it; no fold, gate, supersession or APR005 result
+    does, so rejections stay audit-only for state."""
+    stamps = [e["ts"] for e in events if isinstance(e, dict) and parse_ts(e.get("ts")) is not None]
+    return max(stamps) if stamps else None       # one fixed-width UTC format: text order is time order
+
+
+def clock_skew_of(st: ItemState, now: str, floor: str | None = None) -> bool:
+    """`now` earlier than the approval, the item's latest event (`ItemState.last_ts`) or the ledger's clock floor."""
+    return clock_skewed(st.approved_at, now, st.last_ts) or clock_skewed(None, now, floor)
+
+
+def submission_status(events: Iterable[object], job_id: str, now: str, *, guard_clock: bool = False) -> SubmissionStatus:
+    """The classification the APPLIED gate uses. With `guard_clock`, an item that is `expired` while `now` is behind the
+    ledger's clock floor or the item's own events is counted as unresolved (`approved`, and listed in `skewed`): a
+    backward clock then cannot let a job through."""
+    events = list(events)
+    floor = clock_floor(events) if guard_clock else None
+    consumed: list[str] = []
+    unresolved: list[tuple[str, State]] = []
+    resolved: list[tuple[str, State]] = []
+    skewed: list[str] = []
+    total = 0
+    for item_id, st in fold_all(events, now).items():
+        if st.state is None or st.kind != rules.APPLICATION_SUBMIT or st.target_id != job_id:
+            continue
+        total += 1
+        if st.state is State.CONSUMED:
+            consumed.append(item_id)
+        elif st.state.value in rules.UNRESOLVED_STATES:
+            unresolved.append((item_id, st.state))
+        elif guard_clock and st.state is State.EXPIRED and clock_skew_of(st, now, floor):
+            unresolved.append((item_id, State.APPROVED))
+            skewed.append(item_id)
+        else:
+            resolved.append((item_id, st.state))
+    return SubmissionStatus(tuple(consumed), tuple(unresolved), total, tuple(resolved), tuple(skewed))
 
 
 def submission_refusal(status: SubmissionStatus) -> str | None:

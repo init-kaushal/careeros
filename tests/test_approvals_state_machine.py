@@ -4,6 +4,8 @@ unresolved and, if it has any, at least one is consumed. Set semantics: there is
 from __future__ import annotations
 
 import itertools
+import subprocess
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -131,6 +133,10 @@ def test_other_kinds_and_other_jobs_do_not_count(env, clock):
     apr = ids.new_id("approval")
     extra = fold.proposal_event_fields(rules.LINKEDIN_INVITE, "per_x", "approvals/x.md", "0" * 64, "https://www.linkedin.com/in/alex-example")
     ledger.append_event(root, type=rules.EV_PROPOSED, actor="agent:test", entity=apr, source="cli", action=extra.pop("action"), **extra)
+    # a pending invite whose target id is the JOB id: only the kind filter keeps it out of the submit classification
+    apr2 = ids.new_id("approval")
+    extra = fold.proposal_event_fields(rules.LINKEDIN_INVITE, job["id"], "approvals/y.md", "0" * 64, "https://www.linkedin.com/in/sam-example")
+    ledger.append_event(root, type=rules.EV_PROPOSED, actor="agent:test", entity=apr2, source="cli", action=extra.pop("action"), **extra)
     approve(root, job)
     assert to_applied(root, job).outcome == "changed"
 
@@ -154,6 +160,29 @@ def test_message_for_pending_only_has_no_resolve_hint(env, clock):
     with pytest.raises(sm.TransitionError) as exc:
         to_applied(root, job)
     assert pending in str(exc.value) and "approval resolve" not in str(exc.value)
+
+
+def test_not_consumed_message_lists_items_and_the_way_forward(env, clock):
+    root, job = env
+    (declined,) = make_items(root, clock, job["id"], ("declined",))
+    approve(root, job)
+    with pytest.raises(sm.TransitionError) as exc:
+        to_applied(root, job)
+    msg = str(exc.value)
+    assert f"{declined} (declined)" in msg and "careeros approval propose" in msg and "approval done" in msg
+
+
+@pytest.mark.parametrize("first", ["state_machine", "approvals.service", "approvals.fold", "cli.main"])
+def test_import_order(first):
+    code = (f"import importlib; importlib.import_module('careeros.core.{first}' if not '{first}'.startswith('cli') "
+            f"else 'careeros.{first}'); import careeros.core.state_machine, careeros.core.approvals.service, careeros.cli.main")
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_state_machine_does_not_import_the_service():
+    code = "import sys, careeros.core.state_machine; sys.exit('careeros.core.approvals.service' in sys.modules)"
+    assert subprocess.run([sys.executable, "-c", code], capture_output=True, timeout=60).returncode == 0
 
 
 def test_rejection_is_recorded_and_deduped(env, clock):
@@ -239,6 +268,8 @@ def test_backward_clock_keeps_an_expired_approval_unresolved(env, clock):
     with pytest.raises(sm.TransitionError) as exc:
         to_applied(root, job)
     assert exc.value.code == rules.SUBMISSION_UNRESOLVED and apr in str(exc.value)
+    assert f"{apr} (approved; the clock is behind the latest ledger event)" in str(exc.value)
+    assert "restore ledger.jsonl from .careeros/backups" in str(exc.value) and "fix the clock" in str(exc.value)
     clock.now = shift(T0, hours=31)                                # a sane clock: expired, so resolved, but not consumed
     with pytest.raises(sm.TransitionError) as exc:
         to_applied(root, job)

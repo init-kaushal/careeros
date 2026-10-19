@@ -186,17 +186,7 @@ def _view(item_id: str, st: ItemState, file: _File | None, now: str, floor: str 
                 file.item if file else None)
 
 
-def clock_floor(events: list) -> str | None:
-    """The latest `ts` of every parseable event of ANY type in the ledger (rejections and unrelated events included).
-    A clock behind it has moved backwards. Only the clock check reads it; no fold, gate, supersession or APR005 result
-    does, so rejections stay audit-only for state."""
-    stamps = [e["ts"] for e in events if isinstance(e, dict) and fold.parse_ts(e.get("ts")) is not None]
-    return max(stamps) if stamps else None       # one fixed-width UTC format: text order is time order
-
-
-def clock_skew_of(st: ItemState, now: str, floor: str | None = None) -> bool:
-    """`now` earlier than the approval, the item's latest event (`ItemState.last_ts`) or the ledger's clock floor."""
-    return fold.clock_skewed(st.approved_at, now, st.last_ts) or fold.clock_skewed(None, now, floor)
+clock_floor, clock_skew_of = fold.clock_floor, fold.clock_skew_of     # kept here for the callers that import them from the service
 
 
 def list_items(root: Path, status: str | None = None, now: str | None = None) -> list[View]:
@@ -509,7 +499,7 @@ def _submitted_problem(item_id: str, st: ItemState, states: dict[str, ItemState]
 def _job_problem(root: Path, job_id: str, events: list, *, require_approved: bool) -> tuple[str, str] | None:
     """A submit item is decided and claimed only while its job awaits approval (the same check as `approve_job`); the
     claim also needs the job-level approval, so a sent submission is one `transition … APPLIED` can accept."""
-    from careeros.core.state_machine import approval_status     # lazy: the state machine may come to import approvals
+    from careeros.core.state_machine import approval_status     # lazy: the state machine imports approvals.fold, and keeping this import out of module load avoids any cycle
 
     try:
         job = resolve_job(root, job_id)
