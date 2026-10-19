@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.0 — Approvals
+
+### Added
+
+- `careeros approval propose | list | show | begin | done | resolve`: LinkedIn invitations, LinkedIn messages and the application Submit are recorded as exact, content-bound, single-use items (`approvals/<apr_id>.md` plus `approval.*` ledger events). Items expire 24 hours after approval; an interrupted action stays `in_flight` until you `resolve` it. Exit 0 ok, 1 refused, 2 usage or non-interactive.
+- `careeros approve` now also decides one item (`careeros approve <apr_id>`) or the whole queue of pending items (no argument). `careeros approve <job>` works as before.
+- `careeros validate` reports `APR001`-`APR008` and `APR100`; the type prefix `approval.*` is reserved and `apr_` ids are accepted in the ledger.
+- `docs/approvals.md`.
+
+### Changed
+
+- A job that has an `application_submit` item reaches `APPLIED` only when no submit item is unresolved and at least one is consumed (`submission_unresolved`, `submission_not_consumed`). A job with no such item behaves as before.
+- Upgrading: run `careeros upgrade` to receive the updated skills. Skills: outreach, follow-up and apply now use recorded approvals: they propose the exact text, wait for your `careeros approve`, then `begin`, send and `done`. This is not a security boundary; see `docs/approvals.md` for the limits.
+
 ## 0.6.0 — Structured compensation
 
 ### Added

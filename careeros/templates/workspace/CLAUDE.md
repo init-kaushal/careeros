@@ -75,6 +75,7 @@ jobs/
       resume.md          — tailored resume for this job, generated from resume.md (from prep)
       interview-prep.md — question bank, STAR stories, company refresher
       offer.md          — offer details + negotiation notes
+approvals/              — proposed outward messages and submissions, one file each (decided by the user with `careeros approve`)
 activity.md             — append-only action log (source of truth for follow-up cadence)
 career/                 — your career memory: one file per fact, each with its source and status (claimed, confirmed, verified)
 ```

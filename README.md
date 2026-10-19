@@ -64,6 +64,7 @@ jobs/
       prep.md           — tailoring brief (keywords, bullets)
       interview-prep.md — question bank + STAR stories
       offer.md          — offer details + negotiation notes
+approvals/              — proposed outward messages and submissions, one file each (see Approvals)
 activity.md             — append-only action log
 career/                 — your career memory: one file per fact, with its source and status
 CLAUDE.md / AGENTS.md   — agent entry point (framework-owned)
@@ -116,6 +117,16 @@ careeros comp <job>          # validate it and show the derivation
 ```
 
 Each saved job can carry a `compensation.md` of dated pay observations (`posted`, `recruiter` or `estimate`, each with its source, confidence and, for `posted`, a verbatim quote) and recorded currency conversions. `careeros comp` validates it and derives one effective range against your `## Markets` floor; `careeros evaluate` reads that as the only source of pay for its compensation cap. The `browse` skill records pay as it saves a job. Evaluations written by 0.5.0 read as stale once and need an explicit re-evaluation, which the `evaluate` skill guides. Run `careeros upgrade` to receive the updated skills. See `docs/compensation.md`.
+
+## Approvals
+
+```bash
+careeros approval propose --kind linkedin_invite --person-url <url> --label "<name>" --content-file <file>   # the agent
+careeros approve        # you, in a terminal: review every pending item, then approve, decline or skip
+careeros approval begin <id>  /  careeros approval done <id>   # the agent, around the action
+```
+
+LinkedIn invitations, LinkedIn messages and the final application Submit each need a recorded decision. The agent proposes the exact text (or the final documents and answers); only you can approve it, in an interactive terminal, seeing the exact content. The approval is bound to a hash of that content, single use, and expires after 24 hours. After an uncertain outcome the item stays `in_flight` and you settle it with `careeros approval resolve`. A job with a submission item can reach `APPLIED` only when none is unresolved and one is consumed. The `outreach`, `follow-up` and `apply` skills use it. This is not a security boundary: it records and checks, it does not confine the agent. See `docs/approvals.md`.
 
 ## Requirements
 
