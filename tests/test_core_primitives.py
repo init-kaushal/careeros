@@ -9,12 +9,13 @@ from careeros.core import ids, models, versions
 from careeros.core.models import State
 
 
-def test_prefix_table_has_28_unique_three_letter_prefixes() -> None:
-    assert len(ids.PREFIXES) == 28
-    assert len(set(ids.PREFIXES.values())) == 28
+def test_prefix_table_has_29_unique_three_letter_prefixes() -> None:
+    assert len(ids.PREFIXES) == 29
+    assert len(set(ids.PREFIXES.values())) == 29
     assert all(len(p) == 3 and p.isalpha() and p.islower() for p in ids.PREFIXES.values())
     assert ids.PREFIXES["job"] == "job"
     assert ids.PREFIXES["event"] == "evt"
+    assert ids.PREFIXES["target"] == "tgt"
 
 
 def test_new_id_shape_and_validity() -> None:

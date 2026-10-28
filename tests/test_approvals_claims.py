@@ -1428,3 +1428,19 @@ def test_race_decision_phase_2_against_propose(tmp_path):
         assert propose_code == 0, res                    # a newer proposal supersedes a pending or an approved item
         assert decide_code in (0, 1)
         assert not apr005(root), res
+
+
+def test_consumed_at_is_set_by_done_and_by_resolve_sent_and_by_nothing_else(ws):
+    root, _ = ws
+    first, second, third = P(root), P(root, url=URL2), P(root, url=URL3)
+    for got in (first, second, third):
+        decide(root, got.id)
+    begin(root, first.id), begin(root, second.id)
+    assert folded(root, first.id).consumed_at is None and folded(root, second.id).consumed_at is None   # in flight
+    done(root, first.id)
+    service.resolve(root, second.id, sent=True, clock=at(NOW))
+    for got in (first, second):
+        (consumed,) = [e for e in item_events(root, got.id) if e["type"] == rules.EV_CONSUMED]
+        st = folded(root, got.id)
+        assert st.consumed_at == consumed["ts"] and st.consumed_at == st.last_ts
+    assert folded(root, third.id).consumed_at is None                                                     # approved only

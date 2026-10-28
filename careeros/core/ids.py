@@ -37,6 +37,7 @@ PREFIXES: dict[str, str] = {
     "event": "evt",
     "gap": "gap",
     "approval": "apr",
+    "target": "tgt",
 }
 
 _BODY = "[0-9a-hjkmnp-tv-z]{10}"
