@@ -13,7 +13,7 @@ This sub-project gives CareerOS one reliable answer to "who have I contacted, wh
 
 - agent-written, validated **person records** and **target-company records**;
 - a small set of reserved **`outreach.*` ledger events** for outcomes and target decisions;
-- **state derived deterministically** from those events plus the approval events, never stored in a file;
+- **state derived deterministically** from those events plus the approval events and a small set of validated record fields (§6.0), never stored in a file;
 - read-only **`careeros outreach` commands** for the queue, the cap, the next contacts and warm contacts, used by the `outreach`, `follow-up` and `browse` skills and by a new `targets` skill;
 - the **weekly invite cap enforced where sending happens** (`approval begin`).
 
@@ -21,7 +21,7 @@ This sub-project gives CareerOS one reliable answer to "who have I contacted, wh
 
 1. **Scope:** one spec, two slices: the state layer (people, outcomes, queue, cap) and the target-company list with pre-opening outreach built on it.
 2. **Contacts:** a person record per person (`people/<per_id>.md`); state is derived from the ledger and never stored in the record.
-3. **Architecture:** records + event-derived state (the approvals pattern). No code-owned status fields, so no tamper or stale layer.
+3. **Architecture:** records + event-derived state (the approvals pattern). No code-owned status fields, so no tamper or stale layer. Safety-relevant facts (person identity, what was sent, the cap, closed people) come only from the ledger; descriptive record fields (§6.0) are editable source data, validated but not audited.
 4. **Outcome events** (`accepted`, `replied`, `closed`) may be recorded by the agent: they are facts reported by the user or observed, they only affect follow-up timing, and they are not outward actions.
 5. **Cap:** enforced at `approval begin`, with one pure function shared with `careeros outreach cap`.
 6. **Prose logs** (`activity.md`) stay as a readable log the skills append to, but nothing parses them for state.
@@ -60,7 +60,7 @@ Notes (ignored by code).
 ```
 
 - `id` and `url` are **immutable and identity-bearing**. The other fields can be edited; `validate` checks their shape.
-- The record carries **no state**.
+- The record carries **no state**. `found_in`, `role`, `company_slug` and `market` are **editable source data** (see §6.0): they are validated (`OUT001`, `OUT006`) but a hand edit does not append an event. `person link` edits only the record file (atomically) and is a convenience for that edit.
 - IDs are allocated from the canonical profile URL exactly as approvals do (`item.canonical_profile_url`), and **reused** for the same URL. `outreach person add` writes the file, then appends `outreach.person_added` carrying the URL; the **identity map is the union of `approval.proposed` url elements and `outreach.person_added` events**, so a person added here and later proposed for an invite (or the reverse) gets one `per_` ID. Identity stays ledger-authoritative; files are a cross-check.
 - `company_slug` is `slugify(company)`: lowercase, hyphenated, ASCII letters and digits. It is the join key with targets and with jobs (`slugify(job.company)`).
 
@@ -94,9 +94,18 @@ Notes.
 | `outreach.accepted` / `outreach.replied` / `outreach.closed` | `per_` | `record` | outcome; `source` is `user`, `observed` or `email`, plus an optional note; `closed` carries a reason (`no_response`, `declined`, `not_a_fit`, `other`) |
 | `outreach.rejected` | `per_` / `tgt_` | any refused command on an existing entity | audit only; needs a reason; deduped like `approval.rejected`; never changes any state |
 
-All outcome and decision events are **facts reported to CareerOS**, not verified against LinkedIn. Unknown `outreach.*` types are errors (`OUT005`).
+All outcome and decision events are **facts reported to CareerOS**, not verified against LinkedIn. Each outcome kind is recorded **at most once per person** (`accepted`, `replied`, `closed`); a repeat is refused `wrong_state`, so the derived `*_at` timestamps are unambiguous. Unknown `outreach.*` types are errors (`OUT005`).
 
 ## 6. Derived state (pure fold; takes `now`; nothing stored)
+
+### 6.0 What each result is derived from
+
+| Result | Inputs |
+|---|---|
+| identity (`per_` id for a URL), what was sent, invite/message items and their states, the cap count, `closed`, outcome flags | **ledger events only** (approval events, `outreach.*` events) |
+| target status, `next`, `warm`, queue exclusions for pre-opening contacts | ledger events **plus validated record fields**: `found_in`, `role`, `company_slug`, `market` on people and `fit`, `sponsorship`, `slug` on targets, and the saved jobs' company |
+
+So a hand edit of `found_in` or `role` can change which target looks contacted or who qualifies for `next`, but it can never change identity, what was sent, the cap, or whether a person is closed. This is deliberate: relationships and descriptive facts are source data, not audited status. `validate` checks them (`OUT001`, `OUT006`).
 
 ### 6.1 Rules (a versioned rules module; changing any constant is a rules version bump)
 
@@ -106,9 +115,9 @@ All outcome and decision events are **facts reported to CareerOS**, not verified
 
 Flags are folded from the person's events (outreach events and the approval events of their `linkedin_invite` / `linkedin_message` items, matched through the ledger-recorded person ID):
 
-- `invited_at`: `ts` of the first `approval.consumed` of a `linkedin_invite`;
+- `invited_at`: `ts` of the **earliest** `approval.consumed` of a `linkedin_invite` (approvals allow at most one consumed invite per person; a second one in a hand-crafted ledger is `OUT005`, and `invited_at` stays the earliest);
 - `messaged_at`: `ts` of the latest consumed `linkedin_message`;
-- `accepted_at`, `replied_at`, `closed_at` from the outcome events;
+- `accepted_at`, `replied_at`, `closed_at` from the single outcome event of each kind (§5);
 - `invite_in_flight`: an invite item is `in_flight`.
 
 Label (first match): `closed`, `replied`, `connected` (accepted), `messaged`, `invited`, `discovered` (record only).
@@ -125,15 +134,29 @@ Outcome transitions: `accepted` needs `invited_at` and no `accepted_at`/`closed_
 
 ### 6.4 Weekly cap (`outreach cap`)
 
-`count` = invite items consumed or `in_flight` with `ts` in the rolling window (`now < ts + 7 days`). `cap` = `## Outreach → Weekly invite cap: N` in `profile.md` (above the fold), else 15. `remaining = max(0, cap - count)`. The output also gives the date the oldest counted invite leaves the window. One pure function computes this for `outreach cap` and for `approval begin`.
+`count` = (a) **every invite item currently `in_flight`, whatever its age** (an invite whose outcome is unknown may have been sent; only an explicit `resolve` removes it from the count) **plus** (b) invite items `consumed` whose `approval.consumed` event `ts` is inside the rolling window (`now < ts + 7 days`). An invite item is in exactly one state at a time, so the same invite never counts twice: when `in_flight` becomes `consumed` it moves from (a) to (b) using the `approval.consumed` timestamp (the `approval.started` timestamp is never used). `released`, `voided`, `expired`, `declined` and `superseded` items do not count.
+
+`cap` comes from `profile.md`, above the fold, under a heading `## Outreach`, from exactly one line `Weekly invite cap: N` (a leading list marker and bold markup are allowed). **Absent** (no heading, or the heading without the line) means 15. **Present but invalid** (not a whole number from 0 to 1000, more than one such line, or an unparseable value) is a configuration error: `outreach cap`, `outreach next` and `approval begin` for an invite refuse with `cap_config_invalid` and say what is wrong, and `validate` reports `OUT007` (error). A typo never silently changes enforcement. `0` is valid and blocks all invites.
+
+`remaining = max(0, cap - count)`. The output also gives the date the oldest counted *consumed* invite leaves the window (`in_flight` invites have none: they leave the count only when resolved). One pure function computes this for `outreach cap` and for `approval begin`. All computations use one clock read and the ledger clock floor.
 
 ### 6.5 Target status
 
-`candidate` (added), `approved` / `dropped` (decision events; `dropped` is terminal), then derived: `contacted` if any person with `found_in` this target has `invited_at`, `warm` if any is `connected` or `replied`, `opening-seen` if a saved job has `slugify(company) == slug`. Stale: no event and no evidence `read_on` newer than 60 days.
+Decisions (events): `candidate` (added), `approved`, `dropped`. Legal transitions: `candidate -> approved`, `candidate -> dropped`, `approved -> dropped`. Anything else is refused `wrong_state`: approving an approved or dropped target, dropping a dropped target, approving after a drop. **`dropped` is terminal in this version** (a dropped slug cannot be re-added: `duplicate`); revisiting a dropped company is out of scope and noted as a limit.
+
+Displayed status, first match wins:
+1. `dropped`;
+2. `warm`: a person linked to this target (`found_in`) is `connected` or `replied`;
+3. `contacted`: a linked person has `invited_at`;
+4. `opening-seen`: a saved job has `slugify(company) == slug`;
+5. `approved`;
+6. `candidate`.
+
+**Stale** (a flag, not a status): `now - last_activity > 60 days` (strict), where `last_activity` is the latest of: the target's `target_added` / `target_approved` event `ts`; the `ts` of `person_added`, `approval.consumed`, `outreach.accepted` and `outreach.replied` events of its linked people; and each evidence `read_on` date (as 00:00 UTC). `dropped` targets are never stale. A stale target is **flagged in every output and remains eligible** for `next`; the `targets` skill must refresh its evidence (update `read_on`) before drafting to its contacts.
 
 ### 6.6 Next contacts (`outreach next`) and warm contacts (`outreach warm`)
 
-- `next`: `discovered` people whose target is `approved`, or whose `found_in` job is saved and not terminal, at most one `recruiter` and one `hiring_manager` per target, excluding anyone with a live approval item, a consumed invite, `invite_in_flight` or `closed`; limited to `remaining` invites. Targets rank: home market by `fit` descending; non-home by sponsorship tier (`offered`, `likely`, `unknown`; `not_offered` is excluded) then `fit` descending. Each result carries its reason.
+- `next`: `discovered` people whose target is `approved`, or whose `found_in` job is saved and not terminal, at most one `recruiter` and one `hiring_manager` per target, excluding anyone with a **live approval item** (an item of either invite or message kind that is `pending`, `approved` and not expired, or `in_flight`; expired, declined, superseded, voided and consumed items are not live), a consumed invite, `invite_in_flight` or `closed`; limited to `remaining` invites. Stale targets stay eligible and are flagged (§6.5). Targets rank: home market by `fit` descending; non-home by sponsorship tier (`offered`, `likely`, `unknown`; `not_offered` is excluded) then `fit` descending. Each result carries its reason.
 - `warm`: people who are `connected` or `replied` at a company that has a saved, non-terminal job.
 
 ## 7. Commands (`careeros outreach`)
@@ -145,13 +168,13 @@ Exit codes: 0 ok; 1 refused; 2 usage / no workspace. `--json` prints one JSON ob
 - `record <per_id> --accepted | --replied | --closed [--reason R] [--source user|observed|email] [--note T]`.
 - Read-only: `queue`, `cap`, `next`, `warm`.
 
-State-changing commands take the workspace lock, verify the hash chain (`ledger_corrupt`), read the clock once after the lock, write the file first and the event second in a transaction, and refuse with stable codes (`not_found`, `wrong_state`, `duplicate`, `invalid_input`, `clock_skew`, `ledger_corrupt`). A refusal of an existing entity appends a deduped `outreach.rejected`; an unknown entity appends nothing. They use the same clock floor as approvals (refuse when `now` is earlier than the latest event of any type).
+State-changing commands take the workspace lock, verify the hash chain (`ledger_corrupt`), read the clock once after the lock, write the file first and the event second in a transaction, and refuse with stable codes (`not_found`, `wrong_state`, `duplicate`, `invalid_input`, `clock_skew`, `ledger_corrupt`, `identity_conflict`, `cap_config_invalid`). `identity_conflict` is raised by `person add` (and by `approval propose`) when the identity map built from events is inconsistent (one canonical URL under two `per_` ids, or one id under two URLs): the command fails closed until the ledger is restored; it never picks a winner. A refusal of an existing entity appends a deduped `outreach.rejected`; an unknown entity appends nothing. They use the same clock floor as approvals (refuse when `now` is earlier than the latest event of any type).
 
 ## 8. Integration with approvals (small, explicit)
 
 - The person-ID lookup in `approval propose` also reads `outreach.person_added` events (one identity map).
-- `approval propose` refuses an invite or message to a person with an `outreach.closed` event (`person_closed`); it reads event types directly and imports nothing from the outreach package.
-- `approval begin` for a `linkedin_invite` refuses `cap_reached` when the count in the rolling window (other invites consumed or `in_flight`) already meets the cap; the only override is raising the cap in `profile.md`.
+- `approval propose` **and `approval begin`** refuse an invite or message to a person with an `outreach.closed` event (`person_closed`). `begin` rechecks it **under the workspace lock, immediately before recording `approval.started`**, for both invite and message items, so a person closed after proposal or approval can no longer be claimed. Both read event types directly and import nothing from the outreach package.
+- `approval begin` for a `linkedin_invite` refuses `cap_reached` when the count (§6.4: all other `in_flight` invites plus consumed invites in the rolling window) already meets the cap, and `cap_config_invalid` when `profile.md` holds an invalid cap setting; the only override is raising the cap in `profile.md`.
 - Approvals keep working without any outreach records; a person with approval events and no record is an `OUT003` warning.
 
 ## 9. Validation (`careeros validate`, read-only)
@@ -164,6 +187,7 @@ State-changing commands take the workspace lock, verify the hash chain (`ledger_
 | `OUT004` | error | record `id`/`url` disagrees with its event, or one URL under two ids / one id under two URLs (events and files considered together with approval events) |
 | `OUT005` | error | illegal outcome sequence (`accepted` with no invite, an outcome after `closed`, …) or an unknown `outreach.*` event type |
 | `OUT006` | warning | `found_in` names a job or target that does not exist |
+| `OUT007` | error | `profile.md` holds an invalid weekly cap setting (§6.4) |
 | `OUT100` | info | a target is stale (60 days) |
 
 A missing record file for an entity with events is `OUT003` (warning) because state needs only the events; a workspace without `people/`, `targets/` or `outreach.*` events is unchanged.
@@ -186,7 +210,11 @@ Written first (RED); pure fold and derivation tests need no workspace:
 
 - **Fold:** outcome transitions and labels against an independent simulator over random event sequences; audit-only rejections never change a result (property test); unknown `outreach.*` types are errors.
 - **Queue / cap / next / warm:** grids at the boundaries (exactly 7 days, 10 days, the rolling window edge, `in_flight` counting toward the cap, the one-follow-up-per-invite rule, pre-opening contacts not queued, closed people excluded, ranking order for home and non-home, `not_offered` excluded, two-contacts-per-target limit).
-- **Identity:** a person added here and proposed in approvals (and the reverse) share one `per_` id; URL variants map to one id; deleting or editing a record file cannot change identity.
+- **Cap semantics:** an `in_flight` invite older than 7 days still counts and blocks `begin`; `in_flight -> consumed` never counts twice and uses the `approval.consumed` ts; `resolve --not-sent` (released) removes it; absent setting = 15, every invalid form (`abc`, `-1`, `1001`, two lines, empty value) fails closed with `cap_config_invalid` in `cap`, `next` and `begin`, and `0` blocks all invites.
+- **Closed after approval:** propose, approve, then `record --closed`: `begin` refuses `person_closed` for an invite and a message item, with the close event recorded after approval and inside a race with `begin` (real processes: exactly one outcome, never a claim on a closed person).
+- **Targets:** every legal and illegal decision transition and its refusal code; the status precedence table (each pair of overlapping conditions); stale by each qualifying event and evidence date, strictness at exactly 60 days; stale targets flagged and still eligible in `next`.
+- **Source data:** hand-editing `found_in`/`role` changes target status and `next` but never identity, the cap, closed state or what was sent (tests for both halves of the §6.0 table); `OUT001`/`OUT006` catch bad edits; `person link` writes only the record.
+- **Identity:** a person added here and proposed in approvals (and the reverse) share one `per_` id; URL variants map to one id; deleting or editing a record file cannot change identity; a conflicting identity map makes `person add` and `approval propose` fail closed (`identity_conflict`).
 - **Approvals integration:** `person_closed` on propose; `cap_reached` on `begin` with a **real-process race** (two invites begun at `cap - 1`: exactly one proceeds); the cap value read from `profile.md` and the default.
 - **Commands:** every refusal code, idempotence-hostile `record`, file-first/event-second rollback and crash windows (orphan `OUT002`), `--json` purity, exit codes, deduped `outreach.rejected`, clock floor.
 - **Validation:** each `OUT` code with a positive and a negative case; `validate` leaves the whole workspace byte-identical (ledger and `.careeros/` included).
@@ -197,7 +225,7 @@ Written first (RED); pure fold and derivation tests need no workspace:
 ## 13. Out of scope and known limits
 
 - **Out of scope:** a GPT workspace counterpart, sending or tracking email, interview follow-ups, automatic reply detection, learning from outcomes (audit sub-project 5), a dashboard, importing existing `activity.md` history.
-- **Known limits:** outcomes and target decisions are reported facts, not verified against LinkedIn; fit and sponsorship are agent-supplied evidence; the cap counts only invites recorded in CareerOS (invites sent outside it are invisible); a company slug match is a heuristic (`slugify`); ledger tail truncation cannot be detected by a hash chain; this is not a security boundary.
+- **Known limits:** `found_in`, `role` and the other descriptive record fields are editable source data that influence target status and `next` without an audit event; a dropped target cannot be re-opened; outcomes and target decisions are reported facts, not verified against LinkedIn; fit and sponsorship are agent-supplied evidence; the cap counts only invites recorded in CareerOS (invites sent outside it are invisible); a company slug match is a heuristic (`slugify`); ledger tail truncation cannot be detected by a hash chain; this is not a security boundary.
 
 ## 14. Build order
 
@@ -211,4 +239,4 @@ Each task is one commit (plus fix commits), reviewed before the next.
 
 ## 15. Acceptance
 
-A disposable invented workspace: add a target and two people (URL variants resolve to one id); approve the target; `next` ranks and limits to the cap; propose, approve, begin and complete an invite (cap count 1); a second begin at the cap is refused `cap_reached`; the clock advances 7 days and the invite appears in `queue`; `record --accepted` removes it and `warm` lists the person once a job at the company is saved; `record --closed` then makes `propose` refuse `person_closed`; `validate` leaves the whole workspace byte-identical. Full suite green on Python 3.14 and a fresh 3.11 without click, `mkdocs build --strict`, wheel contents, `git diff --check`.
+A disposable invented workspace: add a target and two people (URL variants resolve to one id); approve the target; `next` ranks and limits to the cap; propose, approve, begin and complete an invite (cap count 1); a second begin at the cap is refused `cap_reached`; the clock advances 7 days and the invite appears in `queue`; `record --accepted` removes it and `warm` lists the person once a job at the company is saved; an invite left `in_flight` for more than 7 days still counts toward the cap until it is resolved; `record --closed` after an approval makes `begin` refuse `person_closed`, and `propose` refuses it too; `validate` leaves the whole workspace byte-identical. Full suite green on Python 3.14 and a fresh 3.11 without click, `mkdocs build --strict`, wheel contents, `git diff --check`.
