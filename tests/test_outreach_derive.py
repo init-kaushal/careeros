@@ -173,6 +173,22 @@ def test_pathological_lines_are_bounded_in_time():
     assert results[5].problem
 
 
+def test_the_200_character_line_limit_is_pinned():
+    assert cap.parse_cap_setting(profile("Weekly invite cap: 5" + "*" * 300)).problem
+    assert cap.parse_cap_setting(profile("Weekly invite cap: 5" + "x" * 300)).problem
+    head = "- **Weekly invite cap:** 5"
+    for total, ok in ((200, True), (201, False)):
+        line = head + "*" * (total - len(head))
+        assert len(line.strip()) == total
+        setting = cap.parse_cap_setting(profile(line))
+        assert (setting.value == 5) if ok else (setting.value is None and setting.problem)
+    long_heading = "## Outreach" + " x" * 150
+    setting = cap.parse_cap_setting(f"## Outreach\n{long_heading}\nWeekly invite cap: 5\n")
+    assert setting == cap.CapSetting()                       # an over-long `## Outreach` heading never opens the section
+    closing = "## Other" + " x" * 150
+    assert cap.parse_cap_setting(f"## Outreach\n{closing}\nWeekly invite cap: 5\n") == cap.CapSetting()
+
+
 def test_a_leading_bom_does_not_hide_the_setting():
     assert cap.parse_cap_setting("\ufeff## Outreach\nWeekly invite cap: 4\n").value == 4
 
@@ -779,6 +795,20 @@ def test_not_offered_excludes_the_target_route_only():
         got = next_for([p], targets=[tinfo(sponsorship="not_offered", decision=decision)], jobs=[job()])
         assert ids_of(got) == [p.id] and got[0].fit is None and got[0].reason == f"saved job {JOB} at acme-corp"
     assert next_for([tp(1)], targets=[tinfo(sponsorship="not_offered")]) == []
+
+
+def test_both_routes_fall_through_to_the_job_route_when_the_target_route_fails():
+    both = person(1, found_in=(FoundIn("target", TGT), FoundIn("job", JOB)))
+    for decision in ("candidate", "approved"):
+        got = next_for([both], targets=[tinfo(sponsorship="not_offered", decision=decision)], jobs=[job()])
+        assert ids_of(got) == [both.id] and got[0].source == "job" and got[0].fit is None, decision
+        assert got[0].reason == f"saved job {JOB} at acme-corp"
+    only_target = person(2, found_in=(FoundIn("target", TGT),))
+    assert next_for([only_target], targets=[tinfo(sponsorship="not_offered")], jobs=[job()]) == []
+    terminal = [job(status="REJECTED")]
+    assert next_for([both], targets=[tinfo(sponsorship="not_offered")], jobs=terminal) == []
+    # a usable approved target still wins over the job route
+    assert next_for([both], targets=[tinfo(sponsorship="likely")], jobs=[job()])[0].source == "target"
 
 
 def test_a_job_sourced_person_at_a_dropped_target_company_is_unranked_but_present():

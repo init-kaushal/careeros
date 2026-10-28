@@ -213,8 +213,10 @@ def _usable(info: TargetInfo | None) -> bool:
 def build_next(people: Mapping[str, Person], flags: Mapping[str, PersonFlags], targets: Mapping[str, TargetInfo],
                jobs: Iterable[JobInfo], states: Mapping[str, ItemState], count_remaining: int, now: str) -> list[NextContact]:
     """Who to invite next, best first, at most `count_remaining` of them (see the module docstring). Only `recruiter` and
-    `hiring_manager` people are offered (never peers or others), one of each per group. A `not_offered` target excludes the
-    people reached through the target route only; a person found via a saved non-terminal job is offered regardless."""
+    `hiring_manager` people are offered (never peers or others), one of each per group. The target route (a linked approved
+    target with a usable sponsorship, i.e. not `not_offered`) is tried first; when it fails the person falls through to the job
+    route (a linked saved non-terminal job), whatever the target's decision state, and is offered unranked. A target-only
+    person at a `not_offered` target is excluded."""
     _parse(now)
     limit = max(0, count_remaining)
     live = {st.target_id for st in states.values() if _is_live(st, now)}
@@ -228,7 +230,8 @@ def build_next(people: Mapping[str, Person], flags: Mapping[str, PersonFlags], t
                 or fl.invite_in_flight or fl.closed_at is not None or pid in live):
             continue
         approved = sorted((slug, info) for f in record.found_in if f.kind == "target" and f.id in by_target_id
-                          for slug, info in [by_target_id[f.id]] if info.view.decision == rules.APPROVED)
+                          for slug, info in [by_target_id[f.id]] if info.view.decision == rules.APPROVED
+                          and _usable(info))
         if approved:
             group, info = approved[0][0], approved[0][1]
             source, job_id, reason_head = "target", None, f"approved target {group}"
@@ -245,8 +248,6 @@ def build_next(people: Mapping[str, Person], flags: Mapping[str, PersonFlags], t
                 info = None                  # `not_offered` only excludes the target route: the user saved this job themselves
             source, job_id = "job", mine[0].id
             reason_head = f"saved job {job_id} at {group}" if info is None else f"saved job {job_id}; target {group}"
-        if source == "target" and not _usable(info):
-            continue
         reason = reason_head if info is None else f"{reason_head}: {_market_part(info)}"
         if info is not None and info.view.stale:
             reason += f" (stale: no activity for more than {rules.TARGET_STALE_DAYS} days)"

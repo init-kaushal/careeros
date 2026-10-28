@@ -71,7 +71,9 @@ def _normalised(line: str) -> str:
 
 
 def parse_cap_setting(profile_text: str) -> CapSetting:
-    """The cap setting in `profile.md` text (see the module docstring). Never raises."""
+    """The cap setting in `profile.md` text (see the module docstring). Never raises. A line is limited to 200 characters once
+    stripped: a longer line that starts with the label is an invalid setting, any other longer line is ignored, and a longer
+    `##` heading never opens the section (but still closes one)."""
     text = profile_text if isinstance(profile_text, str) else ""
     inside = False
     setting_lines: list[str] = []
