@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from careeros.core import ids
 from careeros.core.approvals import fold as afold
@@ -283,7 +283,8 @@ def fold_targets(events: Iterable[object], targets: Mapping[str, Target], people
                  jobs: Iterable[JobInfo], now: str) -> TargetsFold:
     """A `TargetView` for every target that has a `target_added` event, keyed by slug. `targets` maps slug to the parsed
     record (only its evidence dates are read), `people` maps person id to the parsed record (only `found_in` is read) and
-    `jobs` are the saved jobs. Raises ValueError when `now` is unreadable."""
+    `jobs` are the saved jobs. Raises ValueError when `now` is unreadable. Person-sequence problems (OUT005) are not
+    repeated here: callers call `fold_people` for them."""
     current = afold.parse_ts(now)
     if current is None:
         raise ValueError(f"unreadable now {now!r}")

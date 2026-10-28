@@ -58,7 +58,8 @@ class ItemState:
     started_at: str | None = None
     proposed_at: str | None = None
     last_ts: str | None = None          # ts of the latest event applied to the item
-    consumed_at: str | None = None      # ts of the approval.consumed event (done or resolve --sent); None in every other state
+    consumed_at: str | None = None      # ts of the approval.consumed event (done or resolve --sent); None in every other state. Carries the ledger ts as
+                                        # written, even garbage: cap and queue code must parse it defensively
     kind: str | None = None
     target_id: str | None = None
     url: str | None = None              # canonical profile URL from the proposal event (invites and messages only)

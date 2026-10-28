@@ -52,8 +52,13 @@ NOW = ts(timedelta(days=400))
     ("under_score", "under-score"),
     ("Example123 Corp", "example123-corp"),
     ("Ｅｘａｍｐｌｅ Corp", "example-corp"),      # fullwidth letters fold under NFKC
-    ("Café Corp", "caf-corp"),                                          # NFKC only: a non-ASCII letter is a separator
-    ("Café Corp", "caf-corp"),
+    ("Café Corp", "cafe-corp"),
+    ("Cafe\u0301 Corp", "cafe-corp"),
+    ("Café Inc", "cafe-inc"),
+    ("Zürich Labs", "zurich-labs"), ("Škoda", "skoda"), ("Nestlé", "nestle"), ("Straße", "strasse"),
+    ("Ørsted", "orsted"), ("Łódź", "lodz"), ("McDonald's", "mcdonalds"), ("L\u2019Oréal", "loreal"),
+    ("L\u2018Oréal", "loreal"), ("l\u02bcoreal", "loreal"), ("Ünilever", "unilever"), ("Æon œuvre", "aeon-oeuvre"),
+    ("Đorđe ð þ", "dorde-d-th"), ("Müller", "muller"), ("Mueller", "mueller"),    # documented limit: these still differ
     ("---x---", "x"),
     ("x", "x"),
     ("9", "9"),
@@ -71,6 +76,19 @@ def test_slugify_without_an_ascii_letter_or_digit_is_none(text):
 @pytest.mark.parametrize("value", [None, 5, b"abc", ["a"], 1.5])
 def test_slugify_of_a_non_string_is_none(value):
     assert slug.slugify(value) is None
+
+
+def test_slugify_output_is_well_formed_or_none_and_idempotent_over_random_strings():
+    import re as _re
+    rng = random.Random(99)
+    alphabet = list("aZ9 -'") + ["\u00e9", "\u00df", "\u00f8", "\u0142", "\u00e6", "\u0153", "\u0111", "\u00f0", "\u00fe", "\u2019",
+                                "\u02bc", "\u0301", "\u4e2d", "\U0001F600", "\ufb01", "\u00b2", "\ud800", "\u0130"]
+    for _ in range(5000):
+        text = "".join(rng.choice(alphabet) for _ in range(rng.randrange(0, 12)))
+        got = slug.slugify(text)
+        assert got is None or _re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", got), (text, got)
+        assert got is None or slug.slugify(got) == got
+        assert slug.slugify(text) == got
 
 
 def test_slugify_is_deterministic_idempotent_and_well_formed():
@@ -161,7 +179,7 @@ PERSON_BAD = {
     "url query": pdict(url=URL + "?x=1"), "url other host": pdict(url="https://example.com/in/alex"),
     "url not str": pdict(url=5), "url empty": pdict(url=""), "url country subdomain": pdict(url="https://de.linkedin.com/in/alex-example"),
     "name empty": pdict(name=""), "name blank": pdict(name="   "), "name int": pdict(name=5), "name newline": pdict(name="a\nb"),
-    "name bidi": pdict(name="a‮b"), "name nul": pdict(name="a\x00b"), "name too long": pdict(name="x" * 501),
+    "name bidi": pdict(name="a\u202eb"), "name nul": pdict(name="a\x00b"), "name too long": pdict(name="x" * 501),
     "headline int": pdict(headline=5), "headline escape": pdict(headline="a\x1b[31mb"),
     "company empty": pdict(company=""), "company int": pdict(company=5),
     "company_slug mismatch": pdict(company_slug="example"), "company_slug upper": pdict(company_slug="Example-Corp"),
@@ -341,7 +359,7 @@ TARGET_BAD = {
     "slug leading hyphen": tdict(slug="-example"), "slug empty": tdict(slug=""), "slug int": tdict(slug=5),
     "slug mismatches file name": tdict(slug="other-corp"), "slug slash": tdict(slug="a/b"), "slug dotdot": tdict(slug=".."),
     "company empty": tdict(company=""), "company int": tdict(company=1), "company newline": tdict(company="a\nb"),
-    "market empty": tdict(market=""), "market int": tdict(market=1), "market bidi": tdict(market="a‮b"),
+    "market empty": tdict(market=""), "market int": tdict(market=1), "market bidi": tdict(market="a\u202eb"),
     "fit -1": tdict(fit=-1), "fit 11": tdict(fit=11), "fit string": tdict(fit="8"), "fit float": tdict(fit=8.0), "fit bool": tdict(fit=True),
     "fit none": tdict(fit=None), "fit hex": tdict(fit="0x8"),
     "sponsorship unknown word": tdict(sponsorship="maybe"), "sponsorship upper": tdict(sponsorship="Likely"),
@@ -460,6 +478,23 @@ def test_person_urls_is_the_union_of_proposals_and_person_added_first_seen_wins(
     assert people.person_ids(events)[0] == {PER: URL, PER2: URL2}
     swapped = [events[1], events[0]]
     assert people.person_urls(swapped)[0] == {URL: PER, URL2: PER2}
+
+
+@pytest.mark.parametrize("artifacts", [
+    ["approvals/x.md", "sha256:" + SHA, "url:bad"], ["approvals/x.md", "sha256:" + SHA],
+    ["approvals/x.md", "sha256:" + SHA, f"url:{URL}/"], ["approvals/x.md", "sha256:" + SHA, f"url:{URL.upper()}"]])
+@pytest.mark.parametrize("kind", ["linkedin_invite", "linkedin_message"])
+def test_a_person_proposal_without_a_readable_url_is_reported_by_every_reader(kind, artifacts):
+    event = mkev(1, "approval.proposed", "apr_aaaaaaaaaa", action=f"propose {kind} for {PER}", artifacts=artifacts)
+    urls, errors = people.person_urls([event])
+    assert urls == {} and len(errors) == 1 and "apr_aaaaaaaaaa" in errors[0]
+    assert people.person_ids([event]) == ({}, errors)
+    assert len(people.identity_problems([event])) == 1
+
+
+def test_a_submit_proposal_has_no_url_and_no_error():
+    event = proposal(1, "apr_aaaaaaaaaa", "job_abcdefghjk", None, "application_submit")
+    assert people.person_urls([event]) == ({}, []) and people.identity_problems([event]) == []
 
 
 def test_person_urls_respects_seq_order_not_list_order():
@@ -1003,6 +1038,16 @@ def test_a_replied_person_makes_a_target_warm_but_a_closed_one_does_not():
     tadded(L)
     L.item("linkedin_invite", PER, ts(1000))
     L.outcome("replied", PER, ts(1001))
+    assert fold_t(L, [trec()], [prec()]).targets["example-corp"].status == "warm"
+    L.outcome("closed", PER, ts(1002))
+    assert fold_t(L, [trec()], [prec()]).targets["example-corp"].status == "contacted"
+
+
+def test_accepted_then_closed_is_contacted_not_warm():
+    L = Ledger()
+    tadded(L)
+    L.item("linkedin_invite", PER, ts(1000))
+    L.outcome("accepted", PER, ts(1001))
     assert fold_t(L, [trec()], [prec()]).targets["example-corp"].status == "warm"
     L.outcome("closed", PER, ts(1002))
     assert fold_t(L, [trec()], [prec()]).targets["example-corp"].status == "contacted"

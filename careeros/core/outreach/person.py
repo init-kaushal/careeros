@@ -21,7 +21,6 @@ DEFAULT_BODY = "\nFree notes (ignored by code).\n"
 _REQUIRED = ("schema", "id", "url", "name", "headline", "company", "company_slug", "role", "found_in", "found_at")
 _OPTIONAL = ("market",)
 _FOUND_KEYS = {"kind", "id"}
-_ID_KIND = {"job": "job", "target": "target"}      # found_in kind -> key of ids.PREFIXES
 
 
 def _found_in(raw: object, problems: list[str]) -> tuple[FoundIn, ...] | None:
@@ -41,7 +40,7 @@ def _found_in(raw: object, problems: list[str]) -> tuple[FoundIn, ...] | None:
         if kind not in rules.FOUND_IN_KINDS:
             problems.append(f"found_in entry {n}: kind must be one of {', '.join(rules.FOUND_IN_KINDS)}")
             ok = False
-        elif not ids.is_valid_id(_ID_KIND[kind], ident):
+        elif not ids.is_valid_id(kind, ident):
             problems.append(f"found_in entry {n}: id {ident!r} is not a {kind} id")
             ok = False
         else:

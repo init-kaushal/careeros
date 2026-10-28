@@ -152,7 +152,7 @@ Displayed status, first match wins:
 5. `approved`;
 6. `candidate`.
 
-**Stale** (a flag, not a status): `now - last_activity > 60 days` (strict), where `last_activity` is the latest of: the target's `target_added` / `target_approved` event `ts`; the `ts` of `person_added`, `approval.consumed`, `outreach.accepted` and `outreach.replied` events of its linked people; and each evidence `read_on` date (as 00:00 UTC). `dropped` targets are never stale. A stale target is **flagged in every output and remains eligible** for `next`; the `targets` skill must refresh its evidence (update `read_on`) before drafting to its contacts.
+**Stale** (a flag, not a status): `now - last_activity > 60 days` (strict), where `last_activity` is the latest of: the target's `target_added` / `target_approved` event `ts`; the `ts` of `person_added`, `approval.consumed`, `outreach.accepted` and `outreach.replied` events of its linked people; and each evidence `read_on` date (as 00:00 UTC). `dropped` targets are never stale. A person who accepted or replied and was then `closed` has the label `closed`, so their target shows `contacted`, not `warm` (a closed relationship is not warm). A stale target is **flagged in every output and remains eligible** for `next`; the `targets` skill must refresh its evidence (update `read_on`) before drafting to its contacts.
 
 ### 6.6 Next contacts (`outreach next`) and warm contacts (`outreach warm`)
 

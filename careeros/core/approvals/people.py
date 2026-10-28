@@ -73,49 +73,55 @@ def _objects(events) -> tuple[list[dict], list[str]]:
     return [e for _, e in kept], errors
 
 
-def _pairs(events: list[dict]) -> tuple[list[tuple[str, str]], list[str]]:
-    """`[(person id, url)]` in `seq` order from invite and message proposals and from `outreach.person_added`."""
+def _pairs(events: list[dict]) -> tuple[list[tuple[str, str]], list[str], list[str]]:
+    """`([(person id, url)], person_added errors, proposal errors)`, pairs in `seq` order, from invite and message
+    proposals and from `outreach.person_added`. A person-kind proposal with no readable url is a proposal error: that
+    person must never be treated as unknown."""
     items = fold.fold_all(events, _EPOCH)
-    pairs, errors, proposed = [], [], set()
+    pairs, errors, proposal_errors, proposed = [], [], [], set()
     for event in events:
         etype = event.get("type")
         if etype == rules.EV_PROPOSED and isinstance(event.get("entity"), str) and event["entity"] not in proposed:
             proposed.add(event["entity"])
             st = items.get(event["entity"])
-            if st is not None and st.kind in (rules.LINKEDIN_INVITE, rules.LINKEDIN_MESSAGE) and st.url \
-                    and ids.is_valid_id("person", st.target_id):
-                pairs.append((st.target_id, st.url))
+            if st is not None and st.kind in (rules.LINKEDIN_INVITE, rules.LINKEDIN_MESSAGE):
+                if st.url and ids.is_valid_id("person", st.target_id):
+                    pairs.append((st.target_id, st.url))
+                else:
+                    proposal_errors.append(f"seq {event.get('seq')}: proposal {event['entity']} has no readable profile url "
+                                           f"or person id")
         elif etype == EV_PERSON_ADDED:
             per, url, problem = parse_person_added(event)
             if problem:
                 errors.append(problem)
             else:
                 pairs.append((per, url))
-    return pairs, errors
+    return pairs, errors, proposal_errors
 
 
 def person_urls(events) -> tuple[dict[str, str], list[str]]:
     """`({canonical url: person id}, errors)` over proposals and `outreach.person_added` events; first seen wins."""
     objects, errors = _objects(events)
-    pairs, more = _pairs(objects)
+    pairs, more, bad = _pairs(objects)
     out: dict[str, str] = {}
     for per, url in pairs:
         out.setdefault(url, per)
-    return out, errors + more
+    return out, errors + more + bad
 
 
 def person_ids(events) -> tuple[dict[str, str], list[str]]:
     """`({person id: canonical url}, errors)`, the same union read from the other side; first seen wins."""
     objects, errors = _objects(events)
-    pairs, more = _pairs(objects)
+    pairs, more, bad = _pairs(objects)
     out: dict[str, str] = {}
     for per, url in pairs:
         out.setdefault(per, url)
-    return out, errors + more
+    return out, errors + more + bad
 
 
 def closed_people(events) -> tuple[set[str], list[str]]:
-    """`({person ids with an outreach.closed event}, errors)`. An event with no usable entity closes nobody and is
+    """`({person ids with an outreach.closed event}, errors)`. This is the fail-closed gate: it counts a closed event
+    even when its ts is unreadable, which `fold_people` leaves as `closed_at=None` plus an error. An event with no usable entity closes nobody and is
     reported; an entity that is not a person id still counts as closed and is reported."""
     objects, errors = _objects(events)
     closed: set[str] = set()
@@ -134,9 +140,10 @@ def closed_people(events) -> tuple[set[str], list[str]]:
 
 def identity_problems(events) -> list[str]:
     """Inconsistencies in the identity map: one URL under two ids, or one id under two URLs, across proposals and
-    `outreach.person_added` events. Malformed events are not pairs here; `person_urls` reports them."""
+    `outreach.person_added` events, plus any invite or message proposal with no readable profile url. A malformed
+    `outreach.person_added` is not a pair here; `person_urls` reports it."""
     objects, _ = _objects(events)
-    pairs, _ = _pairs(objects)
+    pairs, _, bad = _pairs(objects)
     by_url: dict[str, list[str]] = {}
     by_id: dict[str, list[str]] = {}
     for per, url in pairs:
@@ -144,7 +151,8 @@ def identity_problems(events) -> list[str]:
             by_url[url].append(per)
         if url not in by_id.setdefault(per, []):
             by_id[per].append(url)
-    problems = [f"profile URL {render.render_content(u)} is used under more than one person id: {', '.join(v)}"
+    problems = list(bad)
+    problems += [f"profile URL {render.render_content(u)} is used under more than one person id: {', '.join(v)}"
                 for u, v in sorted(by_url.items()) if len(v) > 1]
     problems += [f"person id {i} is used for more than one profile URL: {', '.join(render.render_content(u) for u in v)}"
                  for i, v in sorted(by_id.items()) if len(v) > 1]
