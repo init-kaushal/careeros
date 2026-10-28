@@ -20,8 +20,7 @@ Decisions where the spec is silent (kept deliberately small):
   pick, so an ineligible first choice never blocks the next person of the role;
 * a person's group is the slug of the approved target they are linked to; otherwise the slug of the company of the saved
   non-terminal job they are linked to. A target-sourced and a job-sourced person of the same company share one group and so
-  one limit. A group whose target (found by that slug, not dropped) is `not_offered` is excluded whichever way it was found;
-  a job-sourced group whose target is dropped or missing is unranked and sorts last;
+  one limit. A job-sourced person whose company target is dropped, missing or `not_offered` is unranked and sorts last;
 * the queue's pre-opening exclusion looks for ANY saved job (a terminal one too, like `opening-seen`), matching the person's
   `company_slug` or the slug of a linked target; a person with no record (flags only) is queued with no label.
 """
@@ -207,13 +206,15 @@ def _rank(info: TargetInfo | None, group: str) -> tuple:
 
 
 def _usable(info: TargetInfo | None) -> bool:
-    """False for `not_offered` (and any sponsorship value the ranking does not know): such a group is never offered."""
+    """False for `not_offered` (and any sponsorship value the ranking does not know): such a target is never offered through the target route."""
     return info is None or info.record.sponsorship == "n/a" or info.record.sponsorship in _TIER
 
 
 def build_next(people: Mapping[str, Person], flags: Mapping[str, PersonFlags], targets: Mapping[str, TargetInfo],
                jobs: Iterable[JobInfo], states: Mapping[str, ItemState], count_remaining: int, now: str) -> list[NextContact]:
-    """Who to invite next, best first, at most `count_remaining` of them (see the module docstring)."""
+    """Who to invite next, best first, at most `count_remaining` of them (see the module docstring). Only `recruiter` and
+    `hiring_manager` people are offered (never peers or others), one of each per group. A `not_offered` target excludes the
+    people reached through the target route only; a person found via a saved non-terminal job is offered regardless."""
     _parse(now)
     limit = max(0, count_remaining)
     live = {st.target_id for st in states.values() if _is_live(st, now)}
@@ -240,9 +241,11 @@ def build_next(people: Mapping[str, Person], flags: Mapping[str, PersonFlags], t
             info = targets.get(group)
             if info is not None and info.view.decision == rules.DROPPED:
                 info = None
+            if info is not None and not _usable(info):
+                info = None                  # `not_offered` only excludes the target route: the user saved this job themselves
             source, job_id = "job", mine[0].id
             reason_head = f"saved job {job_id} at {group}" if info is None else f"saved job {job_id}; target {group}"
-        if not _usable(info):
+        if source == "target" and not _usable(info):
             continue
         reason = reason_head if info is None else f"{reason_head}: {_market_part(info)}"
         if info is not None and info.view.stale:

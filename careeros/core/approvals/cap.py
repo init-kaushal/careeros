@@ -31,7 +31,6 @@ CAP_WINDOW_DAYS = 7
 DEFAULT_WEEKLY_CAP = 15
 MAX_WEEKLY_CAP = 1000
 CAP_CONFIG_INVALID = "cap_config_invalid"
-CAP_REACHED = "cap_reached"
 FIX_TEXT = "write exactly one line `Weekly invite cap: N` (a whole number from 0 to 1000) under `## Outreach` in profile.md"
 
 _TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -39,7 +38,8 @@ _HEADING = re.compile(r"^ {0,3}##[ \t]+outreach[ \t]*#*[ \t]*$", re.I)
 _ANY_H1_H2 = re.compile(r"^ {0,3}#{1,2}(?:[ \t]|$)")
 _MARKER = re.compile(r"^(?:[-*+]|\d+[.)])[ \t]+")
 _LABEL = re.compile(r"^weekly[ \t]+invite[ \t]+cap\b", re.I)
-_VALID = re.compile(r"^weekly[ \t]+invite[ \t]+cap[*_`]*[ \t]*:[ \t]*[*_`]*[ \t]*([0-9]+)[ \t]*[*_`]*$", re.I | re.ASCII)
+_MAX_LINE = 200           # a valid setting line is far shorter; longer lines are never fed to the regexes
+_VALID = re.compile(r"^weekly[ \t]+invite[ \t]+cap[*_`]*[ \t]*:[ \t]*[*_`]*[ \t]*([0-9]{1,4})[ \t]*[*_`]*$", re.I | re.ASCII)
 
 
 @dataclass(frozen=True)
@@ -72,26 +72,25 @@ def _normalised(line: str) -> str:
 
 def parse_cap_setting(profile_text: str) -> CapSetting:
     """The cap setting in `profile.md` text (see the module docstring). Never raises."""
+    text = profile_text if isinstance(profile_text, str) else ""
     inside = False
     setting_lines: list[str] = []
-    for line in above_fold(profile_text if isinstance(profile_text, str) else "").splitlines():
-        if _HEADING.match(line):
-            inside = True
+    for raw in above_fold(text.lstrip("\ufeff")).splitlines():
+        line = raw.strip()
+        if _ANY_H1_H2.match(raw):
+            inside = len(raw) <= _MAX_LINE and bool(_HEADING.match(raw))
             continue
-        if _ANY_H1_H2.match(line):
-            inside = False
-            continue
-        if inside and _LABEL.match(_normalised(line)):
-            setting_lines.append(line.strip())
+        if inside and _LABEL.match(_normalised(line[:_MAX_LINE])):
+            setting_lines.append(line if len(line) <= _MAX_LINE else line[:60] + "...")
     if not setting_lines:
         return CapSetting()
     if len(setting_lines) > 1:
         quoted = "; ".join(repr(s) for s in setting_lines)
         return CapSetting(None, f"more than one `Weekly invite cap` line under `## Outreach`: {quoted}")
-    found = _VALID.match(_normalised(setting_lines[0]))
+    found = _VALID.match(_normalised(setting_lines[0])) if len(setting_lines[0]) <= _MAX_LINE else None
     if found is None:
         return CapSetting(None, f"the `Weekly invite cap` line {setting_lines[0]!r} is not `Weekly invite cap: N` with a whole number")
-    value = int(found[1])
+    value = int(found[1])           # at most 4 digits
     if value > MAX_WEEKLY_CAP:
         return CapSetting(None, f"the `Weekly invite cap` line {setting_lines[0]!r} is above {MAX_WEEKLY_CAP}")
     return CapSetting(value, None)

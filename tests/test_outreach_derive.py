@@ -150,6 +150,39 @@ def test_a_second_line_below_the_fold_or_in_another_section_is_not_counted():
     assert cap.parse_cap_setting("## Outreach\nWeekly invite cap: 5\n## Other\nWeekly invite cap: 6\n").value == 5
 
 
+def test_huge_numbers_are_a_problem_not_a_crash():
+    for line in ("Weekly invite cap: " + "9" * 5000, "Weekly invite cap: " + "0" * 5000 + "7", "Weekly invite cap: 10000", "Weekly invite cap: 00007"):
+        setting = cap.parse_cap_setting(profile(line))
+        assert setting.value is None and setting.problem, line[:40]
+    assert cap.parse_cap_setting(profile("Weekly invite cap: 0007")).value == 7
+
+
+def test_pathological_lines_are_bounded_in_time():
+    import time
+    cases = ["## Outreach\nWeekly invite cap:" + " " * 200000 + "x\n",
+             "## Outreach\nWeekly invite cap:" + " " * 200000 + "5\n",
+             "## Outreach" + " " * 200000 + "x\nWeekly invite cap: 5\n",
+             "## Outreach\n" + " " * 200000 + "\nWeekly invite cap: 5\n",
+             "## Outreach\n" + "*" * 200000 + "\nWeekly invite cap: 5\n",
+             "## Outreach\nWeekly invite cap" + "*" * 200000 + ": 5\n"]
+    start = time.monotonic()
+    results = [cap.parse_cap_setting(text) for text in cases]
+    assert time.monotonic() - start < 1.0
+    assert results[0].problem and results[1].problem          # an over-long line that starts with the label is an invalid setting
+    assert results[2] == cap.CapSetting() and results[3].value == 5 and results[4].value == 5
+    assert results[5].problem
+
+
+def test_a_leading_bom_does_not_hide_the_setting():
+    assert cap.parse_cap_setting("\ufeff## Outreach\nWeekly invite cap: 4\n").value == 4
+
+
+def test_cap_constants_equal_the_outreach_rules():
+    from careeros.core.outreach import rules
+    assert (cap.CAP_WINDOW_DAYS, cap.DEFAULT_WEEKLY_CAP, cap.CAP_CONFIG_INVALID) == (
+        rules.CAP_WINDOW_DAYS, rules.DEFAULT_WEEKLY_CAP, rules.CAP_CONFIG_INVALID)
+
+
 def test_non_string_profile_text_is_absent_not_an_exception():
     assert cap.parse_cap_setting(None) == cap.CapSetting()       # type: ignore[arg-type]
 
@@ -740,9 +773,12 @@ def test_ties_break_by_slug():
     assert [c.group for c in next_for(ps, targets=infos)] == ["alpha", "zeta"]
 
 
-def test_not_offered_target_excludes_job_sourced_people_at_that_company_too():
+def test_not_offered_excludes_the_target_route_only():
     p = person(1, found_in=(FoundIn("job", JOB),))
-    assert next_for([p], targets=[tinfo(sponsorship="not_offered", decision="candidate")], jobs=[job()]) == []
+    for decision in ("candidate", "approved"):                  # the job route ignores the unlinked target, ranks unranked
+        got = next_for([p], targets=[tinfo(sponsorship="not_offered", decision=decision)], jobs=[job()])
+        assert ids_of(got) == [p.id] and got[0].fit is None and got[0].reason == f"saved job {JOB} at acme-corp"
+    assert next_for([tp(1)], targets=[tinfo(sponsorship="not_offered")]) == []
 
 
 def test_a_job_sourced_person_at_a_dropped_target_company_is_unranked_but_present():
