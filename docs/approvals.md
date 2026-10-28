@@ -136,6 +136,7 @@ Stable codes used by `approval.rejected` reasons and command output.
 | `not_interactive` | the command needs an interactive terminal |
 | `ledger_corrupt` | the ledger's hash chain is broken; nothing is written |
 | `job_not_awaiting_approval` | a submit item's job is not at `APPROVAL_REQUIRED`, is archived, or (for `begin`) lacks its job-level approval |
+| `identity_conflict` | the person identity map in the ledger is inconsistent (one profile URL under two person ids, or one id under two URLs, across proposals and `outreach.person_added` events): a person proposal is refused and nothing is written until `ledger.jsonl` is restored |
 | `invalid_input` | the proposal itself is not valid: an unparseable URL, an empty label or content, or a value the item cannot store |
 
 A refusal of an existing item appends an audit-only, deduped `approval.rejected`. A refusal of an id that names no item appends nothing.

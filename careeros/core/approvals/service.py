@@ -33,7 +33,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from careeros.core import ids, ledger, models
-from careeros.core.approvals import fold, item as item_mod, manifest, render, rules
+from careeros.core.approvals import fold, item as item_mod, manifest, people, render, rules
 from careeros.core.approvals.model import Item, ItemState, ManifestEntry, Target
 from careeros.core.memory.store import Transaction
 from careeros.core.models import Issue
@@ -267,11 +267,13 @@ def propose(root: Path, *, kind: str, person_url: str | None, job_ref: str | Non
         states = fold.fold_all(events, now)
         files = _scan(root)
         parsed = [f.item for f in files.values() if f.item is not None]
-        # identity comes from the LEDGER (every proposal event, whatever the state or the file); files are a cross-check
-        by_url: dict[str, str] = {}
-        for st in states.values():
-            if st.url is not None and st.target_id is not None:
-                by_url.setdefault(st.url, st.target_id)
+        # identity comes from the LEDGER (every proposal event and every `outreach.person_added` event, whatever the state or
+        # the file); files are a cross-check. An inconsistent map fails closed: no winner is picked and nothing is written.
+        by_url, map_errors = people.person_urls(events)
+        conflicts = people.identity_problems(events) + map_errors if person else []
+        if conflicts:
+            raise Refused(rules.IDENTITY_CONFLICT, "the person identity map in the ledger is inconsistent: " + "; ".join(conflicts[:3])
+                          + ". Restore ledger.jsonl from .careeros/backups or version control; nothing was proposed")
         taken_people = {i.target.id for i in parsed if i.target.url is not None} | set(by_url.values())
         taken_people |= {st.target_id for st in states.values() if st.target_id and st.target_id.startswith("per_")}
         if person:

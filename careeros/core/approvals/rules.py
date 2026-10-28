@@ -62,9 +62,10 @@ SUBMISSION_NOT_CONSUMED = "submission_not_consumed"
 NOT_INTERACTIVE = "not_interactive"
 LEDGER_CORRUPT = "ledger_corrupt"                         # the ledger's hash chain is broken: nothing is written
 JOB_NOT_AWAITING_APPROVAL = "job_not_awaiting_approval"   # a submit item's job is not at APPROVAL_REQUIRED (or archived)
+IDENTITY_CONFLICT = "identity_conflict"                   # the ledger's person identity map is inconsistent: a person proposal fails closed
 REFUSAL_CODES = (NOT_FOUND, WRONG_STATE, EXPIRED_CODE, CLOCK_SKEW, CONTENT_MISSING, HASH_MISMATCH, MANIFEST_INVALID,
                  MANIFEST_CHANGED, INVITE_CONFLICT, ALREADY_SUBMITTED, IN_FLIGHT_CONFLICT, SUBMISSION_UNRESOLVED,
-                 SUBMISSION_NOT_CONSUMED, NOT_INTERACTIVE, LEDGER_CORRUPT, JOB_NOT_AWAITING_APPROVAL)
+                 SUBMISSION_NOT_CONSUMED, NOT_INTERACTIVE, LEDGER_CORRUPT, JOB_NOT_AWAITING_APPROVAL, IDENTITY_CONFLICT)
 
 # --- validation codes owned by the item parser
 APR001 = "APR001"

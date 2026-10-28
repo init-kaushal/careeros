@@ -11,6 +11,7 @@ from careeros.core.compensation import service as compensation_service
 from careeros.core.evaluation import integrity as evaluation_integrity
 from careeros.core.memory import store
 from careeros.core.models import Issue, State
+from careeros.core.outreach import service as outreach_service
 from careeros.core.state_machine import (
     PIPE_ENTRY,
     STATUS_BULLET,
@@ -191,6 +192,7 @@ def validate_workspace(root: Path, now: str | None = None) -> list[Issue]:
     issues.extend(evaluation_integrity.validate_workspace(root, events))
     issues.extend(compensation_service.validate_workspace(root, now))
     issues.extend(approvals_service.validate_workspace(root, events, now))
+    issues.extend(outreach_service.validate_workspace(root, events, now))
     evaluation_ids = _evaluation_ids(root)
     reported: set[str] = set()
     memory_ids = store.known_ids(root)

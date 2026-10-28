@@ -508,7 +508,7 @@ def test_constants():
     assert set(rules.REFUSAL_CODES) == {
         "not_found", "wrong_state", "expired", "clock_skew", "content_missing", "hash_mismatch", "manifest_invalid",
         "manifest_changed", "invite_conflict", "already_submitted", "in_flight_conflict", "submission_unresolved",
-        "submission_not_consumed", "not_interactive", "ledger_corrupt", "job_not_awaiting_approval"}
+        "submission_not_consumed", "not_interactive", "ledger_corrupt", "job_not_awaiting_approval", "identity_conflict"}
     assert rules.APPLICATION_SUBMIT == "application_submit" and rules.TTL_SECONDS == 24 * 3600
     assert len(set(rules.OPERATIONS)) == len(OPS) and set(rules.OPERATIONS) == set(OPS)
 
