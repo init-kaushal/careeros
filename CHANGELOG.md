@@ -13,7 +13,7 @@
 
 ### Changed
 
-- The follow-up queue and the weekly invite cap now come from recorded events, not from reading `activity.md`. `activity.md` is still appended to as a readable log, but existing `activity.md` history is not imported, so earlier invites and applications do not appear in the queue or count against the cap.
+- The follow-up queue and the weekly invite cap now come from recorded events, not from reading `activity.md`. `activity.md` is still appended to as a readable log, but invites and applications logged only in `activity.md` are not imported; invites recorded with `careeros approval` (0.7.0) do count against the cap and appear in the queue.
 - `careeros approval begin` refuses an invite beyond the weekly cap (`cap_reached`; 15 unless `profile.md` sets `Weekly invite cap: N` under `## Outreach`) and any invite or message to a closed person (`person_closed`); an invalid cap setting is refused, not guessed (`cap_config_invalid`). `careeros approval propose` refuses a closed person and an inconsistent identity map (`identity_conflict`). The cap and the closed check are made inside the same lock as the claim.
 - The `follow-up` skill reads `careeros outreach queue` and `careeros outreach warm`; email and interview follow-ups stay prose. The `browse` skill checks the people already recorded for a company, records the people it finds, and defaults the route question to a warm contact.
 - Upgrading: run `careeros upgrade` to receive the updated skills. This is not a security boundary; see `docs/outreach.md` for the limits.

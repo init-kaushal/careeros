@@ -134,7 +134,7 @@ The cap is read from `profile.md`, above the fold, under a heading `## Outreach`
 - Weekly invite cap: 12
 ```
 
-No heading, or the heading without the line, means the default. A present but invalid setting (not a whole number from 0 to 1000, more than one such line, or an unparseable value) is a configuration error: `careeros outreach cap`, `careeros outreach next` and `careeros approval begin` for an invite refuse with `cap_config_invalid`, and `careeros validate` reports `OUT007`. A typo never silently changes enforcement. `0` is valid and blocks all invites.
+No heading, or the heading without the line, means the default. A present but invalid setting (not a whole number from 0 to 1000, more than one such line, or an unparseable value) is a configuration error: `careeros outreach cap`, `careeros outreach next` and `careeros approval begin` for an invite refuse with `cap_config_invalid`, and `careeros validate` reports `OUT007`. A typo in the value never silently changes enforcement (it is `cap_config_invalid`). A line that does not start with the exact label `Weekly invite cap`, or that is not under an exact `## Outreach` heading, is not a setting and the default applies; a misspelled label, a misspelled heading, a table row or a blockquote line is therefore not seen. `0` is valid and blocks all invites.
 
 **Where it is enforced.** `careeros approval begin` for an invite checks the cap, and for an invite or a message checks that the person is not closed, in the same critical section, under the workspace lock, as it records `approval.started`: the profile setting, the events and the folded states used for the decision are all read inside the lock. Two processes cannot both take the last free slot. `careeros approval propose` also refuses a closed person. The only override is raising the cap in `profile.md`. `outreach cap` and `begin` use one shared count function. `approval begin` applies the [ledger clock floor](approvals.md#the-clock-floor); the read-only `outreach cap` and `outreach next` use the same count without it, so a clock behind the ledger can only over-count, never under-count.
 
@@ -201,6 +201,7 @@ A missing record file for an entity with events is a warning, because state need
 - A dropped target cannot be re-opened; revisiting a dropped company is out of scope.
 - Outcomes and target decisions are reported facts, not verified against LinkedIn. Fit and sponsorship are agent-supplied evidence.
 - The cap counts only invites recorded in CareerOS: an invite sent outside it is invisible.
+- An invalid person record (`OUT001`) feeds nothing: that contact loses its pre-opening exclusion and is queued like any contact with approval events.
 - A company slug match is a heuristic (`slugify`).
 - Truncating the tail of `ledger.jsonl` cannot be detected by a hash chain.
 - This is not a security boundary.

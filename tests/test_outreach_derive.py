@@ -189,6 +189,42 @@ def test_the_200_character_line_limit_is_pinned():
     assert cap.parse_cap_setting(f"## Outreach\n{closing}\nWeekly invite cap: 5\n") == cap.CapSetting()
 
 
+TYPO_FORMS = [
+    "## Outreach\nWeekly invites cap: 5\n",
+    "## Outreach\nWeekly-invite-cap: 5\n",
+    "# Outreach\nWeekly invite cap: 5\n",
+    "##Outreach\nWeekly invite cap: 5\n",
+    "## Outreach settings\nWeekly invite cap: 5\n",
+    "## Outreach\n| Weekly invite cap | 5 |\n",
+    "## Outreach\n> Weekly invite cap: 5\n",
+    "## Outreach\nWeekly\u00a0invite cap: 5\n",
+    "## Outreach\nWeekly invite\u00a0cap: 5\n",
+]
+
+
+@pytest.mark.parametrize("text", TYPO_FORMS)
+def test_a_typo_in_the_label_or_heading_is_the_default_and_no_out007(text, tmp_path):
+    """Documented behaviour (docs/outreach.md): only a typo in the VALUE is an error; a line that does not start with the
+    exact label under an exact `## Outreach` heading is not a setting. Widening this would contradict `OUT007` on absent."""
+    from careeros.core import validation
+    assert cap.parse_cap_setting(text) == cap.CapSetting(None, None)
+    assert cap.effective_cap(cap.parse_cap_setting(text)) == cap.DEFAULT_WEEKLY_CAP
+    (tmp_path / "profile.md").write_text(text, encoding="utf-8")
+    assert validation._cap_setting_issues(tmp_path) == []
+
+
+def test_an_over_long_non_label_line_is_ignored():
+    assert cap.parse_cap_setting(profile("*" * 300 + "Weekly invite cap: 5")) == cap.CapSetting()
+
+
+def test_a_person_with_two_approved_targets_is_grouped_under_the_first_slug_whatever_the_found_in_order():
+    ta, tb = tinfo("aaa-co", tid=TGT), tinfo("bbb-co", tid=TGT2)
+    for order in ((TGT, TGT2), (TGT2, TGT)):
+        p = person(1, company="Other Co", found_in=tuple(FoundIn("target", i) for i in order))
+        got = next_for([p], targets=[tb, ta])
+        assert [(c.group, c.target_id) for c in got] == [("aaa-co", TGT)], order
+
+
 def test_a_leading_bom_does_not_hide_the_setting():
     assert cap.parse_cap_setting("\ufeff## Outreach\nWeekly invite cap: 4\n").value == 4
 

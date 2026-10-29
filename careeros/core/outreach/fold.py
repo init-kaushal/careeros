@@ -279,6 +279,12 @@ def _target_events(ordered: list[dict], errors: list[SequenceError]) -> dict[str
     return by_entity
 
 
+def target_added_ids(events: Iterable[object]) -> dict[str, str]:
+    """slug -> target id for every valid `outreach.target_added` event (the id a record file must carry)."""
+    ordered, errors = _ordered(events)
+    return {t.slug: t.id for t in _target_events(ordered, errors).values()}
+
+
 def fold_targets(events: Iterable[object], targets: Mapping[str, Target], people: Mapping[str, Person],
                  jobs: Iterable[JobInfo], now: str) -> TargetsFold:
     """A `TargetView` for every target that has a `target_added` event, keyed by slug. `targets` maps slug to the parsed

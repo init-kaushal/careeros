@@ -24,6 +24,7 @@ import hashlib
 import stat
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
+from functools import cached_property
 from pathlib import Path
 
 from careeros.core import ids, ledger, models
@@ -219,13 +220,21 @@ class Loaded:
         """The records that may feed derived state: parsed, with an `outreach.person_added` event for their id, and with the
         url that event carries. An orphan file, or a record whose id or url disagrees with its event (OUT002, OUT004),
         is reported by `validate` and counted nowhere."""
-        added = _person_added_ids(self.events)
+        added = self.person_added
         return {f.record.id: f.record for f in self.people_files.values()
                 if isinstance(f.record, Person) and added.get(f.record.id) == f.record.url and f.stem == f.record.id}
 
+    @cached_property
+    def person_added(self) -> dict[str, str | None]:
+        return _person_added_ids(self.events)
+
     @property
     def targets(self) -> dict[str, Target]:
-        return {f.record.slug: f.record for f in self.target_files.values() if isinstance(f.record, Target)}
+        """The records that may feed derived state: parsed, named for their slug, and carrying the id of that slug's
+        `outreach.target_added` event. An orphan or id-mismatched file is reported by `validate` (OUT002, OUT004) and feeds nothing."""
+        added = ofold.target_added_ids(self.events)
+        return {f.record.slug: f.record for f in self.target_files.values()
+                if isinstance(f.record, Target) and f.stem == f.record.slug and added.get(f.record.slug) == f.record.id}
 
 
 def load(root: Path, now: str | None = None, events: list | None = None) -> Loaded:
@@ -279,12 +288,12 @@ def _person_view(loaded: Loaded, per_id: str) -> PersonView:
 def person_list(root: Path, now: str | None = None) -> list[PersonView]:
     """Every person with an `outreach.person_added` event, by id (an orphan file is not a person). Read-only."""
     loaded = load(root, now)
-    return [_person_view(loaded, i) for i in sorted(_person_added_ids(loaded.events))]
+    return [_person_view(loaded, i) for i in sorted(loaded.person_added)]
 
 
 def person_show(root: Path, per_id: str, now: str | None = None) -> PersonView:
     loaded = load(root, now)
-    if per_id not in _person_added_ids(loaded.events):
+    if per_id not in loaded.person_added:
         raise Refused(rules.NOT_FOUND, f"no person {per_id!r} (a person exists once its outreach.person_added event is recorded)")
     return _person_view(loaded, per_id)
 

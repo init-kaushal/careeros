@@ -420,5 +420,3 @@ def race_many(tmp_path: Path, rounds: list[list[dict]], widen: bool) -> list[lis
             data = {"raw": stdout.decode() + stderr.decode()}
         out[r].append((proc.returncode, data))
     return out
-
-

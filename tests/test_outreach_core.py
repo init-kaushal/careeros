@@ -59,6 +59,8 @@ NOW = ts(timedelta(days=400))
     ("Ørsted", "orsted"), ("Łódź", "lodz"), ("McDonald's", "mcdonalds"), ("L\u2019Oréal", "loreal"),
     ("L\u2018Oréal", "loreal"), ("l\u02bcoreal", "loreal"), ("Ünilever", "unilever"), ("Æon œuvre", "aeon-oeuvre"),
     ("Đorđe ð þ", "dorde-d-th"), ("Müller", "muller"), ("Mueller", "mueller"),    # documented limit: these still differ
+    ("K\u0131van\u00e7", "kivanc"), ("\u0126al Far", "hal-far"), ("\u014a Co", "n-co"), ("\u0166est", "test"),
+    ("\u01e2on \u01fcon", "aeon-aeon"), ("\u01feland", "oland"), ("\u0191oo", "foo"), ("\u0192oo", "foo"),
     ("---x---", "x"),
     ("x", "x"),
     ("9", "9"),
@@ -81,7 +83,7 @@ def test_slugify_of_a_non_string_is_none(value):
 def test_slugify_output_is_well_formed_or_none_and_idempotent_over_random_strings():
     import re as _re
     rng = random.Random(99)
-    alphabet = list("aZ9 -'") + ["\u00e9", "\u00df", "\u00f8", "\u0142", "\u00e6", "\u0153", "\u0111", "\u00f0", "\u00fe", "\u2019",
+    alphabet = list("aZ9 -'") + ["\u00e9", "\u00df", "\u00f8", "\u0142", "\u00e6", "\u0153", "\u0111", "\u00f0", "\u00fe", "\u0131", "\u0127", "\u014b", "\u0167", "\u01e3", "\u01fd", "\u01ff", "\u0192", "\u2019",
                                 "\u02bc", "\u0301", "\u4e2d", "\U0001F600", "\ufb01", "\u00b2", "\ud800", "\u0130"]
     for _ in range(5000):
         text = "".join(rng.choice(alphabet) for _ in range(rng.randrange(0, 12)))

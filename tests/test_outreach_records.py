@@ -1242,3 +1242,29 @@ def test_a_broken_chain_is_refused_before_the_clock_is_read(w: W) -> None:
         service.target_add(w.root, company="X", slug="x-co", market="Australia", fit=5, sponsorship="n/a", actor="user",
                            clock=lambda: calls.append(1) or T0)
     assert exc.value.code == "ledger_corrupt" and calls == []
+
+
+def test_a_target_file_with_another_id_feeds_nothing_but_is_still_reported(w: W) -> None:
+    """A copied target file whose id is not the id of its `outreach.target_added` event (OUT004) must not refresh the target:
+    its fresh `read_on` is ignored, so the target stays stale and OUT100 remains."""
+    w.target()
+    late = shift(T0, days=90)
+    assert out_codes(w, late, code="OUT100") == [("OUT100", "info", "targets/example-corp.md")]
+    hand_edit_target(w.root, "example-corp", id=ids.new_id("target"), evidence=(Evidence("copied source", late[:10]),))
+    assert out_codes(w, late, code="OUT100") == [("OUT100", "info", "targets/example-corp.md")]
+    assert out_codes(w, late, code="OUT004") == [("OUT004", "error", "targets/example-corp.md")]
+    assert service.target_show(w.root, "example-corp", late).stale is True
+
+
+def test_an_invalid_person_record_feeds_nothing_so_the_contact_loses_the_pre_opening_exclusion(w: W) -> None:
+    """OUT001: an unparseable person record is not a person for derived state. A target-only contact (no saved job) is
+    pre-opening and not queued; with its record broken it is queued like any contact that has approval events."""
+    w.target()
+    per = w.person(SAM, found_in=["target:example-corp"])["id"]
+    w.invite_done(SAM)
+    w.now = shift(T0, days=7)
+    assert w.ok("outreach", "queue")["items"] == []
+    (w.root / "people" / f"{per}.md").write_text("not a record\n", encoding="utf-8")
+    assert ("OUT001", "error", f"people/{per}.md") in out_codes(w)
+    (item,) = w.ok("outreach", "queue")["items"]
+    assert (item["kind"], item["entity_id"]) == ("invite", per)

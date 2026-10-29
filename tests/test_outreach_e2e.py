@@ -178,6 +178,19 @@ def test_outreach_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert w.ok("outreach", "cap") == cap_before
     assert w.ok("outreach", "person", "show", alex)["state"] == closed_before
     w.refused("approval", "begin", msg["id"], code="person_closed")
+    # the same hand edit on the CLOSED person (alex) and on the person whose invite was consumed (sam)
+    for who in (alex, sam):
+        path = root / "people" / f"{who}.md"
+        text = path.read_text(encoding="utf-8")
+        assert "found_in:\n" in text
+        path.write_text(text.replace("found_in:\n", f"found_in:\n- kind: target\n  id: {second_target}\n", 1), encoding="utf-8")
+    assert w.ok("outreach", "person", "show", alex)["state"] == closed_before
+    assert w.ok("outreach", "person", "show", sam)["id"] == sam
+    w.refused("approval", "begin", msg["id"], code="person_closed")
+    cap_after = w.ok("outreach", "cap")
+    keys = ("cap", "count", "in_flight", "consumed_in_window", "remaining")
+    assert [cap_after[k] for k in keys] == [cap_before[k] for k in keys] == [5, 1, 1, 0, 4]
+    assert alex not in [c["person_id"] for c in w.ok("outreach", "next")["contacts"]]     # a closed person is never offered
 
     # (h) the read-only commands leave the WHOLE workspace byte-identical (ledger and .careeros/ included)
     read_only_unchanged(w)
@@ -196,7 +209,6 @@ def test_outreach_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert now_guarded == guarded
     assert {k: v for k, v in snapshot(root).items() if "example-corp-backend" in k} == ec_guard
     assert not [e for e in w.events() if e.get("entity") in (other["id"], ec["id"]) and e["type"] != "job.imported"]
-
 
 
 

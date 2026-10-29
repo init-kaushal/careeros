@@ -92,6 +92,8 @@ OUTREACH_PINS = (
     "Nothing in `careeros outreach` sends anything.",
     "`activity.md` is still appended to as a readable log, but nothing parses it for state.",
     "If `remaining` is 0, say so with the date, and stop.",
+    "If `careeros outreach cap` reports the default (the text says `(default)`, the JSON has `configured: false`) but the user says they set a cap, tell them the line was not found and quote the exact required form: a `## Outreach` heading, then one line `Weekly invite cap: N`.",
+    "take the person id from `careeros outreach person list --json`, or, for a person invited through `careeros approval` before a record existed, from `careeros outreach queue --json` (`entity_id`); if the person has no record, add one with `careeros outreach person add --url <profile url> --name <name> --company <company> --role <recruiter|hiring_manager|peer|other>` (the existing id is reused)",
     "`cap_reached` ends Mode C",
     "**stop and wait**",
     "If it is `closed`, stop and tell the user.",
@@ -115,6 +117,7 @@ FOLLOW_UP_PINS = (
     "do not recompute them from `activity.md`",
     "also, on the user's say-so only, run `careeros outreach record <per_id> --closed --reason no_response --source user`",
     "Email cadences are closed in `activity.md` only.",
+    "take `<per_id>` from `careeros outreach person list --json`, or, for a person invited through `careeros approval` before a record existed, from `careeros outreach queue --json` (`entity_id`); if the person has no record, add one with `careeros outreach person add --url <profile url> --name <name> --company <company> --role <recruiter|hiring_manager|peer|other>`, the existing id is reused",
 )
 
 BROWSE_PINS = tuple(OUTREACH_BROWSE_ADDITIONS.values())
@@ -451,7 +454,9 @@ DOC_PHRASES = (
     "every invite item currently `in_flight`, whatever its age",
     "`approval.consumed` event",
     "`approval.started` timestamp is never used",
-    "A typo never silently changes enforcement.",
+    "A typo in the value never silently changes enforcement (it is `cap_config_invalid`).",
+    "A line that does not start with the exact label `Weekly invite cap`, or that is not under an exact `## Outreach` heading, is not a setting and the default applies",
+    "An invalid person record (`OUT001`) feeds nothing: that contact loses its pre-opening exclusion and is queued like any contact with approval events.",
     "`0` is valid and blocks all invites",
     "`cap_config_invalid`",
     "`cap_reached`",
@@ -528,7 +533,7 @@ def test_version_changelog_readme_and_nav() -> None:
     assert head.startswith("0.8.0")
     for phrase in ("run `careeros upgrade` to receive the updated skills",
                    "follow-up queue and the weekly invite cap now come from recorded events",
-                   "existing `activity.md` history is not imported", "`targets` skill", "OUT001", "OUT007", "OUT100",
+                   "logged only in `activity.md` are not imported", "`targets` skill", "OUT001", "OUT007", "OUT100",
                    "docs/outreach.md", "2026-10-05-target-company-outreach-design.md"):
         assert phrase in head, phrase
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -550,3 +555,10 @@ def test_the_new_skill_is_delivered_by_scaffold(tmp_path: Path) -> None:
 
 def test_the_gpt_workspace_has_no_targets_skill() -> None:
     assert not (TEMPLATES / "gpt-workspace" / ".gpt" / "skills" / "targets").exists()
+
+
+def test_the_changelog_does_not_say_approval_invites_are_lost() -> None:
+    body = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert ("invites and applications logged only in `activity.md` are not imported; invites recorded with `careeros approval` "
+            "(0.7.0) do count against the cap and appear in the queue.") in body
+    assert "earlier invites and applications do not appear in the queue or count against the cap" not in body

@@ -49,7 +49,7 @@ Re-run the check after every edit. Never skip it and never ignore a failure.
 People, outcomes and the weekly invite cap are recorded by `careeros outreach`: read them from there, never from `activity.md`. Nothing in `careeros outreach` sends anything. It records and reports.
 
 - **Refusals.** A refusal ends the action for that person and is relayed to the user: if a `careeros outreach` or `careeros approval` command refuses (exit 1), for example `person_closed`, `cap_reached`, `cap_config_invalid` or `identity_conflict`, stop, tell the user the code and what it said, and do not continue with that person. Do not retry it, work around it or edit a record or `profile.md` to get past it. Only the user can change the cap, in `profile.md`.
-- **Outcomes.** When the user tells you a person accepted your invite, find the person with `careeros outreach person list --json` and run `careeros outreach record <per_id> --accepted --source user`. When the user tells you a person replied, run `careeros outreach record <per_id> --replied --source user`. If the user tells you to stop contacting someone, run `careeros outreach record <per_id> --closed --reason <no_response|declined|not_a_fit|other> --source user`. Record only what the user tells you; a refusal such as `wrong_state` is relayed, not retried.
+- **Outcomes.** When the user tells you a person accepted your invite, take the person id from `careeros outreach person list --json`, or, for a person invited through `careeros approval` before a record existed, from `careeros outreach queue --json` (`entity_id`); if the person has no record, add one with `careeros outreach person add --url <profile url> --name <name> --company <company> --role <recruiter|hiring_manager|peer|other>` (the existing id is reused). Then run `careeros outreach record <per_id> --accepted --source user`. When the user tells you a person replied, run `careeros outreach record <per_id> --replied --source user`. If the user tells you to stop contacting someone, run `careeros outreach record <per_id> --closed --reason <no_response|declined|not_a_fit|other> --source user`. Record only what the user tells you; a refusal such as `wrong_state` is relayed, not retried.
 - **Log.** `activity.md` is still appended to as a readable log, but nothing parses it for state.
 
 ---
@@ -195,6 +195,8 @@ If the user confirms they sent it, also log:
 ### C1 — Check the cap
 
 Run `careeros outreach cap`. It counts every invite, role-based and pre-opening, because LinkedIn's limits apply to the account: each invite still in flight whatever its age, plus the invites sent in the last 7 days. It prints the cap, the count, `remaining` and the date the oldest counted invite leaves the window. The cap is the `Weekly invite cap: N` line under `## Outreach` in `profile.md` (default 15 when there is no such line).
+
+If `careeros outreach cap` reports the default (the text says `(default)`, the JSON has `configured: false`) but the user says they set a cap, tell them the line was not found and quote the exact required form: a `## Outreach` heading, then one line `Weekly invite cap: N`.
 
 If `careeros outreach cap` or `careeros outreach next` refuses with `cap_config_invalid`, stop and tell the user what it said (the line in `profile.md` is invalid; only the user fixes it). If `remaining` is 0, say so with the date, and stop.
 

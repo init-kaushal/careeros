@@ -104,7 +104,7 @@ For each selected item, draft the appropriate message.
 
 ### LinkedIn follow-up (after unanswered invite)
 
-A short, warm message to send after they accept (check if they've accepted first — navigate to their profile and look for "Message" button appearing instead of "Connect"). If the user tells you they accepted or replied, record it first: `careeros outreach record <per_id> --accepted --source user` or `careeros outreach record <per_id> --replied --source user` (find `<per_id>` with `careeros outreach person list --json`).
+A short, warm message to send after they accept (check if they've accepted first — navigate to their profile and look for "Message" button appearing instead of "Connect"). If the user tells you they accepted or replied, record it first: `careeros outreach record <per_id> --accepted --source user` or `careeros outreach record <per_id> --replied --source user` (take `<per_id>` from `careeros outreach person list --json`, or, for a person invited through `careeros approval` before a record existed, from `careeros outreach queue --json` (`entity_id`); if the person has no record, add one with `careeros outreach person add --url <profile url> --name <name> --company <company> --role <recruiter|hiring_manager|peer|other>`, the existing id is reused).
 
 > "Hey [name] — thanks for connecting. I'm exploring [role type] roles and noticed [specific thing about their work / company]. Would you be open to a quick chat?"
 

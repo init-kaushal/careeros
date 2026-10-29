@@ -78,6 +78,7 @@ def _cap_setting_issues(root: Path) -> list[Issue]:
 
 def validate_workspace(root: Path, now: str | None = None) -> list[Issue]:
     root = Path(root)
+    now = now or models.utc_now()           # one clock read per validate, passed to every sub-validator
     issues: list[Issue] = []
 
     def add(severity: str, code: str, path: str, message: str, fix: str) -> None:
