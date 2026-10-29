@@ -213,7 +213,12 @@ class Loaded:
 
     @property
     def people(self) -> dict[str, Person]:
-        return {f.record.id: f.record for f in self.people_files.values() if isinstance(f.record, Person)}
+        """The records that may feed derived state: parsed, with an `outreach.person_added` event for their id, and with the
+        url that event carries. An orphan file, or a record whose id or url disagrees with its event (OUT002, OUT004),
+        is reported by `validate` and counted nowhere."""
+        added = _person_added_ids(self.events)
+        return {f.record.id: f.record for f in self.people_files.values()
+                if isinstance(f.record, Person) and added.get(f.record.id) == f.record.url and f.stem == f.record.id}
 
     @property
     def targets(self) -> dict[str, Target]:
@@ -315,14 +320,19 @@ class _Op:
     floor: str | None
 
 
+def _check_actor(actor: object) -> None:
+    if not isinstance(actor, str) or not ledger._ACTOR_RE.match(actor):
+        raise Refused(rules.INVALID_INPUT, f"invalid actor {actor!r}: use 'user', 'system' or 'agent:<name>'")
+
+
 def _begin(root: Path, actor: str, clock: Callable[[], str] | None, what: str) -> _Op:
-    """Under the lock: writable workspace, the one clock read, an intact chain, the ledger."""
-    now = (clock or models.utc_now)()
+    """Under the lock: writable workspace, an intact chain, the one clock read, the ledger."""
     ensure_writable(root)
     broken = ledger.verify_chain(root)
     if broken:
         raise Refused(rules.LEDGER_CORRUPT, f"the ledger's hash chain is broken ({broken[0].message}); nothing was {what}. "
                                             "Restore ledger.jsonl from .careeros/backups or version control")
+    now = (clock or models.utc_now)()       # the one clock read, under the lock
     events = ledger.read_events(root)
     return _Op(root, actor, now, events, afold.clock_floor(events))
 
@@ -423,6 +433,7 @@ def person_add(root: Path, *, url: str, name: str, company: str, role: str, head
     one is allocated otherwise. Raises `Refused`; nothing is written then, apart from the deduped audit event."""
     root = Path(root)
     operation = "person add"
+    _check_actor(actor)
     with WorkspaceLock(root):
         op = _begin(root, actor, clock, "added")
         canonical = aitem.canonical_profile_url(url) if isinstance(url, str) else None
@@ -441,10 +452,14 @@ def person_add(root: Path, *, url: str, name: str, company: str, role: str, head
         per_id = by_url[canonical] if reused else ids.new_id("person", taken)
         entity = per_id if reused else None
         path = root / _rel_person(per_id)
-        if _lexists(path) or per_id in added:
+        if per_id in added:
             _refuse(op, per_id, operation, rules.DUPLICATE,
-                    f"{per_id} already has a person record or an outreach.person_added event for {canonical}; "
-                    "restore a missing file from version control instead of adding it again")
+                    f"{per_id} already has an outreach.person_added event for {canonical}; if its file is missing, "
+                    "restore it from version control instead of adding the person again")
+        if _lexists(path):
+            _refuse(op, per_id, operation, rules.DUPLICATE,
+                    f"{_rel_person(per_id)} already exists but has no outreach.person_added event (an interrupted add); "
+                    "delete the orphan file, then add the person again")
         company_slug = slugify(company)
         if company_slug is None:
             _refuse(op, entity, operation, rules.INVALID_INPUT,
@@ -459,7 +474,7 @@ def person_add(root: Path, *, url: str, name: str, company: str, role: str, head
         again, issues = person_mod.parse(data.decode("utf-8"), rel)
         if issues or again != record:
             _refuse(op, entity, operation, rules.INVALID_INPUT,
-                    "the record does not survive a write and read back: " + ("; ".join(i.message for i in issues) or "unstorable text"))
+                    "the record is not valid: " + ("; ".join(i.message for i in issues) or "it contains text that cannot be stored"))
         digest = _sha(data)
         spec = {"type": rules.EV_PERSON_ADDED, "actor": actor, "entity": per_id, "source": "cli",
                 **apeople.person_added_fields(rel, digest, canonical)}
@@ -473,6 +488,7 @@ def person_link(root: Path, per_id: str, found_in: Sequence[str], *, actor: str,
     appended: `found_in` is documented source data. An unreadable record is refused and left as it is."""
     root = Path(root)
     operation = "person link"
+    _check_actor(actor)
     with WorkspaceLock(root):
         op = _begin(root, actor, clock, "linked")
         if not ids.is_valid_id("person", per_id):
@@ -498,7 +514,7 @@ def person_link(root: Path, per_id: str, found_in: Sequence[str], *, actor: str,
         again, issues = person_mod.parse(data.decode("utf-8"), file.rel)
         if issues or again != record:
             _refuse(op, entity, operation, rules.INVALID_INPUT,
-                    "the record does not survive a write and read back: " + "; ".join(i.message for i in issues))
+                    "the record is not valid: " + "; ".join(i.message for i in issues))
         tx = Transaction()
         try:
             tx.write(root / file.rel, data)
@@ -514,6 +530,7 @@ def target_add(root: Path, *, company: str, slug: str, market: str, fit: int, sp
     ever: an existing record or any `target_added` event for it (a dropped target included) is `duplicate`."""
     root = Path(root)
     operation = "target add"
+    _check_actor(actor)
     with WorkspaceLock(root):
         op = _begin(root, actor, clock, "added")
         views = _target_views(op)
@@ -541,7 +558,7 @@ def target_add(root: Path, *, company: str, slug: str, market: str, fit: int, sp
         again, issues = target_mod.parse(data.decode("utf-8"), rel)
         if issues or again != record:
             _refuse(op, None, operation, rules.INVALID_INPUT,
-                    "the record does not survive a write and read back: " + ("; ".join(i.message for i in issues) or "unstorable text"))
+                    "the record is not valid: " + ("; ".join(i.message for i in issues) or "it contains text that cannot be stored"))
         digest = _sha(data)
         spec = {"type": rules.EV_TARGET_ADDED, "actor": actor, "entity": record.id, "source": "cli",
                 "new_state": rules.CANDIDATE, **ofold.target_added_fields(rel, digest, slug)}
@@ -557,6 +574,7 @@ def target_decide(root: Path, slug: str, decision: str, *, source: str = "user",
     if decision not in rules.DECISION_OPERATIONS:
         raise WorkspaceError(f"unknown decision {decision!r}: use one of {', '.join(rules.DECISION_OPERATIONS)}")
     operation = f"target {decision}"
+    _check_actor(actor)
     with WorkspaceLock(root):
         op = _begin(root, actor, clock, "recorded")
         view = _target_views(op).get(slug)
@@ -640,7 +658,7 @@ def _validate(root: Path, events: list, now: str) -> list[Issue]:
     for stem, file in people_files.items():
         if stem not in added:
             issues.append(Issue("warning", rules.OUT002, file.rel, f"{file.rel} has no outreach.person_added event, so it is not a person record",
-                                "delete the file, or add the person with `careeros outreach person add`"))
+                                "delete the orphan file, then add the person again with `careeros outreach person add`"))
     for slug, file in target_files.items():
         if slug not in views:
             issues.append(Issue("warning", rules.OUT002, file.rel, f"{file.rel} has no outreach.target_added event, so it is not a target record",

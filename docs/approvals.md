@@ -46,7 +46,7 @@ The **action hash** covers the kind, the target (id, channel, label and url), th
 
 ### Person identity
 
-CareerOS has no person records. A person is identified by the canonical LinkedIn profile URL: `https://www.linkedin.com/in/<slug>`, scheme forced to `https`, host `linkedin.com` or `<country>.linkedin.com` mapped to `www.linkedin.com`, the slug percent-decoded, NFKC-normalised and lowercased, and the query, fragment and trailing slash dropped. Another host, a path other than `/in/<slug>`, credentials or a port are refused. The first proposal for a canonical URL allocates a `per_` id; every later proposal for the same URL reuses it, so the one-invite-per-person and in-flight rules hold however the agent re-proposes.
+Approvals keep no person records of their own (the optional `people/<per_id>.md` records belong to the outreach feature and are never needed here). A person is identified by the canonical LinkedIn profile URL: `https://www.linkedin.com/in/<slug>`, scheme forced to `https`, host `linkedin.com` or `<country>.linkedin.com` mapped to `www.linkedin.com`, the slug percent-decoded, NFKC-normalised and lowercased, and the query, fragment and trailing slash dropped. Another host, a path other than `/in/<slug>`, credentials or a port are refused. The first proposal for a canonical URL allocates a `per_` id; every later proposal for the same URL reuses it, so the one-invite-per-person and in-flight rules hold however the agent re-proposes.
 
 Two assumptions sit behind this: LinkedIn slugs are case-insensitive, and NFKC-equivalent spellings are the same profile. If either is wrong for a profile, two spellings would count as two people.
 
@@ -136,7 +136,7 @@ Stable codes used by `approval.rejected` reasons and command output.
 | `not_interactive` | the command needs an interactive terminal |
 | `ledger_corrupt` | the ledger's hash chain is broken; nothing is written |
 | `job_not_awaiting_approval` | a submit item's job is not at `APPROVAL_REQUIRED`, is archived, or (for `begin`) lacks its job-level approval |
-| `identity_conflict` | the person identity map in the ledger is inconsistent (one profile URL under two person ids, or one id under two URLs, across proposals and `outreach.person_added` events): a person proposal is refused and nothing is written until `ledger.jsonl` is restored |
+| `identity_conflict` | the person identity map in the ledger is inconsistent (one profile URL under two person ids, or one id under two URLs, across proposals and `outreach.person_added` events), or an `outreach.person_added` event or a person proposal has no readable profile URL: a person proposal is refused and nothing is written until `ledger.jsonl` is restored |
 | `invalid_input` | the proposal itself is not valid: an unparseable URL, an empty label or content, or a value the item cannot store |
 
 A refusal of an existing item appends an audit-only, deduped `approval.rejected`. A refusal of an id that names no item appends nothing.

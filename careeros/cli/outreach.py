@@ -142,7 +142,7 @@ def person_show_cmd(
         typer.echo(f"name:     {r.name}\nurl:      {r.url}\ncompany:  {r.company} ({r.company_slug})\nrole:     {r.role}")
         typer.echo("found in: " + (", ".join(f"{f.kind}:{f.id}" for f in r.found_in) or "-"))
     state = view.to_dict()["state"]
-    typer.echo("state:    " + ", ".join(f"{k}={v}" for k, v in state.items() if v) or "state:    -")
+    typer.echo("state:    " + (", ".join(f"{k}={v}" for k, v in state.items() if v) or "-"))
     if view.problems:
         typer.echo(f"problems: {'; '.join(view.problems)}")
 

@@ -288,7 +288,7 @@ def test_an_orphan_target_file_is_not_a_target_for_found_in(w: W) -> None:
 
 @pytest.mark.parametrize("kwargs,why", [
     ({"role": "boss"}, "role"), ({"name": "   "}, "name"), ({"company": "日本語"}, "company_slug"),
-    ({"name": "Alex‮Example"}, "bidi"), ({"headline": "x" * 600}, "headline"),
+    ({"name": "Alex\u202eExample"}, "bidi"), ({"headline": "x" * 600}, "headline"),
 ])
 def test_person_add_invalid_input_writes_nothing(w: W, kwargs: dict, why: str) -> None:
     before = full_state(w.root)
@@ -866,7 +866,8 @@ EDITS = [
     ("target.evidence", target_edit("example-corp", evidence=(Evidence("sponsor register entry (placeholder)", "2031-01-01"),)),
      lambda b: {n: {**v, "activity": {**v["activity"], "example-corp": "2031-01-01T00:00:00Z"}} for n, v in b.items()}, set()),
     # identity-bearing fields: flagged, and no identity or ledger-derived output changes
-    ("person.url", person_edit("A", url=RAN), _same, {"OUT004"}),
+    # a record whose url disagrees with its event feeds no state (A is no longer offered), and identity stays as the ledger says
+    ("person.url", person_edit("A", url=RAN), _field("next", ["D"]), {"OUT004"}),
 ]
 
 
@@ -1187,3 +1188,197 @@ def test_the_service_imports_no_cli(tmp_path: Path) -> None:
     code = ("import sys, careeros.core.approvals.service; print([m for m in sys.modules if m.startswith('careeros.core.outreach')])")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=True).stdout
     assert out.strip() == "[]"                               # approvals import nothing from the outreach package
+
+
+# =========================================================================================================================
+# fix round 1: orphans never feed state; file-first, one clock read, dedupe and fail-closed rules pinned
+# =========================================================================================================================
+
+def test_an_orphan_person_file_never_feeds_target_state(w: W) -> None:
+    w.target()
+    w.approve_target("example-corp")
+    per, _ = w.invite_done(ALEX)                                   # approval-only person: no outreach.person_added event
+    tgt = w.events("outreach.target_added")[0]["entity"]
+    rel = f"people/{per}.md"
+    (w.root / "people").mkdir()
+    (w.root / rel).write_bytes(person_mod.to_bytes(Person(per, ALEX, "Alex", "", "Example Corp", "example-corp", "recruiter", None,
+                                                          (FoundIn("target", tgt),), "2026-10-06")))
+    assert service.target_show(w.root, "example-corp", w.now).status == "approved"            # not "contacted"
+    assert service.target_show(w.root, "example-corp", w.now).people == ()
+    assert w.ok("outreach", "target", "show", "example-corp")["status"] == "approved"
+    assert [t["status"] for t in w.ok("outreach", "target", "list")["targets"]] == ["approved"]
+    assert ("OUT002", "warning", rel) in out_codes(w)
+    assert per not in service.load(w.root, w.now).people
+    (w.root / rel).unlink()                                        # delete the orphan, add again: state follows the real record
+    w.person(ALEX, found_in=("target:example-corp",))
+    assert service.target_show(w.root, "example-corp", w.now).status == "contacted"
+
+
+def test_a_record_that_disagrees_with_its_event_feeds_no_state(w: W) -> None:
+    w.target()
+    w.approve_target("example-corp")
+    per, _ = w.invite_done(ALEX)
+    w.person(ALEX, found_in=("target:example-corp",))
+    assert service.target_show(w.root, "example-corp", w.now).status == "contacted"
+    hand_edit_person(w.root, per, url=SAM)
+    assert service.target_show(w.root, "example-corp", w.now).status == "approved"
+    assert ("OUT004", "error", f"people/{per}.md") in out_codes(w)
+    hand_edit_person(w.root, per, url=ALEX)
+    assert service.target_show(w.root, "example-corp", w.now).status == "contacted"
+
+
+def test_a_failing_file_write_leaves_no_event_and_no_file(w: W, monkeypatch: pytest.MonkeyPatch) -> None:
+    from careeros.core.memory import store
+    w.target("seed-co", company="Seed Co")
+    before = {k: v[0] for k, v in full_state(w.root).items()}
+
+    def boom(self, path, data):
+        raise OSError("disk full (invented)")
+
+    monkeypatch.setattr(store.Transaction, "write", boom)
+    for argv in (("outreach", "person", "add", "--url", ALEX, "--name", "A", "--company", "C", "--role", "peer"),
+                 ("outreach", "target", "add", "--company", "X", "--slug", "x-co", "--market", "Australia", "--fit", "5",
+                  "--sponsorship", "n/a")):
+        assert w.run(*argv, "--json").exit_code == 1
+    assert {k: v[0] for k, v in full_state(w.root).items()} == before
+
+
+class Probe:
+    """A clock that returns a different value on every call, counts its calls and records whether the workspace lock was
+    held by this thread at that moment (probed from another thread, which must time out on the lock)."""
+
+    def __init__(self, root: Path, start: str = "2026-10-06T10:00:00Z") -> None:
+        self.root, self.calls, self.held, self.t = root, 0, [], start
+
+    def __call__(self) -> str:
+        import threading
+        from careeros.core.workspace import LockTimeout, WorkspaceLock
+        result = []
+
+        def try_lock():
+            try:
+                with WorkspaceLock(self.root, timeout=0.15):
+                    result.append(False)
+            except LockTimeout:
+                result.append(True)
+        t = threading.Thread(target=try_lock)
+        t.start()
+        t.join(5)
+        self.held.append(result == [True])
+        self.calls += 1
+        self.t = shift(self.t, seconds=1)
+        return self.t
+
+
+def test_exactly_one_clock_read_per_operation_taken_under_the_lock(w: W) -> None:
+    ok_ops = [
+        lambda c: service.person_add(w.root, url=ALEX, name="A", company="Example Corp", role="peer", actor="user", clock=c),
+        lambda c: service.target_add(w.root, company="Example Corp", slug="example-corp", market="Australia", fit=5,
+                                     sponsorship="n/a", actor="user", clock=c),
+        lambda c: service.target_decide(w.root, "example-corp", "approve", actor="user", clock=c),
+    ]
+    refusing = [
+        lambda c: service.person_add(w.root, url=ALEX, name="A", company="Example Corp", role="peer", actor="user", clock=c),   # duplicate
+        lambda c: service.target_decide(w.root, "example-corp", "approve", actor="user", clock=c),                               # wrong_state
+        lambda c: service.person_link(w.root, ids_of(w)[0], ["job:nope"], actor="user", clock=c),                                # invalid_input
+    ]
+    for op in [*ok_ops, *refusing]:
+        probe = Probe(w.root, shift(T0, hours=1))
+        try:
+            op(probe)
+        except service.Refused:
+            pass
+        assert probe.calls == 1 and probe.held == [True]
+    link = Probe(w.root, shift(T0, hours=2))
+    service.person_link(w.root, ids_of(w)[0], ["target:example-corp"], actor="user", clock=link)
+    assert link.calls == 1 and link.held == [True]
+
+
+def test_dedupe_keys_on_the_entitys_latest_event_of_any_type(w: W) -> None:
+    w.target()
+    w.approve_target("example-corp")
+    tgt = w.events("outreach.target_added")[0]["entity"]
+    w.refused("outreach", "target", "approve", "example-corp", code="wrong_state")
+    w.append({"type": "note.added", "actor": "user", "entity": tgt, "action": "an unrelated note on the same entity"})
+    w.refused("outreach", "target", "approve", "example-corp", code="wrong_state")
+    assert len(rejected(w)) == 2
+    w.refused("outreach", "target", "approve", "example-corp", code="wrong_state")
+    assert len(rejected(w)) == 2
+
+
+def test_a_malformed_person_added_alone_fails_closed(w: W) -> None:
+    per = ids.new_id("person")
+    w.append({"type": "outreach.person_added", "actor": "system", "entity": per, "source": "test", "action": "add person",
+              "artifacts": ["people/x.md"]})
+    assert apeople.identity_problems(w.events()) == []                  # no URL conflict: only the reader reports it
+    f = w.root / "draft.txt"
+    f.write_text("hello\n", encoding="utf-8")
+    before = full_state(w.root)
+    w.refused("outreach", "person", "add", "--url", ALEX, "--name", "A", "--company", "C", "--role", "peer", code="identity_conflict")
+    res = w.run("approval", "propose", "--kind", "linkedin_invite", "--person-url", ALEX, "--label", "x",
+                "--content-file", str(f), "--json")
+    assert res.exit_code == 1 and json.loads(res.stdout)["code"] == "identity_conflict"
+    assert full_state(w.root) == before
+
+
+def test_target_add_never_overwrites_an_orphan_target_file(w: W) -> None:
+    (w.root / "targets").mkdir()
+    orphan = target_mod.to_bytes(Target(ids.new_id("target"), "example-corp", "Orphan Co", "Australia", 3, "n/a"))
+    (w.root / "targets" / "example-corp.md").write_bytes(orphan)
+    w.refused("outreach", "target", "add", "--company", "Example Corp", "--slug", "example-corp", "--market", "Australia",
+              "--fit", "5", "--sponsorship", "n/a", code="duplicate")
+    assert (w.root / "targets" / "example-corp.md").read_bytes() == orphan and w.events() == []
+
+
+def test_reused_id_crash_recovery_delete_the_orphan_then_add_again(w: W) -> None:
+    inv = w.propose("linkedin_invite", ALEX)
+    per = inv["target"]
+    rel = f"people/{per}.md"
+    (w.root / "people").mkdir()
+    (w.root / rel).write_bytes(person_mod.to_bytes(Person(per, ALEX, "Alex", "", "Example Corp", "example-corp", "recruiter",
+                                                          None, (), "2026-10-06")))
+    body = w.refused("outreach", "person", "add", "--url", ALEX, "--name", "A", "--company", "C", "--role", "peer", code="duplicate")
+    assert "delete the orphan file" in body["error"] and "add the person again" in body["error"]
+    msgs = [i for i in service.validate_workspace(w.root, w.events(), w.now) if i.code == "OUT002"]
+    assert "delete the orphan file" in msgs[0].fix and "add the person again" in msgs[0].fix
+    (w.root / rel).unlink()
+    out = w.person(ALEX)
+    assert out["id"] == per and out["reused_id"] is True and (w.root / rel).is_file()
+
+
+def test_person_show_prints_a_dash_for_an_empty_state(w: W) -> None:
+    per = w.person()["id"]
+    res = w.run("outreach", "person", "show", per)
+    assert res.exit_code == 0 and "state:    -" in res.output
+    w.outcome(per, "closed")
+    assert "closed_at=" in w.run("outreach", "person", "show", per).output
+
+
+@pytest.mark.parametrize("argv,field", [
+    (("outreach", "target", "add", "--company", "X", "--slug", "x-co", "--market", "Australia", "--fit", "11", "--sponsorship", "n/a"), "fit"),
+    (("outreach", "person", "add", "--url", ALEX, "--name", "A", "--company", "C", "--role", "boss"), "role"),
+])
+def test_validation_failures_name_the_field_not_a_round_trip(w: W, argv, field) -> None:
+    body = w.refused(*argv, code="invalid_input")
+    assert field in body["error"] and "write and read back" not in body["error"]
+
+
+@pytest.mark.parametrize("argv", [
+    ("outreach", "person", "add", "--url", ALEX, "--name", "A", "--company", "C", "--role", "peer"),
+    ("outreach", "target", "add", "--company", "X", "--slug", "x-co", "--market", "Australia", "--fit", "5", "--sponsorship", "n/a"),
+])
+def test_an_invalid_actor_is_refused_before_anything_is_written(w: W, argv) -> None:
+    before = full_state(w.root, lock=True)
+    body = w.refused(*argv, "--actor", "not an actor", code="invalid_input")
+    assert "actor" in body["error"] and full_state(w.root, lock=True) == before
+
+
+def test_a_broken_chain_is_refused_before_the_clock_is_read(w: W) -> None:
+    w.target("a-co", company="A Co")
+    w.target("b-co", company="B Co")
+    corrupt_chain(w)
+    calls = []
+    with pytest.raises(service.Refused) as exc:
+        service.target_add(w.root, company="X", slug="x-co", market="Australia", fit=5, sponsorship="n/a", actor="user",
+                           clock=lambda: calls.append(1) or T0)
+    assert exc.value.code == "ledger_corrupt" and calls == []
