@@ -133,7 +133,7 @@ def test_the_note_is_kept_in_the_action_and_checked(w: W) -> None:
     record(w, per, "--accepted", "--note", "accepted on the phone app")
     assert "accepted on the phone app" in outcome_events(w)[0]["action"]
     b = invited(w, SAM, name="Sam Example")
-    w.refused("outreach", "record", b, "--accepted", "--note", "bad ‮ note", code="invalid_input")
+    w.refused("outreach", "record", b, "--accepted", "--note", "bad \u202e note", code="invalid_input")
     w.refused("outreach", "record", b, "--accepted", "--note", "x" * 501, code="invalid_input")
     assert len(outcome_events(w)) == 1
 
