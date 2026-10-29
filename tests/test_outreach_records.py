@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from helpers import add_job, make_workspace
+from helpers import ALEX, EVID, FMT, KIM, SAM, T0, OutreachW as W, Probe, add_job, full_state, make_workspace, rejected, shift
 from typer.testing import CliRunner
 
 from careeros.cli import _util
@@ -32,9 +32,6 @@ from careeros.core.outreach import target as target_mod
 from careeros.core.outreach.model import Evidence, FoundIn, Person, Target
 
 runner = CliRunner()
-FMT = "%Y-%m-%dT%H:%M:%SZ"
-T0 = "2026-10-06T10:00:00Z"
-ALEX = "https://www.linkedin.com/in/alex-example"
 ALEX_VARIANTS = [
     "https://www.linkedin.com/in/Alex-Example",
     "https://www.linkedin.com/in/alex-example/",
@@ -42,125 +39,15 @@ ALEX_VARIANTS = [
     "https://www.linkedin.com/in/alex-example?trk=public",
     "http://www.linkedin.com/in/alex-example",
 ]
-SAM = "https://www.linkedin.com/in/sam-example"
-KIM = "https://www.linkedin.com/in/kim-example"
 PAT = "https://www.linkedin.com/in/pat-example"
 LEE = "https://www.linkedin.com/in/lee-example"
 RAN = "https://www.linkedin.com/in/ran-example"
-EVID = "sponsor register entry (placeholder):2026-10-06"
-
-
-def shift(ts: str, **delta) -> str:
-    return (datetime.strptime(ts, FMT) + timedelta(**delta)).strftime(FMT)
-
-
-def full_state(root: Path, lock: bool = False) -> dict[str, tuple[bytes | None, int | None]]:
-    """EVERY path (files and directories) with bytes and mtime: the ledger and `.careeros/` included. A state-changing
-    command takes the lock, which creates the empty `.careeros/lock` file, so refusal checks leave it out; the read-only
-    checks pass `lock=True` and prove a read never creates or touches it."""
-    out = {}
-    for p in sorted(root.rglob("*")):
-        rel = p.relative_to(root).as_posix()
-        if rel == ".careeros/lock" and not lock:
-            continue
-        out[rel] = (p.read_bytes(), p.stat().st_mtime_ns) if p.is_file() else (None, None)
-    return out
-
-
-class W:
-    """The workspace, ONE clock for the commands' `now` and the ledger's stamps, and the CLI."""
-
-    def __init__(self, root: Path, mp: pytest.MonkeyPatch) -> None:
-        self.root, self.now, self.mp = root, T0, mp
-        mp.setattr(models, "utc_now", lambda: self.now)
-        mp.setattr(_util, "is_interactive", lambda: False)
-
-    def run(self, *args: str, input: str | None = None):
-        return runner.invoke(app, [*args, "--workspace", str(self.root)], input=input)
-
-    def ok(self, *args: str):
-        res = self.run(*args, "--json")
-        assert res.exit_code == 0, res.output
-        return json.loads(res.stdout)
-
-    def refused(self, *args: str, code: str, exit_code: int = 1) -> dict:
-        res = self.run(*args, "--json")
-        assert res.exit_code == exit_code, res.output
-        body = json.loads(res.stdout)
-        assert body["code"] == code, body
-        return body
-
-    def events(self, type_: str | None = None) -> list[dict]:
-        evs = ledger.read_events(self.root)
-        return [e for e in evs if type_ is None or e["type"] == type_]
-
-    def ledger_bytes(self) -> bytes:
-        p = self.root / "ledger.jsonl"
-        return p.read_bytes() if p.exists() else b""
-
-    # --- commands
-    def person(self, url=ALEX, *, name="Alex Example", company="Example Corp", role="recruiter", found_in=(), market=None,
-               headline=None) -> dict:
-        args = ["outreach", "person", "add", "--url", url, "--name", name, "--company", company, "--role", role]
-        for f in found_in:
-            args += ["--found-in", f]
-        if market:
-            args += ["--market", market]
-        if headline:
-            args += ["--headline", headline]
-        return self.ok(*args)
-
-    def target(self, slug="example-corp", *, company="Example Corp", market="Australia", fit=8, sponsorship="likely",
-               evidence=(EVID,)) -> dict:
-        args = ["outreach", "target", "add", "--company", company, "--slug", slug, "--market", market, "--fit", str(fit),
-                "--sponsorship", sponsorship]
-        for e in evidence:
-            args += ["--evidence", e]
-        return self.ok(*args)
-
-    def approve_target(self, slug: str) -> dict:
-        return self.ok("outreach", "target", "approve", slug, "--source", "user")
-
-    def drop_target(self, slug: str, reason="not a fit") -> dict:
-        return self.ok("outreach", "target", "drop", slug, "--source", "user", "--reason", reason)
-
-    def propose(self, kind: str, url: str, *, expect: int = 0):
-        f = self.root / "draft.txt"
-        f.write_text("Hi there, a short invented note.\n", encoding="utf-8")
-        res = self.run("approval", "propose", "--kind", kind, "--person-url", url, "--label", "Someone, Example Corp",
-                       "--content-file", str(f), "--json")
-        assert res.exit_code == expect, res.output
-        return json.loads(res.stdout)
-
-    def invite_done(self, url: str) -> tuple[str, str]:
-        """propose, approve (interactive seam), begin, done: a consumed invite. Returns (person id, item id)."""
-        inv = self.propose("linkedin_invite", url)
-        self.mp.setattr(_util, "is_interactive", lambda: True)
-        res = self.run("approve", inv["id"], input="a\n")
-        self.mp.setattr(_util, "is_interactive", lambda: False)
-        assert res.exit_code == 0, res.output
-        self.ok("approval", "begin", inv["id"])
-        self.ok("approval", "done", inv["id"])
-        return inv["target"], inv["id"]
-
-    def append(self, *specs: dict) -> None:
-        ledger.append_events(self.root, list(specs))
-
-    def outcome(self, per: str, kind: str, **extra) -> None:
-        spec = {"type": f"outreach.{kind}", "actor": "user", "entity": per, "source": "user", "action": f"{kind} {per}"}
-        if kind == "closed":
-            spec["reason"] = "declined"
-        self.append({**spec, **extra})
 
 
 @pytest.fixture
 def w(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> W:
     monkeypatch.delenv("CAREEROS_WORKSPACE", raising=False)
     return W(make_workspace(tmp_path / "ws"), monkeypatch)
-
-
-def rejected(w: W) -> list[dict]:
-    return w.events("outreach.rejected")
 
 
 def read_person(root: Path, per_id: str) -> Person:
@@ -1241,33 +1128,6 @@ def test_a_failing_file_write_leaves_no_event_and_no_file(w: W, monkeypatch: pyt
                   "--sponsorship", "n/a")):
         assert w.run(*argv, "--json").exit_code == 1
     assert {k: v[0] for k, v in full_state(w.root).items()} == before
-
-
-class Probe:
-    """A clock that returns a different value on every call, counts its calls and records whether the workspace lock was
-    held by this thread at that moment (probed from another thread, which must time out on the lock)."""
-
-    def __init__(self, root: Path, start: str = "2026-10-06T10:00:00Z") -> None:
-        self.root, self.calls, self.held, self.t = root, 0, [], start
-
-    def __call__(self) -> str:
-        import threading
-        from careeros.core.workspace import LockTimeout, WorkspaceLock
-        result = []
-
-        def try_lock():
-            try:
-                with WorkspaceLock(self.root, timeout=0.15):
-                    result.append(False)
-            except LockTimeout:
-                result.append(True)
-        t = threading.Thread(target=try_lock)
-        t.start()
-        t.join(5)
-        self.held.append(result == [True])
-        self.calls += 1
-        self.t = shift(self.t, seconds=1)
-        return self.t
 
 
 def test_exactly_one_clock_read_per_operation_taken_under_the_lock(w: W) -> None:

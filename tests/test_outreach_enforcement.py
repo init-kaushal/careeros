@@ -9,14 +9,13 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import subprocess
 import sys
 import threading
 
 import pytest
-from helpers import make_workspace
-from test_approvals_claims import Cmd, race_many
-from test_outreach_records import ALEX, KIM, SAM, T0, W, full_state, shift
+from helpers import ALEX, KIM, SAM, T0, Cmd, OutreachW as W, full_state, make_workspace, race_many, shift
 
 from careeros.cli import _util
 from careeros.core import ledger, models
@@ -136,10 +135,32 @@ def test_a_submit_item_is_never_person_closed(w: W) -> None:
     res = w.run("approval", "propose", "--kind", "application_submit", "--job", job["id"], "--content-file",
                 str(w.root / "profile.md"), "--manifest", "jobs/discovered/example-platform/resume.pdf", "--json")
     assert res.exit_code == 0, res.output
+    item = json.loads(res.stdout)["id"]
+    approve(w, item)
     w.append({"type": "outreach.closed", "actor": "user", "entity": job["id"], "source": "user", "reason": "other",
               "action": "a hand-made close on a job id"})
-    item = json.loads(res.stdout)["id"]
-    assert aservice._closed_problem(fold.fold_all(w.events(), w.now)[item], w.events()) is None
+    set_cap(w.root, "Weekly invite cap: 0")                   # neither check applies to a submission
+    assert w.ok("approval", "begin", item)["id"] == item
+
+
+def test_the_cap_window_runs_from_the_consumed_ts_never_the_started_ts(w: W) -> None:
+    """begin at T0, done at T0+3d: the invite counts until T0+10d (7 days after `approval.consumed`), not T0+7d."""
+    set_cap(w.root, "Weekly invite cap: 1")
+    a = approved(w, "linkedin_invite", ALEX)
+    w.ok("approval", "begin", a["id"])
+    w.now = shift(T0, days=3)
+    w.ok("approval", "done", a["id"])
+    for now, counted in ((shift(T0, days=6, hours=23), 1), (shift(T0, days=8), 1), (shift(T0, days=10, seconds=-1), 1),
+                         (shift(T0, days=10), 0)):
+        w.now = now
+        body = w.ok("outreach", "cap")
+        assert body["count"] == counted, (now, body)
+        b = approved(w, "linkedin_invite", SAM)
+        if counted:
+            w.refused("approval", "begin", b["id"], code="cap_reached")
+            assert body["oldest_leaves"] == shift(T0, days=10)
+        else:
+            w.ok("approval", "begin", b["id"])
 
 
 # =========================================================================================================================
@@ -511,3 +532,83 @@ def test_race_two_records_of_one_outcome(tmp_path, widen) -> None:
         codes = sorted(d.get("code", "ok") if code else "ok" for code, d in results)
         assert codes == ["ok", "wrong_state"], results
         assert len([e for e in ledger.read_events(root) if e["type"] == "outreach.accepted"]) == 1
+
+
+# =========================================================================================================================
+# the profile read is bounded: no FIFO, symlink, directory or oversized file can hang or flood a check under the lock
+# =========================================================================================================================
+
+RUN_CLI = "import sys; from careeros.cli.main import app; sys.argv = ['careeros', *sys.argv[1:]]; app()"
+
+
+def run_cli(*args: str, timeout: float = 20) -> tuple[int, dict]:
+    """A real `careeros` process, bounded: a regression that blocks fails the test with TimeoutExpired, it never hangs."""
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+    proc = subprocess.run([sys.executable, "-c", RUN_CLI, *args], capture_output=True, text=True, timeout=timeout,
+                          env=env, stdin=subprocess.DEVNULL)
+    try:
+        return proc.returncode, json.loads(proc.stdout)
+    except ValueError:
+        return proc.returncode, {"raw": proc.stdout + proc.stderr}
+
+
+def hostile_profile(root, kind: str, tmp_path) -> None:
+    path = root / "profile.md"
+    path.unlink()
+    if kind == "fifo":
+        os.mkfifo(path)
+    elif kind == "directory":
+        path.mkdir()
+    elif kind == "symlink to a regular file":
+        real = tmp_path / "elsewhere.md"
+        real.write_text("# Profile\n\n## Outreach\nWeekly invite cap: 5\n", encoding="utf-8")
+        path.symlink_to(real)
+    elif kind == "symlink to /dev/zero":
+        path.symlink_to("/dev/zero")
+    elif kind == "2 MiB file":
+        path.write_bytes(b"# Profile\n" + b"x" * (2 << 20))
+    else:
+        raise AssertionError(kind)
+
+
+HOSTILE = ["fifo", "directory", "symlink to a regular file", "symlink to /dev/zero", "2 MiB file"]
+
+
+@pytest.mark.parametrize("kind", HOSTILE)
+def test_a_hostile_profile_fails_closed_everywhere_without_hanging(tmp_path, kind: str) -> None:
+    root = real_root(tmp_path)
+    item = real_approved(root, rules.LINKEDIN_INVITE, ALEX)
+    msg = real_approved(root, rules.LINKEDIN_MESSAGE, SAM)
+    hostile_profile(root, kind, tmp_path)
+    code, out = run_cli("approval", "begin", item.id, "--json", *WS(root))
+    assert (code, out.get("code")) == (1, "cap_config_invalid"), out
+    assert "profile.md" in out["error"]
+    with wsmod.WorkspaceLock(root, timeout=2):          # begin released the lock: other writers are not blocked
+        pass
+    code, out = run_cli("approval", "begin", msg.id, "--json", *WS(root))
+    assert code == 0, out                                # a message needs no cap
+    for cmd in ("cap", "next"):
+        code, out = run_cli("outreach", cmd, "--json", *WS(root))
+        assert (code, out.get("code")) == (1, "cap_config_invalid"), out
+    code, out = run_cli("validate", "--json", *WS(root))
+    issues = [i for i in out["issues"] if i["code"] == "OUT007"]
+    assert len(issues) == 1 and issues[0]["severity"] == "error" and issues[0]["path"] == "profile.md", out
+
+
+def test_an_absent_profile_is_the_default_cap(tmp_path) -> None:
+    root = real_root(tmp_path)
+    (root / "profile.md").unlink()
+    assert aservice.profile_cap_setting(root) == cap.CapSetting()
+    code, out = run_cli("outreach", "cap", "--json", *WS(root))
+    assert code == 0 and out["cap"] == 15 and out["configured"] is False, out
+    code, out = run_cli("validate", "--json", *WS(root))
+    assert "OUT007" not in [i["code"] for i in out["issues"]]
+
+
+def test_a_profile_exactly_at_the_size_bound_is_read(tmp_path) -> None:
+    root = real_root(tmp_path)
+    head = b"# Profile\n\n## Outreach\nWeekly invite cap: 4\n"
+    (root / "profile.md").write_bytes(head + b"x" * (aservice.MAX_PROFILE_BYTES - len(head)))
+    assert aservice.profile_cap_setting(root).value == 4
+    (root / "profile.md").write_bytes(head + b"x" * (aservice.MAX_PROFILE_BYTES - len(head) + 1))
+    assert aservice.profile_cap_setting(root).problem is not None

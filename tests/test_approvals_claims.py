@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from helpers import add_job, assert_only_ledger_appended, make_workspace, state
+from helpers import CHILD, Cmd, add_job, assert_only_ledger_appended, make_workspace, race_many, state
 from typer.testing import CliRunner
 
 from careeros.cli import _util
@@ -1178,77 +1178,6 @@ def test_a_busy_workspace_exits_1(ws, interactive, args):
 
 
 # --- real cross-process races --------------------------------------------------------------------------------------------------
-
-CHILD = r"""
-import os, sys, time
-from careeros.cli import _util
-from careeros.cli.main import app
-if os.environ.get("CAREEROS_TEST_TTY"):
-    _util.is_interactive = lambda: True        # the test plays the user's terminal
-if os.environ.get("CAREEROS_TEST_WIDEN"):
-    # widen the window between reading the ledger and appending, inside the command's critical section
-    from careeros.core.approvals import fold
-    real = fold.fold_events
-    def slow(*a, **k):
-        out = real(*a, **k)
-        time.sleep(0.3)
-        return out
-    fold.fold_events = slow
-ready, go = sys.argv[1], sys.argv[2]
-open(ready, "w").close()
-while not os.path.exists(go):
-    time.sleep(0.001)
-time.sleep(float(os.environ.get("CAREEROS_TEST_DELAY") or 0))
-sys.argv = ["careeros", *sys.argv[3:]]
-app()
-"""
-
-
-def Cmd(*args, tty=False, delay=0.0, input=""):
-    return {"args": list(args), "tty": tty, "delay": delay, "input": input}
-
-
-def race_many(tmp_path: Path, rounds: list[list[dict]], widen: bool) -> list[list[tuple[int, dict]]]:
-    """Start one OS process per command of every round at once (each round on its own workspace), wait until every
-    child is ready, release them together, and return (exit code, JSON output or raw text) per command per round."""
-    script = tmp_path / "child.py"
-    script.write_text(CHILD)
-    stamp = time.monotonic_ns()
-    go = tmp_path / f"go-{stamp}"
-    procs = []
-    for r, round_ in enumerate(rounds):
-        for c, cmd in enumerate(round_):
-            env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
-            for key in ("CAREEROS_TEST_WIDEN", "CAREEROS_TEST_TTY", "CAREEROS_TEST_DELAY"):
-                env.pop(key, None)
-            if widen:
-                env["CAREEROS_TEST_WIDEN"] = "1"
-            if cmd["tty"]:
-                env["CAREEROS_TEST_TTY"] = "1"
-            if cmd["delay"]:
-                env["CAREEROS_TEST_DELAY"] = str(cmd["delay"])
-            stdin = tmp_path / f"in-{stamp}-{r}-{c}"
-            stdin.write_text(cmd["input"])
-            ready = tmp_path / f"ready-{stamp}-{r}-{c}"
-            with stdin.open("rb") as handle:
-                proc = subprocess.Popen([sys.executable, str(script), str(ready), str(go), *cmd["args"]], stdin=handle,
-                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
-            procs.append((r, ready, proc))
-    deadline = time.monotonic() + 120
-    while not all(ready.exists() for _, ready, _ in procs):
-        assert time.monotonic() < deadline, "children did not start"
-        time.sleep(0.01)
-    go.write_text("go")
-    out: list[list[tuple[int, dict]]] = [[] for _ in rounds]
-    for r, _, proc in procs:
-        stdout, stderr = proc.communicate(timeout=120)
-        try:
-            data = json.loads(stdout)
-        except ValueError:
-            data = {"raw": stdout.decode() + stderr.decode()}
-        out[r].append((proc.returncode, data))
-    return out
-
 
 @pytest.fixture
 def real_ws(tmp_path: Path):

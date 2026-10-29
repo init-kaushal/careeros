@@ -10,8 +10,7 @@ import json
 import threading
 
 import pytest
-from helpers import add_job, make_workspace
-from test_outreach_records import ALEX, KIM, SAM, T0, Probe, W, full_state, rejected, shift
+from helpers import ALEX, KIM, SAM, T0, OutreachW as W, Probe, add_job, full_state, make_workspace, rejected, shift
 
 from careeros.core import ids, ledger, models
 from careeros.core.approvals import cap
@@ -149,11 +148,12 @@ ILLEGAL = [
 ]
 
 
-@pytest.mark.parametrize("why,before,flag", ILLEGAL, ids=[i[0] for i in ILLEGAL])
-@pytest.mark.parametrize("with_invite", [False, True])
+CELLS = [(why, before, flag, with_invite) for why, before, flag in ILLEGAL for with_invite in (False, True)
+         if not ((not before and with_invite) or (set(before) & {"--accepted", "--replied"} and not with_invite))]
+
+
+@pytest.mark.parametrize("why,before,flag,with_invite", CELLS, ids=[f"{c[0]}-{'invite' if c[3] else 'no invite'}" for c in CELLS])
 def test_illegal_outcomes_are_wrong_state_and_deduped(w: W, why, before, flag, with_invite) -> None:
-    if (not before and with_invite) or (set(before) & {"--accepted", "--replied"} and not with_invite):
-        pytest.skip("not a meaningful combination")
     per = invited(w) if with_invite else person(w)
     for b in before:
         record(w, per, b, *(["--reason", "declined"] if b == "--closed" else []))
@@ -218,6 +218,14 @@ def test_clock_floor_is_clock_skew_with_one_deduped_rejection(w: W) -> None:
     assert len(w.events()) == before + 1 and rejected(w)[0]["reason"].startswith("clock_skew: ")
     w.now = T0                                              # equal to the floor is fine
     record(w, per, "--accepted")
+
+
+def test_clock_skew_on_an_unknown_person_appends_nothing(w: W) -> None:
+    invited(w)
+    w.now = shift(T0, seconds=-1)
+    before = w.ledger_bytes()
+    w.refused("outreach", "record", ids.new_id("person"), "--accepted", code="clock_skew")
+    assert w.ledger_bytes() == before
 
 
 def test_a_broken_chain_is_ledger_corrupt_and_writes_nothing(w: W) -> None:

@@ -27,6 +27,8 @@ recorded decision, not a security boundary.
 
 from __future__ import annotations
 
+import errno
+import os
 import stat
 from dataclasses import dataclass
 from datetime import timedelta
@@ -41,6 +43,7 @@ from careeros.core.workspace import WorkspaceError, WorkspaceLock, ensure_writab
 
 APPROVALS_DIR = "approvals"
 PROFILE_REL = "profile.md"
+MAX_PROFILE_BYTES = 1 << 20
 INVALID_INPUT = "invalid_input"
 LEDGER_CORRUPT = rules.LEDGER_CORRUPT
 MAX_ITEM_BYTES = 1 << 20
@@ -522,18 +525,47 @@ def _job_problem(root: Path, job_id: str, events: list, *, require_approved: boo
 
 def profile_cap_setting(root: Path) -> cap.CapSetting:
     """The weekly invite cap setting in `profile.md` (outreach spec 6.4), read from the file at the moment of the call. No
-    profile is an absent setting (the default cap); a profile that cannot be read or is not UTF-8 is an invalid setting
-    (fail closed). Never raises."""
+    profile (ENOENT) is an absent setting (the default cap). Anything else that is not a plain readable UTF-8 file of at
+    most `MAX_PROFILE_BYTES` (a symlink, a FIFO or other non-regular file, a directory, an oversized or unreadable file) is
+    an invalid setting (fail closed). The open never follows a symlink and never blocks, and the read is bounded, so this
+    can run under the workspace lock. Never raises."""
+    def invalid(why: str) -> cap.CapSetting:
+        return cap.CapSetting(None, f"profile.md {why}, so its `Weekly invite cap` setting cannot be read")
+
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        raw = (Path(root) / PROFILE_REL).read_bytes()
+        fd = os.open(Path(root) / PROFILE_REL, flags)
     except FileNotFoundError:
         return cap.CapSetting()
     except OSError as exc:
-        return cap.CapSetting(None, f"profile.md cannot be read ({exc.strerror or exc})")
+        if exc.errno == errno.ELOOP:
+            return invalid("is a symlink (it must be a regular file)")
+        return invalid(f"cannot be read ({exc.strerror or exc})")
     try:
-        return cap.parse_cap_setting(raw.decode("utf-8"))
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return invalid("is not a regular file")
+        chunks, size = [], 0
+        while size <= MAX_PROFILE_BYTES:
+            chunk = os.read(fd, MAX_PROFILE_BYTES + 1 - size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+    except OSError as exc:
+        return invalid(f"cannot be read ({exc.strerror or exc})")
+    finally:
+        os.close(fd)
+    if size > MAX_PROFILE_BYTES:
+        return invalid(f"is larger than {MAX_PROFILE_BYTES} bytes")
+    try:
+        return cap.parse_cap_setting(b"".join(chunks).decode("utf-8"))
     except UnicodeDecodeError:
-        return cap.CapSetting(None, "profile.md is not valid UTF-8, so its `Weekly invite cap` setting cannot be read")
+        return invalid("is not valid UTF-8")
+
+
+def cap_config_message(refusal: cap.CapRefusal) -> str:
+    """The `cap_config_invalid` message shared by `approval begin`, `outreach cap` and `outreach next`."""
+    return f"profile.md holds an invalid weekly invite cap setting: {refusal.message}"
 
 
 def _closed_problem(st: ItemState, events: list) -> tuple[str, str] | None:
@@ -555,7 +587,7 @@ def _cap_problem(root: Path, item_id: str, st: ItemState, states: dict[str, Item
         return None
     value = cap.effective_cap(profile_cap_setting(root))
     if isinstance(value, cap.CapRefusal):
-        return rules.CAP_CONFIG_INVALID, f"profile.md holds an invalid weekly invite cap setting: {value.message}"
+        return rules.CAP_CONFIG_INVALID, cap_config_message(value)
     count = cap.invite_count(states, now, exclude=item_id)
     if count.total >= value:
         leaves = f"; the oldest sent invite leaves the window at {count.oldest_leaves}" if count.oldest_leaves else ""

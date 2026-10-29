@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from careeros.core import ids, ledger, versions
+import pytest
+
+from careeros.core import ids, ledger, models, versions
 from careeros.core.models import State, WorkspaceMeta
 from careeros.core.workspace import join_frontmatter, save_meta
 
@@ -181,3 +189,236 @@ def assert_only_ledger_appended(before: dict[str, bytes], after: dict[str, bytes
     assert new.startswith(old), "the old ledger bytes are not a prefix of the new ledger"
     appended = [json.loads(line)["type"] for line in new[len(old):].splitlines()]
     assert appended == list(expected_types)
+
+
+# --- shared by the outreach and approvals command tests (moved here from test_outreach_records / test_approvals_claims) ---
+
+FMT = "%Y-%m-%dT%H:%M:%SZ"
+T0 = "2026-10-06T10:00:00Z"
+ALEX = "https://www.linkedin.com/in/alex-example"
+SAM = "https://www.linkedin.com/in/sam-example"
+KIM = "https://www.linkedin.com/in/kim-example"
+EVID = "sponsor register entry (placeholder):2026-10-06"
+
+
+def _cli_runner():
+    from typer.testing import CliRunner
+    return CliRunner()
+
+
+def _cli_app():
+    from careeros.cli.main import app
+    return app
+
+
+def _cli_util():
+    from careeros.cli import _util
+    return _util
+
+
+def shift(ts: str, **delta) -> str:
+    return (datetime.strptime(ts, FMT) + timedelta(**delta)).strftime(FMT)
+
+
+def full_state(root: Path, lock: bool = False) -> dict[str, tuple[bytes | None, int | None]]:
+    """EVERY path (files and directories) with bytes and mtime: the ledger and `.careeros/` included. A state-changing
+    command takes the lock, which creates the empty `.careeros/lock` file, so refusal checks leave it out; the read-only
+    checks pass `lock=True` and prove a read never creates or touches it."""
+    out = {}
+    for p in sorted(root.rglob("*")):
+        rel = p.relative_to(root).as_posix()
+        if rel == ".careeros/lock" and not lock:
+            continue
+        out[rel] = (p.read_bytes(), p.stat().st_mtime_ns) if p.is_file() else (None, None)
+    return out
+
+
+class OutreachW:
+    """The workspace, ONE clock for the commands' `now` and the ledger's stamps, and the CLI."""
+
+    def __init__(self, root: Path, mp: pytest.MonkeyPatch) -> None:
+        self.root, self.now, self.mp = root, T0, mp
+        mp.setattr(models, "utc_now", lambda: self.now)
+        mp.setattr(_cli_util(), "is_interactive", lambda: False)
+
+    def run(self, *args: str, input: str | None = None):
+        return _cli_runner().invoke(_cli_app(), [*args, "--workspace", str(self.root)], input=input)
+
+    def ok(self, *args: str):
+        res = self.run(*args, "--json")
+        assert res.exit_code == 0, res.output
+        return json.loads(res.stdout)
+
+    def refused(self, *args: str, code: str, exit_code: int = 1) -> dict:
+        res = self.run(*args, "--json")
+        assert res.exit_code == exit_code, res.output
+        body = json.loads(res.stdout)
+        assert body["code"] == code, body
+        return body
+
+    def events(self, type_: str | None = None) -> list[dict]:
+        evs = ledger.read_events(self.root)
+        return [e for e in evs if type_ is None or e["type"] == type_]
+
+    def ledger_bytes(self) -> bytes:
+        p = self.root / "ledger.jsonl"
+        return p.read_bytes() if p.exists() else b""
+
+    # --- commands
+    def person(self, url=ALEX, *, name="Alex Example", company="Example Corp", role="recruiter", found_in=(), market=None,
+               headline=None) -> dict:
+        args = ["outreach", "person", "add", "--url", url, "--name", name, "--company", company, "--role", role]
+        for f in found_in:
+            args += ["--found-in", f]
+        if market:
+            args += ["--market", market]
+        if headline:
+            args += ["--headline", headline]
+        return self.ok(*args)
+
+    def target(self, slug="example-corp", *, company="Example Corp", market="Australia", fit=8, sponsorship="likely",
+               evidence=(EVID,)) -> dict:
+        args = ["outreach", "target", "add", "--company", company, "--slug", slug, "--market", market, "--fit", str(fit),
+                "--sponsorship", sponsorship]
+        for e in evidence:
+            args += ["--evidence", e]
+        return self.ok(*args)
+
+    def approve_target(self, slug: str) -> dict:
+        return self.ok("outreach", "target", "approve", slug, "--source", "user")
+
+    def drop_target(self, slug: str, reason="not a fit") -> dict:
+        return self.ok("outreach", "target", "drop", slug, "--source", "user", "--reason", reason)
+
+    def propose(self, kind: str, url: str, *, expect: int = 0):
+        f = self.root / "draft.txt"
+        f.write_text("Hi there, a short invented note.\n", encoding="utf-8")
+        res = self.run("approval", "propose", "--kind", kind, "--person-url", url, "--label", "Someone, Example Corp",
+                       "--content-file", str(f), "--json")
+        assert res.exit_code == expect, res.output
+        return json.loads(res.stdout)
+
+    def invite_done(self, url: str) -> tuple[str, str]:
+        """propose, approve (interactive seam), begin, done: a consumed invite. Returns (person id, item id)."""
+        inv = self.propose("linkedin_invite", url)
+        self.mp.setattr(_cli_util(), "is_interactive", lambda: True)
+        res = self.run("approve", inv["id"], input="a\n")
+        self.mp.setattr(_cli_util(), "is_interactive", lambda: False)
+        assert res.exit_code == 0, res.output
+        self.ok("approval", "begin", inv["id"])
+        self.ok("approval", "done", inv["id"])
+        return inv["target"], inv["id"]
+
+    def append(self, *specs: dict) -> None:
+        ledger.append_events(self.root, list(specs))
+
+    def outcome(self, per: str, kind: str, **extra) -> None:
+        spec = {"type": f"outreach.{kind}", "actor": "user", "entity": per, "source": "user", "action": f"{kind} {per}"}
+        if kind == "closed":
+            spec["reason"] = "declined"
+        self.append({**spec, **extra})
+
+
+def rejected(w: OutreachW) -> list[dict]:
+    return w.events("outreach.rejected")
+
+
+class Probe:
+    """A clock that returns a different value on every call, counts its calls and records whether the workspace lock was
+    held by this thread at that moment (probed from another thread, which must time out on the lock)."""
+
+    def __init__(self, root: Path, start: str = "2026-10-06T10:00:00Z") -> None:
+        self.root, self.calls, self.held, self.t = root, 0, [], start
+
+    def __call__(self) -> str:
+        import threading
+        from careeros.core.workspace import LockTimeout, WorkspaceLock
+        result = []
+
+        def try_lock():
+            try:
+                with WorkspaceLock(self.root, timeout=0.15):
+                    result.append(False)
+            except LockTimeout:
+                result.append(True)
+        t = threading.Thread(target=try_lock)
+        t.start()
+        t.join(5)
+        self.held.append(result == [True])
+        self.calls += 1
+        self.t = shift(self.t, seconds=1)
+        return self.t
+
+
+
+CHILD = r"""
+import os, sys, time
+from careeros.cli import _util
+from careeros.cli.main import app
+if os.environ.get("CAREEROS_TEST_TTY"):
+    _util.is_interactive = lambda: True        # the test plays the user's terminal
+if os.environ.get("CAREEROS_TEST_WIDEN"):
+    # widen the window between reading the ledger and appending, inside the command's critical section
+    from careeros.core.approvals import fold
+    real = fold.fold_events
+    def slow(*a, **k):
+        out = real(*a, **k)
+        time.sleep(0.3)
+        return out
+    fold.fold_events = slow
+ready, go = sys.argv[1], sys.argv[2]
+open(ready, "w").close()
+while not os.path.exists(go):
+    time.sleep(0.001)
+time.sleep(float(os.environ.get("CAREEROS_TEST_DELAY") or 0))
+sys.argv = ["careeros", *sys.argv[3:]]
+app()
+"""
+
+
+def Cmd(*args, tty=False, delay=0.0, input=""):
+    return {"args": list(args), "tty": tty, "delay": delay, "input": input}
+
+
+def race_many(tmp_path: Path, rounds: list[list[dict]], widen: bool) -> list[list[tuple[int, dict]]]:
+    """Start one OS process per command of every round at once (each round on its own workspace), wait until every
+    child is ready, release them together, and return (exit code, JSON output or raw text) per command per round."""
+    script = tmp_path / "child.py"
+    script.write_text(CHILD)
+    stamp = time.monotonic_ns()
+    go = tmp_path / f"go-{stamp}"
+    procs = []
+    for r, round_ in enumerate(rounds):
+        for c, cmd in enumerate(round_):
+            env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+            for key in ("CAREEROS_TEST_WIDEN", "CAREEROS_TEST_TTY", "CAREEROS_TEST_DELAY"):
+                env.pop(key, None)
+            if widen:
+                env["CAREEROS_TEST_WIDEN"] = "1"
+            if cmd["tty"]:
+                env["CAREEROS_TEST_TTY"] = "1"
+            if cmd["delay"]:
+                env["CAREEROS_TEST_DELAY"] = str(cmd["delay"])
+            stdin = tmp_path / f"in-{stamp}-{r}-{c}"
+            stdin.write_text(cmd["input"])
+            ready = tmp_path / f"ready-{stamp}-{r}-{c}"
+            with stdin.open("rb") as handle:
+                proc = subprocess.Popen([sys.executable, str(script), str(ready), str(go), *cmd["args"]], stdin=handle,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+            procs.append((r, ready, proc))
+    deadline = time.monotonic() + 120
+    while not all(ready.exists() for _, ready, _ in procs):
+        assert time.monotonic() < deadline, "children did not start"
+        time.sleep(0.01)
+    go.write_text("go")
+    out: list[list[tuple[int, dict]]] = [[] for _ in rounds]
+    for r, _, proc in procs:
+        stdout, stderr = proc.communicate(timeout=120)
+        try:
+            data = json.loads(stdout)
+        except ValueError:
+            data = {"raw": stdout.decode() + stderr.decode()}
+        out[r].append((proc.returncode, data))
+    return out
+
+

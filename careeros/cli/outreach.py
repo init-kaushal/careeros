@@ -4,10 +4,9 @@ contacted, what happened) is derived from the ledger and never stored in a recor
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from typing import Optional
-
-import dataclasses
 
 import typer
 

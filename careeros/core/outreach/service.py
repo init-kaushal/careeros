@@ -707,7 +707,7 @@ def _cap_view(root: Path, loaded: Loaded) -> CapView:
     setting = aservice.profile_cap_setting(root)
     value = acap.effective_cap(setting)
     if isinstance(value, acap.CapRefusal):
-        raise Refused(rules.CAP_CONFIG_INVALID, f"profile.md holds an invalid weekly invite cap setting: {value.message}")
+        raise Refused(rules.CAP_CONFIG_INVALID, aservice.cap_config_message(value))
     count = acap.invite_count(loaded.items, loaded.now)
     return CapView(value, setting.value is not None, count, acap.remaining(value, count), loaded.now)
 
