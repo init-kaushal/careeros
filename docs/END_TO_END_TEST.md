@@ -185,3 +185,33 @@ Not covered: the `browse` and `evaluate` skills cannot be run live here; they ar
 - Release checks: `mkdocs build --strict` exit 0; wheel `careeros-0.7.0` contains `careeros/core/approvals/{__init__,fold,item,manifest,model,render,rules,service}.py`, `careeros/cli/approval.py` and the `outreach`, `follow-up` and `apply` skills; `git diff --check` exit 0.
 
 Not covered: the `outreach`, `follow-up` and `apply` skills were not run live (their wording is pinned by tests only); no real LinkedIn and no real ATS were used; the behaviour of an agent following the skills is untested; a real pty approval was not exercised (the interactive check was patched, and the non-interactive refusals were run through real processes). This feature is a recorded, content-bound decision, not a security boundary.
+
+## Outreach and follow-up state (0.8.0)
+
+- Date: 2026-10-29
+- Commit under test: the commit that adds this record and `tests/test_outreach_e2e.py` (a record cannot name its own hash; the release checks below were run on a clean checkout of exactly that commit, and the hash is in the task report)
+- Method: `tests/test_outreach_e2e.py` drives the real CLI (`careeros outreach ...`, `approval ...`, `approve`, `validate`) on brand-new invented workspaces in a temporary directory, with invented people, invented companies, invented jobs and placeholder message text only. One settable clock supplies both the commands' `now` and the ledger stamps, and the walk moves it explicitly (day 0, day 7, day 16). `approve` needs an interactive terminal; the walk plays it by patching the interactive check (the seam the other approval tests use). No real workspace was read, copied or touched.
+
+| # | Step | Exit | Result |
+|---|---|---|---|
+| 1 | `outreach target add`, `target approve`, two `person add` (one recruiter, one hiring manager) | 0 each | target `approved`; people `discovered` |
+| 2 | `person add` with four spellings of the first URL (other case, trailing slash, country subdomain, query) | 1 each | `duplicate`, naming the existing `per_` id; one `outreach.rejected` for the four attempts |
+| 3 | `outreach next` with the default cap, then with `Weekly invite cap: 1` | 0, 0 | 2 contacts (recruiter first), `remaining` 15; then 1 contact, `remaining` 1 |
+| 4 | `approval propose` (invite), `approve`, `approval begin`, `approval done` | 0 each | `consumed`; `outreach cap`: cap 1, count 1, remaining 0 |
+| 5 | propose and `approve` an invite for the other person (URL variant, same `per_` id), `approval begin` twice | 1, 1 | `cap_reached`; one `approval.rejected` (deduped); `next` returns 0 contacts |
+| 6 | clock +7 days: `outreach cap`, `outreach queue` (target-only person, no saved job) | 0, 0 | count 0; queue empty (pre-opening) |
+| 7 | save a job at the company, `outreach queue` | 0 | one `invite` item, 0 days overdue |
+| 8 | invite a third person, `approval begin` and never `done`; clock +16 days; `outreach cap`; `approval begin` for a fourth | 0, 0, 1 | in flight older than 7 days still counts (count 1, in_flight 1, remaining 0); `cap_reached` |
+| 9 | `outreach record --accepted`, `queue`, `warm` | 0 each | label `connected`; queue empty; `warm` lists the person with the saved job |
+| 10 | approve a message, `outreach record --closed --reason declined`, `approval begin` twice, `approval propose` | 0, 0, 1, 1, 1 | `person_closed`; `begin` rejection recorded once; the refused `propose` appends nothing |
+| 11 | `profile.md` cap line set to an invalid value: `outreach cap`, `outreach next`, `approval begin` (invite), `validate` | 1, 1, 1, any | `cap_config_invalid` (three times); `validate` reports `OUT007` |
+| 12 | add a person with an empty `found_in`, hand-edit the record file to link the second target, `next`, `person show`, `outreach cap`, `approval begin` on the closed person's item | 0, 0, 0, 1 | `next` now lists the person; id (from the URL), cap numbers and closed state unchanged; `person_closed` again |
+| 13 | `validate`, `outreach queue`, `cap`, `next`, `warm`, `person list`, `target list` (text and `--json`), `person show`, `target show` | 0 each | workspace identical (see below) |
+| 14 | three real processes racing `approval begin` on three approved invites with one slot left under a cap of 2 | 0, 1, 1 | exactly one proceeds; the others `cap_reached`; exactly 2 `approval.started` |
+
+- Read-only commands: before and after each of the commands in step 13, the path list and the bytes and modification time of every path (including `ledger.jsonl` and `.careeros/`, the lock file included) were compared: identical, nothing created, changed or removed.
+- Events across the walk: 2 `outreach.target_added`, 2 `outreach.target_approved`, 3 `outreach.person_added`, 1 `outreach.accepted`, 1 `outreach.closed`, 1 `outreach.rejected`, 6 `approval.proposed`, 5 `approval.approved`, 2 `approval.started`, 1 `approval.consumed`, 4 `approval.rejected` (`cap_reached` twice, `person_closed`, `cap_config_invalid`; no identical repeat). The ledger hash chain verifies.
+- Isolation: `career/`, the other job, the job saved at the company, and every `jd.md` are byte-identical after the walk; those jobs have no event beyond their import.
+- Automated tests: Python 3.14: 3559 passed (91 s) on the working tree before the commit; the results on the committed checkout, and on a fresh Python 3.11 venv without click, are in the task report.
+
+Not covered: the `outreach`, `targets` and `follow-up` skills were not run live (their wording is pinned by tests only); no real LinkedIn was used and nothing was sent; the behaviour of an agent following the skills is untested; a real pty approval was not exercised (the interactive check was patched). The cap, the closed-person check and the queue are bookkeeping and refusals inside CareerOS, not a security boundary: anything outside CareerOS that can write the workspace can change them.
