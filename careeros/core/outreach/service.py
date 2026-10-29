@@ -27,13 +27,16 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from careeros.core import ids, ledger, models
+from careeros.core.approvals import cap as acap
 from careeros.core.approvals import fold as afold
 from careeros.core.approvals import item as aitem
 from careeros.core.approvals import people as apeople
 from careeros.core.approvals import rules as arules
+from careeros.core.approvals import service as aservice
 from careeros.core.memory.store import Transaction
 from careeros.core.models import Issue
 from careeros.core.outreach import _common as common
+from careeros.core.outreach import derive
 from careeros.core.outreach import fold as ofold
 from careeros.core.outreach import person as person_mod
 from careeros.core.outreach import rules
@@ -603,6 +606,141 @@ def target_decide(root: Path, slug: str, decision: str, *, source: str = "user",
         return Decided(view.id, slug, new, load(root, op.now).targets_fold.targets[slug].status)
 
 
+@dataclass(frozen=True)
+class Recorded:
+    id: str
+    outcome: str                   # accepted | replied | closed
+    label: str                     # the person's label after the outcome
+    event: dict
+
+
+def _known_person(op: _Op, per_id: str) -> bool:
+    """A person the ledger knows: an `outreach.person_added`, an invite or message item, or any event naming the id."""
+    return per_id in ofold.fold_people(op.events, op.now).flags or per_id in apeople.closed_people(op.events)[0]
+
+
+def record(root: Path, per_id: str, outcome: str, *, source: str = "user", reason: str | None = None,
+           note: str | None = None, actor: str, clock: Callable[[], str] | None = None) -> Recorded:
+    """Record an outcome the user reported or the agent observed: `outreach.accepted`, `outreach.replied` or
+    `outreach.closed` (spec 5 and 6.2). `accepted` needs a consumed invite, `replied` a consumed invite or message, each kind
+    is recorded at most once and nothing follows `closed` (`wrong_state`). `closed` needs a reason from
+    `rules.CLOSED_REASONS`; the optional note goes in the event's `action`. Raises `Refused`; a refusal of a known person
+    appends a deduped `outreach.rejected`, an unknown id appends nothing."""
+    root = Path(root)
+    if outcome not in rules.OUTCOMES:
+        raise WorkspaceError(f"unknown outcome {outcome!r}: use one of {', '.join(rules.OUTCOMES)}")
+    operation = f"record {outcome}"
+    _check_actor(actor)
+    with WorkspaceLock(root):
+        op = _begin(root, actor, clock, "recorded")
+        if not ids.is_valid_id("person", per_id):
+            _refuse(op, None, operation, rules.INVALID_INPUT, f"{per_id!r} is not a person id")
+        known = _known_person(op, per_id)
+        entity = per_id if known else None
+        _skew(op, entity, operation)
+        if not known:
+            _refuse(op, None, operation, rules.NOT_FOUND,
+                    f"no person {per_id!r}: the ledger has no person_added, invite, message or outcome for that id")
+        if source not in rules.OUTCOME_SOURCES:
+            _refuse(op, entity, operation, rules.INVALID_INPUT, f"--source must be one of {', '.join(rules.OUTCOME_SOURCES)}")
+        reason = (reason or "").strip() or None
+        if outcome == rules.CLOSED and reason not in rules.CLOSED_REASONS:
+            _refuse(op, entity, operation, rules.INVALID_INPUT,
+                    f"closing a person needs --reason, one of {', '.join(rules.CLOSED_REASONS)}")
+        if outcome != rules.CLOSED and reason is not None:
+            _refuse(op, entity, operation, rules.INVALID_INPUT, "--reason is only for --closed (use --note for anything else)")
+        if note is not None:
+            problems: list[str] = []
+            if common.text_value(note, "note", problems) is None:
+                _refuse(op, entity, operation, rules.INVALID_INPUT, "; ".join(problems))
+        flags = ofold.fold_people(op.events, op.now).flags.get(per_id, PersonFlags())
+        new = ofold.apply_outcome(flags, outcome, op.now, reason)
+        if per_id in apeople.closed_people(op.events)[0]:           # fail closed: a closed event whose ts is unreadable
+            new = ofold.Refusal(rules.WRONG_STATE, rules.CLOSED)
+        if isinstance(new, ofold.Refusal):
+            _refuse(op, entity, operation, rules.WRONG_STATE,
+                    f"{per_id} is {new.state}; {outcome} is not legal from there (accepted needs a sent invite, replied a sent "
+                    "invite or message; each outcome is recorded once and nothing follows closed)")
+        action = f"recorded {outcome} for {per_id}" + (f"; note: {note}" if note else "")
+        spec = {"type": rules.EVENT_FOR_OUTCOME[outcome], "actor": actor, "entity": per_id, "source": source,
+                "prev_state": flags.label, "new_state": new.label, "action": action}
+        if reason is not None:
+            spec["reason"] = reason
+        (event,) = ledger.append_events(root, [spec])
+        return Recorded(per_id, outcome, new.label, event)
+
+
+# --- read-only derived commands ---------------------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class CapView:
+    cap: int
+    configured: bool               # False: the default (no setting in profile.md)
+    count: acap.CapCount
+    remaining: int
+    now: str
+
+    def to_dict(self) -> dict:
+        return {"cap": self.cap, "configured": self.configured, "count": self.count.total,
+                "in_flight": self.count.in_flight, "consumed_in_window": self.count.consumed_in_window,
+                "remaining": self.remaining, "oldest_leaves": self.count.oldest_leaves, "now": self.now}
+
+
+@dataclass(frozen=True)
+class NextView:
+    contacts: tuple[derive.NextContact, ...]
+    cap: CapView
+
+
+def _target_infos(loaded: Loaded) -> dict[str, derive.TargetInfo]:
+    """slug -> TargetInfo for every target with an event and a parsed record of the same id (a missing or unreadable
+    record has no fit or sponsorship, so it is not ranked)."""
+    out = {}
+    for slug, view in loaded.targets_fold.targets.items():
+        rec = loaded.targets.get(slug)
+        if rec is not None and rec.id == view.id:
+            out[slug] = derive.TargetInfo(rec, view)
+    return out
+
+
+def _cap_view(root: Path, loaded: Loaded) -> CapView:
+    setting = aservice.profile_cap_setting(root)
+    value = acap.effective_cap(setting)
+    if isinstance(value, acap.CapRefusal):
+        raise Refused(rules.CAP_CONFIG_INVALID, f"profile.md holds an invalid weekly invite cap setting: {value.message}")
+    count = acap.invite_count(loaded.items, loaded.now)
+    return CapView(value, setting.value is not None, count, acap.remaining(value, count), loaded.now)
+
+
+def queue(root: Path, now: str | None = None) -> derive.Queue:
+    """The LinkedIn invite and application follow-ups due at `now` (spec 6.3). Email and interview follow-ups are not
+    covered (`Queue.uncovered_note`). Read-only."""
+    loaded = load(root, now)
+    return derive.build_queue(loaded.people, loaded.people_fold.flags, _target_infos(loaded), loaded.jobs, loaded.now)
+
+
+def cap(root: Path, now: str | None = None) -> CapView:
+    """The weekly invite cap, the count and what remains (spec 6.4), with the same functions `approval begin` uses.
+    `Refused(cap_config_invalid)` when profile.md holds an invalid setting. Read-only."""
+    loaded = load(root, now)
+    return _cap_view(root, loaded)
+
+
+def next_contacts(root: Path, now: str | None = None) -> NextView:
+    """Whom to invite next, limited to the remaining cap (spec 6.6). `Refused(cap_config_invalid)` like `cap`. Read-only."""
+    loaded = load(root, now)
+    view = _cap_view(root, loaded)
+    contacts = derive.build_next(loaded.people, loaded.people_fold.flags, _target_infos(loaded), loaded.jobs, loaded.items,
+                                 view.remaining, loaded.now)
+    return NextView(tuple(contacts), view)
+
+
+def warm(root: Path, now: str | None = None) -> list[derive.WarmContact]:
+    """Connected or replied people at a company with a saved, non-terminal job (spec 6.6). Read-only."""
+    loaded = load(root, now)
+    return derive.build_warm(loaded.people, loaded.people_fold.flags, loaded.jobs, loaded.now)
+
+
 # --- validation ------------------------------------------------------------------------------------------------------------
 
 def _peek(file: RecordFile) -> dict:
@@ -614,7 +752,7 @@ def _peek(file: RecordFile) -> dict:
 
 
 def validate_workspace(root: Path, events: list, now: str | None = None) -> list[Issue]:
-    """OUT001 to OUT006 and OUT100 (OUT007 is the cap setting, Task D). `events` is the lenient ledger read `validate`
+    """OUT001 to OUT006 and OUT100 (OUT007, the cap setting, is checked in `careeros.core.validation`). `events` is the lenient ledger read `validate`
     already holds. Read-only; never raises on a hand-edited file or a corrupt ledger line. A workspace with no `people/`,
     no `targets/` and no `outreach.*` events gives nothing."""
     root = Path(root)

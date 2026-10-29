@@ -36,7 +36,8 @@ _SPEC_KEYS = {
 _TYPE_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 _ACTOR_RE = re.compile(r"^(user|system|agent:[A-Za-z0-9._-]+)$")
 _NEEDS_REASON = {"job.status_corrected", "job.transition_rejected", "evaluation.rejected",
-                 "compensation.rejected", "approval.rejected", "outreach.rejected", "outreach.target_dropped"}
+                 "compensation.rejected", "approval.rejected", "outreach.rejected", "outreach.target_dropped",
+                 "outreach.closed"}
 
 
 class LedgerError(WorkspaceError):

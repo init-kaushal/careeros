@@ -1,10 +1,13 @@
-"""careeros outreach: person and target records and the target decisions. Records are source data the agent writes through
-these commands; state (who was contacted, what happened) is derived from the ledger and never stored in a record."""
+"""careeros outreach: person and target records, the target decisions, outcomes (`record`) and the read-only derived views
+(`queue`, `cap`, `next`, `warm`). Records are source data the agent writes through these commands; state (who was
+contacted, what happened) is derived from the ledger and never stored in a record."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
+
+import dataclasses
 
 import typer
 
@@ -14,8 +17,9 @@ from careeros.core.ledger import LedgerError
 from careeros.core.outreach import rules, service
 from careeros.core.workspace import LockTimeout, WorkspaceError
 
-outreach_app = typer.Typer(help="Person and target-company records, and target decisions. Changes only records and "
-                                "outreach.* ledger events; nothing here sends anything.",
+outreach_app = typer.Typer(help="Person and target-company records, target decisions, outcomes and the follow-up queue, "
+                                "weekly cap, next and warm contacts. Changes only records and outreach.* ledger events; "
+                                "nothing here sends anything.",
                            no_args_is_help=True)
 person_app = typer.Typer(help="Add, link, list and show person records.", no_args_is_help=True)
 target_app = typer.Typer(help="Add, approve, drop, list and show target-company records.", no_args_is_help=True)
@@ -249,3 +253,118 @@ def target_show_cmd(
     typer.echo("people:      " + (", ".join(view.people) or "-"))
     if view.problems:
         typer.echo(f"problems:    {'; '.join(view.problems)}")
+
+
+# --- outcomes --------------------------------------------------------------------------------------------------------------
+
+@outreach_app.command("record")
+def record_cmd(
+    person_id: str = typer.Argument(..., metavar="PER_ID", help="Person ID"),
+    accepted: bool = typer.Option(False, "--accepted", help="The person accepted the invite"),
+    replied: bool = typer.Option(False, "--replied", help="The person replied"),
+    closed: bool = typer.Option(False, "--closed", help="Close the person: no further invite or message"),
+    reason: Optional[str] = typer.Option(None, "--reason", help="--closed only: no_response, declined, not_a_fit or other"),
+    source: str = typer.Option("user", "--source", help="user, observed or email"),
+    note: Optional[str] = typer.Option(None, "--note", help="A short note kept in the event"),
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
+    actor: Optional[str] = typer.Option(None, "--actor", help="user, system or agent:<name>"),
+    workspace: Optional[Path] = _util.WorkspaceOption,
+) -> None:
+    """Record one outcome (outreach.accepted, outreach.replied or outreach.closed). A reported fact, not a send."""
+    chosen = [name for name, on in ((rules.ACCEPTED, accepted), (rules.REPLIED, replied), (rules.CLOSED, closed)) if on]
+    if len(chosen) != 1:
+        _fail("give exactly one of --accepted, --replied or --closed", _util.EXIT_USAGE, as_json)
+    root = _util.resolve_root(workspace)
+    got = _guard(as_json, lambda: service.record(root, person_id, chosen[0], source=source, reason=reason, note=note,
+                                                 actor=actor or _util.default_actor(), clock=models.utc_now))
+    if as_json:
+        _util.echo_json({"outcome": got.outcome, "id": got.id, "label": got.label, "type": got.event["type"],
+                         "seq": got.event["seq"], "source": got.event["source"], "reason": got.event["reason"]})
+        return
+    typer.echo(f"recorded {got.outcome} for {got.id}; label {got.label}")
+
+
+# --- read-only derived views -----------------------------------------------------------------------------------------------
+
+def _now() -> str:
+    return models.utc_now()                # the one clock read of a read-only command
+
+
+def _asdicts(items) -> list[dict]:
+    return [dataclasses.asdict(i) for i in items]
+
+
+@outreach_app.command("queue")
+def queue_cmd(
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
+    workspace: Optional[Path] = _util.WorkspaceOption,
+) -> None:
+    """LinkedIn invite and application follow-ups that are due. Email and interview follow-ups are not covered. Changes
+    nothing."""
+    root = _util.resolve_root(workspace)
+    now = _now()
+    got = _guard(as_json, lambda: service.queue(root, now))
+    if as_json:
+        _util.echo_json({"items": _asdicts(got.items), "note": got.uncovered_note, "now": now})
+        return
+    for i in got.items:
+        typer.echo(f"{i.kind:<11} {i.entity_id}  {i.label or '-'}  due {i.due_at} ({i.days_overdue} day(s) overdue): {i.reason}")
+    if not got.items:
+        typer.echo("nothing is due")
+    typer.echo(got.uncovered_note)
+
+
+@outreach_app.command("cap")
+def cap_cmd(
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
+    workspace: Optional[Path] = _util.WorkspaceOption,
+) -> None:
+    """The weekly invite cap, how many invites count against it and how many remain. Changes nothing."""
+    root = _util.resolve_root(workspace)
+    now = _now()
+    got = _guard(as_json, lambda: service.cap(root, now))
+    if as_json:
+        _util.echo_json(got.to_dict())
+        return
+    source = "profile.md" if got.configured else "default"
+    typer.echo(f"cap {got.cap} ({source}); counted {got.count.total} ({got.count.in_flight} in flight, "
+               f"{got.count.consumed_in_window} sent in the last 7 days); remaining {got.remaining}")
+    if got.count.oldest_leaves:
+        typer.echo(f"the oldest counted sent invite leaves the window on {got.count.oldest_leaves[:10]}")
+
+
+@outreach_app.command("next")
+def next_cmd(
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
+    workspace: Optional[Path] = _util.WorkspaceOption,
+) -> None:
+    """Whom to invite next, best first, limited to the invites remaining under the cap. Changes nothing."""
+    root = _util.resolve_root(workspace)
+    now = _now()
+    got = _guard(as_json, lambda: service.next_contacts(root, now))
+    if as_json:
+        _util.echo_json({"contacts": _asdicts(got.contacts), "remaining": got.cap.remaining, "cap": got.cap.cap, "now": now})
+        return
+    for c in got.contacts:
+        typer.echo(f"{c.person_id}  {c.name}, {c.company} ({c.role}): {c.reason}")
+    if not got.contacts:
+        typer.echo("nobody to invite next")
+    typer.echo(f"{got.cap.remaining} invite(s) remaining under the cap of {got.cap.cap}")
+
+
+@outreach_app.command("warm")
+def warm_cmd(
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
+    workspace: Optional[Path] = _util.WorkspaceOption,
+) -> None:
+    """Connected or replied people at a company with a saved, open job. Changes nothing."""
+    root = _util.resolve_root(workspace)
+    now = _now()
+    got = _guard(as_json, lambda: service.warm(root, now))
+    if as_json:
+        _util.echo_json({"contacts": _asdicts(got), "now": now})
+        return
+    for c in got:
+        typer.echo(f"{c.person_id}  {c.name}, {c.company} ({c.role}, {c.label}): {c.reason}")
+    if not got:
+        typer.echo("no warm contacts")

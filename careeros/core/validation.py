@@ -6,11 +6,13 @@ import json
 from pathlib import Path
 
 from careeros.core import fold, ids, ledger, models, versions
+from careeros.core.approvals import cap as approvals_cap
 from careeros.core.approvals import service as approvals_service
 from careeros.core.compensation import service as compensation_service
 from careeros.core.evaluation import integrity as evaluation_integrity
 from careeros.core.memory import store
 from careeros.core.models import Issue, State
+from careeros.core.outreach import rules as outreach_rules
 from careeros.core.outreach import service as outreach_service
 from careeros.core.state_machine import (
     PIPE_ENTRY,
@@ -62,6 +64,16 @@ def _evaluation_ids(root: Path) -> set[str]:
         if frontmatter and isinstance(frontmatter.get("id"), str):
             found.add(frontmatter["id"])
     return found
+
+
+def _cap_setting_issues(root: Path) -> list[Issue]:
+    """OUT007: profile.md holds an invalid weekly invite cap setting, the one `approval begin`, `outreach cap` and
+    `outreach next` refuse with `cap_config_invalid` (the message quotes the offending line or lines). No profile, no
+    `## Outreach` section, a section without the line, a valid line and anything below the fold give nothing."""
+    setting = approvals_service.profile_cap_setting(root)
+    if setting.problem is None:
+        return []
+    return [Issue("error", outreach_rules.OUT007, "profile.md", setting.problem, approvals_cap.FIX_TEXT)]
 
 
 def validate_workspace(root: Path, now: str | None = None) -> list[Issue]:
@@ -193,6 +205,7 @@ def validate_workspace(root: Path, now: str | None = None) -> list[Issue]:
     issues.extend(compensation_service.validate_workspace(root, now))
     issues.extend(approvals_service.validate_workspace(root, events, now))
     issues.extend(outreach_service.validate_workspace(root, events, now))
+    issues.extend(_cap_setting_issues(root))
     evaluation_ids = _evaluation_ids(root)
     reported: set[str] = set()
     memory_ids = store.known_ids(root)

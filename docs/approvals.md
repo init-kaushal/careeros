@@ -137,6 +137,9 @@ Stable codes used by `approval.rejected` reasons and command output.
 | `ledger_corrupt` | the ledger's hash chain is broken; nothing is written |
 | `job_not_awaiting_approval` | a submit item's job is not at `APPROVAL_REQUIRED`, is archived, or (for `begin`) lacks its job-level approval |
 | `identity_conflict` | the person identity map in the ledger is inconsistent (one profile URL under two person ids, or one id under two URLs, across proposals and `outreach.person_added` events), or an `outreach.person_added` event or a person proposal has no readable profile URL: a person proposal is refused and nothing is written until `ledger.jsonl` is restored |
+| `person_closed` | the person has an `outreach.closed` event: `propose` refuses an invite or message to them, and `begin` rechecks it under the workspace lock immediately before recording `approval.started`, for invite and message items |
+| `cap_reached` | (`begin`, invites) the weekly invite cap is already met: every other `in_flight` invite plus every invite consumed in the last 7 days counts; the only override is raising `Weekly invite cap` in `profile.md` |
+| `cap_config_invalid` | (`begin`, invites) `profile.md` holds an invalid `Weekly invite cap` setting (not one line with a whole number from 0 to 1000); `validate` reports `OUT007` |
 | `invalid_input` | the proposal itself is not valid: an unparseable URL, an empty label or content, or a value the item cannot store |
 
 A refusal of an existing item appends an audit-only, deduped `approval.rejected`. A refusal of an id that names no item appends nothing.
