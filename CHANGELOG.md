@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.8.0 — Outreach and follow-up state
+
+### Added
+
+- `careeros outreach person add | link | list | show` and `careeros outreach target add | approve | drop | list | show`: person records (`people/<per_id>.md`) and target-company records (`targets/<slug>.md`), each with a stable id. A person gets one `per_` id whether they were added here or proposed for an invite, whichever came first.
+- `careeros outreach record <per_id> --accepted | --replied | --closed`: the outcomes you tell the agent about, recorded as `outreach.*` ledger events (`outreach.accepted`, `outreach.replied`, `outreach.closed`, plus `outreach.person_added`, `outreach.target_added`, `outreach.target_approved`, `outreach.target_dropped` and the audit-only `outreach.rejected`). The type prefix `outreach.*` is reserved and `tgt_` ids are accepted in the ledger.
+- `careeros outreach queue | cap | next | warm`: read-only views derived from those events and the approval events. Exit 0 ok, 1 refused, 2 usage or no workspace.
+- `careeros validate` reports `OUT001`-`OUT007` and `OUT100`.
+- The `targets` skill (build, rank and refresh target companies, record your approve and drop decisions, store contacts) and a pre-opening mode (Mode C) in the `outreach` skill.
+- `docs/outreach.md`.
+
+### Changed
+
+- The follow-up queue and the weekly invite cap now come from recorded events, not from reading `activity.md`. `activity.md` is still appended to as a readable log, but existing `activity.md` history is not imported, so earlier invites and applications do not appear in the queue or count against the cap.
+- `careeros approval begin` refuses an invite beyond the weekly cap (`cap_reached`; 15 unless `profile.md` sets `Weekly invite cap: N` under `## Outreach`) and any invite or message to a closed person (`person_closed`); an invalid cap setting is refused, not guessed (`cap_config_invalid`). `careeros approval propose` refuses a closed person and an inconsistent identity map (`identity_conflict`). The cap and the closed check are made inside the same lock as the claim.
+- The `follow-up` skill reads `careeros outreach queue` and `careeros outreach warm`; email and interview follow-ups stay prose. The `browse` skill checks the people already recorded for a company, records the people it finds, and defaults the route question to a warm contact.
+- Upgrading: run `careeros upgrade` to receive the updated skills. This is not a security boundary; see `docs/outreach.md` for the limits.
+- The skill-only design `docs/superpowers/specs/2026-10-05-target-company-outreach-design.md`, which was never implemented, is superseded by this release.
+
 ## 0.7.0 — Approvals
 
 ### Added

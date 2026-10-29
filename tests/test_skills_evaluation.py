@@ -47,6 +47,25 @@ COMP_BROWSE_ADDITIONS = {
              "means, and the `evaluate` skill reads it.\n"),
 }
 
+# the 0.8.0 outreach additions to browse: three inserted paragraphs (see test_skills_outreach); removing them restores the 0.6.0 text
+OUTREACH_BROWSE_ADDITIONS = {
+    "existing": ("\n**D0. Check the people you already have, before you search.** For each saved job, run "
+                 "`careeros outreach person list --json` and keep the entries whose `company_slug` equals the job's company slug "
+                 "(the company name in lower case, hyphenated). If someone is already recorded there, reuse that person instead of "
+                 "searching again for the same role, and say so. Never offer a `closed` person as a contact to approach.\n"),
+    "add": ("\n**D2. Record the people you found.** For each contact D found, run `careeros outreach person add --url <profile url> "
+            "--name <name> --company <company> --role <recruiter|hiring_manager|peer|other> --found-in job:<REF>`, where `<REF>` is "
+            "the saved job's slug or id. For example:\n\n```bash\n"
+            'careeros outreach person add --url https://www.linkedin.com/in/sam-example --name "Sam Example" --company "Example Corp" '
+            "--role hiring_manager --found-in job:example-corp-platform\n```\n\n"
+            "A `duplicate` refusal means the person is already recorded: do not retry, and attach this job with "
+            "`careeros outreach person link <per_id> --found-in job:<REF>` instead. Any other refusal ends this step for that "
+            "person; tell the user what it said.\n"),
+    "route": ("\n**E2. A warm contact changes the default.** After saving, run `careeros outreach warm`. If it lists a person at a "
+              "saved job's company (someone who accepted or replied), the default for that job's route question is to "
+              "reach out first via that warm contact: name them in the question. Jobs with no warm contact keep the default above.\n"),
+}
+
 GPT_TREE = {
     ".gpt/skills/browse/SKILL.md": "e078ebb9e4428adbf3a0239ecd9fd7b6d301c9a62c9f6540f7cbd3195c805f71",
     ".gpt/skills/market/SKILL.md": "660bd59aea64c3d94571bac5abd67e2c4a294ef31635eca92f2305f83ba39da4",
@@ -136,7 +155,7 @@ def test_prep_checks_for_a_fresh_evaluation_and_keeps_the_gate() -> None:
 
 def test_browse_gained_exactly_one_closing_hint_line() -> None:
     text = skill("browse")
-    for addition in COMP_BROWSE_ADDITIONS.values():      # the 0.6.0 compensation additions (see test_skills_compensation)
+    for addition in (*COMP_BROWSE_ADDITIONS.values(), *OUTREACH_BROWSE_ADDITIONS.values()):   # the 0.6.0 and 0.8.0 additions
         assert text.count(addition) == 1
         text = text.replace(addition, "")
     assert text.endswith(BROWSE_HINT) and text.count(BROWSE_HINT) == 1

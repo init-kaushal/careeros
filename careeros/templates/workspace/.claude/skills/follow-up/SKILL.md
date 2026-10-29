@@ -40,37 +40,43 @@ Re-run the check after every edit. Never skip it and never ignore a failure.
 
 ## STEP 0 — LOAD CONTEXT
 
-Read `activity.md` in full (past the fold if necessary — follow-up depends on history).
 Read `jobs/pipeline.md` above the fold.
 Read `profile.md` above the fold.
+Read `activity.md` only for the email and interview rows of STEP 1 (past the fold if necessary). `activity.md` is still appended to as a readable log, but nothing parses it for state. The LinkedIn and application queue comes from recorded events.
 
 ---
 
 ## STEP 0.5 — CHECK FOR REPLIES (best-effort)
 
-If this agent session has an email tool available (e.g. Gmail), search it for messages to/from each pending contact's email or the company's domain, since the date logged in `activity.md`. Use whatever it finds to mark an item as already replied-to before building the queue — that item isn't overdue, it just needs a status update instead (ask the user, then log the outcome to `activity.md`).
+If this agent session has an email tool available (e.g. Gmail), search it for messages to/from each pending contact's email or the company's domain, since the date of the invite or email. Use whatever it finds to mark an item as already replied-to before building the queue — that item isn't overdue, it just needs a status update instead (ask the user, then record it: `careeros outreach record <per_id> --replied --source user` for a LinkedIn contact, or a line in `activity.md` for an email).
 
-If no email tool is available in this session, skip this step and rely on `activity.md` alone, as before.
+If no email tool is available in this session, skip this step and rely on the recorded events and `activity.md`, as before.
 
 ---
 
 ## STEP 1 — BUILD THE FOLLOW-UP QUEUE
 
-Scan activity.md for these event types and compute days since each:
+The LinkedIn invite and application parts of the queue come from `careeros outreach queue`. Add `--json` to read it. The rules are in code, not in your judgement:
+
+| Item | Due |
+|------|-----|
+| LinkedIn invite sent, no accepted, replied or closed outcome, and no follow-up message since | 7 days after the invite |
+| Application whose latest status is `APPLIED`, with no later status change | 10 days after it |
+
+Closed people, jobs in a terminal state and contacts found only through a target company (pre-opening contacts) are never listed. Use the command's days overdue; do not recompute them from `activity.md`.
+
+Warm contacts come from `careeros outreach warm`. They are people who accepted or replied at a company where you have a saved job. Show them under "Warm contacts at companies you're applying to"; they are a prompt to reach out, not an overdue item.
+
+### Email and interview follow-ups (prose only)
+
+Email and interview follow-ups are not covered by `careeros outreach queue`; they stay prose and come from `activity.md`. CareerOS records no email and no interview events. Scan `activity.md` for these two rows and compute the days since each (today's date is available via the environment):
 
 | Event | Follow-up due after |
 |-------|---------------------|
-| `sent LinkedIn invite → [Name]` (no "accepted" entry following it) | 7 days |
 | `sent email outreach → [Name]` (no reply logged) | 5 days |
-| `applied [Company]` (no interview / rejection logged) | 10 days |
-| `[~] Applied` job with no status change | 14 days |
 | Interview scheduled / completed (no offer / rejection logged) | 3 days after interview date |
 
-Today's date is available via the environment. Compute "days since" for each event.
-
-**Skip:**
-- Items where a follow-up was already sent within the cooldown window
-- Items marked closed / rejected / offer-accepted in activity.md or pipeline.md
+Skip items where a follow-up was already sent within the cooldown window and items marked closed, rejected or offer-accepted in `activity.md` or `pipeline.md`.
 
 ---
 
@@ -98,7 +104,7 @@ For each selected item, draft the appropriate message.
 
 ### LinkedIn follow-up (after unanswered invite)
 
-A short, warm message to send after they accept (check if they've accepted first — navigate to their profile and look for "Message" button appearing instead of "Connect"):
+A short, warm message to send after they accept (check if they've accepted first — navigate to their profile and look for "Message" button appearing instead of "Connect"). If the user tells you they accepted or replied, record it first: `careeros outreach record <per_id> --accepted --source user` or `careeros outreach record <per_id> --replied --source user` (find `<per_id>` with `careeros outreach person list --json`).
 
 > "Hey [name] — thanks for connecting. I'm exploring [role type] roles and noticed [specific thing about their work / company]. Would you be open to a quick chat?"
 
@@ -143,6 +149,8 @@ careeros approval propose --kind linkedin_message --person-url https://www.linke
 
 **Do not send any LinkedIn message without a recorded approval for that exact text (`approval show` says `approved`, then `approval begin` exits 0).**
 
+A refusal ends the action for that person and is relayed to the user: if a `careeros outreach` or `careeros approval` command refuses (exit 1), for example `person_closed`, `cap_reached`, `cap_config_invalid` or `identity_conflict`, stop, tell the user the code and what it said, and do not continue with that person. Do not retry it or work around it.
+
 ---
 
 ## STEP 5 — LOG
@@ -163,6 +171,7 @@ For closed items (user says "close this cadence"):
 ## NOTES
 
 - Check if a LinkedIn invite has been accepted before drafting a follow-up message — navigate to their profile briefly to check.
+- History from before 0.8.0 is not imported: an invite or application sent earlier and logged only in `activity.md` does not appear in `careeros outreach queue`. Ask the user about it if it matters.
 - If someone hasn't accepted a LinkedIn invite after 14+ days, it's usually better to close the cadence than send a cold message.
 - Never send the same follow-up type twice to the same person without a new trigger event.
 - The CLI refuses a second LinkedIn invite to a person whose invite is recorded as sent; a follow-up message is a different kind (`linkedin_message`) and is allowed.

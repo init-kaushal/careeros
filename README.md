@@ -65,6 +65,8 @@ jobs/
       interview-prep.md — question bank + STAR stories
       offer.md          — offer details + negotiation notes
 approvals/              — proposed outward messages and submissions, one file each (see Approvals)
+people/                 — one record per person you may contact (see Outreach and follow-up state)
+targets/                — one record per target company
 activity.md             — append-only action log
 career/                 — your career memory: one file per fact, with its source and status
 CLAUDE.md / AGENTS.md   — agent entry point (framework-owned)
@@ -127,6 +129,18 @@ careeros approval begin <id>  /  careeros approval done <id>   # the agent, arou
 ```
 
 LinkedIn invitations, LinkedIn messages and the final application Submit each need a recorded decision. The agent proposes the exact text (or the final documents and answers); only you can approve it, in an interactive terminal, seeing the exact content. The approval is bound to a hash of that content, single use, and expires after 24 hours. After an uncertain outcome the item stays `in_flight` and you settle it with `careeros approval resolve`. A job with a submission item can reach `APPLIED` only when none is unresolved and one is consumed. The `outreach`, `follow-up` and `apply` skills use it. This is not a security boundary: it records and checks, it does not confine the agent. See `docs/approvals.md`.
+
+## Outreach and follow-up state
+
+```bash
+careeros outreach next      # whom to invite next, limited to the invites left under the weekly cap
+careeros outreach cap       # the cap, what counts against it, and what remains
+careeros outreach queue     # LinkedIn invites and applications due for a follow-up
+careeros outreach warm      # people who accepted or replied at a company where you have a saved job
+careeros outreach record <per_id> --accepted --source user   # an outcome you told the agent about
+```
+
+The agent records the people it finds and the target companies it proposes as `people/` and `targets/` records, and your outcomes (accepted, replied, closed) and target decisions as `outreach.*` ledger events. Who is due a follow-up (an invite after 7 days, an application after 10), how many invites remain under the weekly cap (15 unless `profile.md` sets `Weekly invite cap: N` under `## Outreach`) and whom to approach next are derived from those events and the approval events, never read from `activity.md`. `careeros approval begin` refuses an invite beyond the cap (`cap_reached`) and any invite or message to a closed person (`person_closed`); an invalid cap setting is refused, not guessed (`cap_config_invalid`). The new `targets` skill builds and ranks companies to approach before they post a role; `outreach`, `follow-up` and `browse` use the records. Email and interview follow-ups stay prose, and history already in `activity.md` is not imported. Run `careeros upgrade` to receive the updated skills. This is not a security boundary. See `docs/outreach.md`.
 
 ## Requirements
 

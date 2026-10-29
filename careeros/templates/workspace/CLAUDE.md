@@ -44,8 +44,9 @@ Every text you write for the user (resume, cover letter, outreach note, follow-u
 ### Outreach
 | Trigger | Skill |
 |---------|-------|
-| "connect with [person]" / "send outreach to [person]" / "draft email to [person]" | `.claude/skills/outreach/SKILL.md` |
+| "connect with [person]" / "send outreach to [person]" / "draft email to [person]" / "reach out to my targets" / "introduce myself at [company]" | `.claude/skills/outreach/SKILL.md` |
 | "check follow-ups" / "who needs a follow-up?" / "follow-up queue" | `.claude/skills/follow-up/SKILL.md` |
+| "build target companies" / "find targets for [market]" / "show targets" / "refresh targets" | `.claude/skills/targets/SKILL.md` |
 
 ### Interview & Offer
 | Trigger | Skill |
@@ -76,7 +77,9 @@ jobs/
       interview-prep.md — question bank, STAR stories, company refresher
       offer.md          — offer details + negotiation notes
 approvals/              — proposed outward messages and submissions, one file each (decided by the user with `careeros approve`)
-activity.md             — append-only action log (source of truth for follow-up cadence)
+people/                 — one record per person you may contact, written by `careeros outreach person add`; what happened with them is derived from the ledger
+targets/                — one record per target company, written by `careeros outreach target add` (see the targets skill)
+activity.md             — append-only readable log; nothing parses it for state (the follow-up queue and the weekly invite cap come from recorded events)
 career/                 — your career memory: one file per fact, each with its source and status (claimed, confirmed, verified)
 ```
 
