@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from helpers import add_job
-from test_skills_evaluation import SKILLS, BROWSE_BEFORE, BROWSE_HINT, COMP_BROWSE_ADDITIONS, OUTREACH_BROWSE_ADDITIONS, PREP_GATE_BEFORE, example_blocks, sha, skill
+from test_skills_evaluation import SKILLS, BROWSE_BEFORE, BROWSE_HINT, COMP_BROWSE_ADDITIONS, PREP_GATE_BEFORE, example_blocks, sha, skill, strip_browse_additions
 from typer.testing import CliRunner
 
 from careeros.cli.main import app
@@ -55,12 +55,8 @@ def test_browse_keeps_its_comp_check_and_table() -> None:
 def test_browse_changes_only_the_comp_step_and_the_closing_hint() -> None:
     text = skill("browse")
     assert text.endswith(BROWSE_HINT + COMP_BROWSE_ADDITIONS["hint"])
-    rest = text[:-len(COMP_BROWSE_ADDITIONS["hint"])][:-len(BROWSE_HINT)]
-    for addition in OUTREACH_BROWSE_ADDITIONS.values():      # the 0.8.0 outreach paragraphs (see test_skills_outreach)
-        assert rest.count(addition) == 1
-        rest = rest.replace(addition, "")
-    assert rest.count(COMP_BROWSE_ADDITIONS["step"]) == 1
-    assert sha(rest.replace(COMP_BROWSE_ADDITIONS["step"], "")) == BROWSE_BEFORE
+    rest = strip_browse_additions(text)[:-len(BROWSE_HINT)]       # outreach paragraphs, comp step and hint, each at its exact position
+    assert sha(rest) == BROWSE_BEFORE
 
 
 EVALUATE_COMP_PHRASES = (

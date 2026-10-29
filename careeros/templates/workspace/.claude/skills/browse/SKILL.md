@@ -146,7 +146,7 @@ For each selected job:
 [date] browse [board] → saved [N] jobs: [Company1 — Title1], ...
 ```
 
-**D0. Check the people you already have, before you search.** For each saved job, run `careeros outreach person list --json` and keep the entries whose `company_slug` equals the job's company slug (the company name in lower case, hyphenated). If someone is already recorded there, reuse that person instead of searching again for the same role, and say so. Never offer a `closed` person as a contact to approach.
+**D0. Check the people you already have, before you search.** For each saved job, run `careeros outreach person list --json` and keep the entries whose `company_slug` equals the job's company slug (the company name lowercased and hyphenated, accents folded, apostrophes dropped, as `slugify` does). If someone is already recorded there, reuse that person instead of searching again for the same role, and say so. Never offer a `closed` person as a contact to approach.
 
 **D. Find hiring contacts for every saved job — always, not on request.** Run the `research` skill's contact discovery (Mode B1b: the company's LinkedIn People tab, single-keyword queries) for each saved job and write `jobs/discovered/[slug]/people.md`: recruiters / talent partners whose headline says they are hiring, the engineering manager the role would report to, and one peer engineer. Founders and C-level are a fallback only. Mention contacts as public profile URLs and roles only. If LinkedIn can't be read, still save the job and tell the user the contact search is pending. Companies with several saved roles share one lookup.
 

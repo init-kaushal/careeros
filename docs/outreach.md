@@ -41,7 +41,7 @@ Notes (ignored by code).
 ```
 
 - `role` is `recruiter`, `hiring_manager`, `peer` or `other`. `market` is optional and is the exact label of a `## Markets` row.
-- `id` and `url` are immutable and identity-bearing. The `url` is the canonical profile URL, the same function [approvals](approvals.md) uses, so URL variants (case, trailing slash, query, country subdomain, `http`) are one person. The id is allocated from the URL and reused when the same person is proposed for an invite or added here, in either order.
+- `id` and `url` are immutable and identity-bearing. The `url` is the canonical profile URL, the same function [approvals](approvals.md) uses, so URL variants (case, trailing slash, query, country subdomain, `http`) are one person. The id is a random id mapped to the canonical URL, and it is reused when the same person is proposed for an invite or added here, in either order.
 - `company_slug` is `slugify(company)`: lower case, ASCII letters and digits separated by single hyphens. It is the join key with targets and with saved jobs.
 - The record carries **no state**. `found_in` names where the person was found: a target by `id`, a job by `id`.
 
@@ -136,7 +136,7 @@ The cap is read from `profile.md`, above the fold, under a heading `## Outreach`
 
 No heading, or the heading without the line, means the default. A present but invalid setting (not a whole number from 0 to 1000, more than one such line, or an unparseable value) is a configuration error: `careeros outreach cap`, `careeros outreach next` and `careeros approval begin` for an invite refuse with `cap_config_invalid`, and `careeros validate` reports `OUT007`. A typo never silently changes enforcement. `0` is valid and blocks all invites.
 
-**Where it is enforced.** `careeros approval begin` for an invite checks the cap, and for an invite or a message checks that the person is not closed, in the same critical section, under the workspace lock, as it records `approval.started`: the profile setting, the events and the folded states used for the decision are all read inside the lock. Two processes cannot both take the last free slot. `careeros approval propose` also refuses a closed person. The only override is raising the cap in `profile.md`. `outreach cap` and `begin` use one shared function, and all computations use one clock read and the [ledger clock floor](approvals.md#the-clock-floor).
+**Where it is enforced.** `careeros approval begin` for an invite checks the cap, and for an invite or a message checks that the person is not closed, in the same critical section, under the workspace lock, as it records `approval.started`: the profile setting, the events and the folded states used for the decision are all read inside the lock. Two processes cannot both take the last free slot. `careeros approval propose` also refuses a closed person. The only override is raising the cap in `profile.md`. `outreach cap` and `begin` use one shared count function. `approval begin` applies the [ledger clock floor](approvals.md#the-clock-floor); the read-only `outreach cap` and `outreach next` use the same count without it, so a clock behind the ledger can only over-count, never under-count.
 
 ## Commands
 

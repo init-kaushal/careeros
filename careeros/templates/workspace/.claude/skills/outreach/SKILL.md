@@ -202,6 +202,8 @@ If `careeros outreach cap` or `careeros outreach next` refuses with `cap_config_
 
 Run `careeros outreach next --json`. It lists the contacts to approach, ranked, each with its reason and a `stale` flag, limited to `remaining`. Never draft more than `remaining` notes. Do not pick anyone `careeros outreach next` did not list.
 
+Each listed contact has a `source`. A contact with `source: job` has a posted opening: use Mode A for them, not Mode C. Only contacts with `source: target` use Mode C.
+
 If a listed contact's target is flagged `stale`, do the `targets` skill's refresh before you draft (re-read the evidence and update its `read_on` date), then continue.
 
 ### C3 — Draft
@@ -217,9 +219,14 @@ One note per contact. Each note:
 
 Run the note through the `humanize` skill first, then the evidence check (`careeros check <file> --record`, as in the EVIDENCE GATE). Show each draft with its character count and the cap status, for example "[N]/300 · invites left this week: R".
 
+Ask, as in A3:
+> "Use this note, or regenerate?"
+
+On "regenerate": redraft with a different angle. Repeat until the user picks a note. Nothing is sent yet.
+
 ### C4 — Propose and send
 
-For each approved draft, one contact at a time, propose it as in A4, then follow A4 and A5 unchanged: propose, tell the user to run `! careeros approve`, **stop and wait**, show, begin, send exactly the approved text, done. A refusal ends the action for that person (see OUTREACH STATE); `cap_reached` ends Mode C.
+For each draft the user has OK'd for sending, one contact at a time, propose it as in A4, then follow A4 and A5 unchanged: propose, tell the user to run `! careeros approve`, **stop and wait**, show, begin, send exactly the approved text, done. A refusal ends the action for that person (see OUTREACH STATE); `cap_reached` ends Mode C.
 
 ### C5 — Log
 

@@ -60,6 +60,10 @@ TARGETS_PINS = (
     "Refresh before drafting",
     "update the `read_on` date",
     "Say 'reach out to my targets' to draft introductions.",
+    "A refusal such as `duplicate`, `invalid_input`, `identity_conflict` or `ledger_corrupt` ends that action; do not retry it or work around it.",
+    "(one `recruiter`, one `hiring_manager`)",
+    "run `careeros validate`",
+    "If an evidence source can no longer be re-read, tell the user, leave the value as it is and do not guess.",
 )
 
 OUTREACH_PINS = (
@@ -87,6 +91,15 @@ OUTREACH_PINS = (
     "`careeros outreach record <per_id> --replied --source user`",
     "Nothing in `careeros outreach` sends anything.",
     "`activity.md` is still appended to as a readable log, but nothing parses it for state.",
+    "If `remaining` is 0, say so with the date, and stop.",
+    "`cap_reached` ends Mode C",
+    "**stop and wait**",
+    "If it is `closed`, stop and tell the user.",
+    "A contact with `source: job` has a posted opening: use Mode A for them, not Mode C. Only contacts with `source: target` use Mode C.",
+    "For each draft the user has OK'd for sending, one contact at a time,",
+    "invites left this week: R",
+    "[N]/300",
+    "On \"regenerate\": redraft with a different angle. Repeat until the user picks a note. Nothing is sent yet.",
 )
 
 FOLLOW_UP_PINS = (
@@ -99,6 +112,9 @@ FOLLOW_UP_PINS = (
     "A refusal ends the action for that person and is relayed to the user",
     "`person_closed`, `cap_reached`, `cap_config_invalid` or `identity_conflict`",
     "History from before 0.8.0 is not imported",
+    "do not recompute them from `activity.md`",
+    "also, on the user's say-so only, run `careeros outreach record <per_id> --closed --reason no_response --source user`",
+    "Email cadences are closed in `activity.md` only.",
 )
 
 BROWSE_PINS = tuple(OUTREACH_BROWSE_ADDITIONS.values())
@@ -147,6 +163,21 @@ def test_the_outreach_modes_are_ordered_and_pre_opening_uses_the_approvals_flow(
     assert mode_c.index("careeros outreach cap") < mode_c.index("careeros outreach next") < mode_c.index("humanize")
     assert mode_c.index("humanize") < mode_c.index("careeros check") < mode_c.index("A4 and A5")
     assert "careeros approval" not in mode_c.replace("A4 and A5", ""), "mode C reuses A4 and A5; it does not restate the flow"
+
+
+def test_pre_opening_note_is_asked_about_like_a3_and_the_stop_rules_sit_in_mode_c() -> None:
+    body = text("outreach")
+    mode_c = body[body.index("## MODE C"):body.index("## NOTES")]
+    assert mode_c.count("Use this note, or regenerate?") == 1
+    assert mode_c.index("Use this note, or regenerate?") < mode_c.index("### C4")
+    assert mode_c.index("`source: job`") < mode_c.index("`stale`", mode_c.index("`source: job`"))
+
+
+def test_follow_up_close_cadence_records_closed_only_for_linkedin_and_after_the_users_word() -> None:
+    body = text("follow-up")
+    step5 = body[body.index("## STEP 5"):body.index("## NOTES")]
+    sentence = next(x for x in sentences(step5) if "outreach record" in x)
+    assert "on the user's say-so only" in sentence and "LinkedIn contact" in sentence
 
 
 def test_follow_up_step_one_names_the_queue_before_the_prose_rows() -> None:
@@ -298,6 +329,27 @@ def test_the_examples_exist() -> None:
     assert len(fenced_examples()) == 4
 
 
+VALUE_COMMANDS = (("outreach", "record"), ("outreach", "target", "drop"), ("outreach", "target", "approve"))
+
+
+def test_decision_and_outcome_commands_pass_source_user_with_the_value() -> None:
+    """click accepts any string for --source, so the pin is on the VALUE; `closed` also needs a valid reason."""
+    seen = set()
+    for name in OUTREACH_SKILLS:
+        for argv in command_lines(name):
+            key = next((k for k in VALUE_COMMANDS if tuple(argv[1:1 + len(k)]) == k), None)
+            if key is None or not any(a.startswith("-") for a in argv):
+                continue
+            seen.add((name, key, "--closed" in argv))
+            assert "--source" in argv and argv[argv.index("--source") + 1] == "user", argv
+            if "--closed" in argv:
+                reason = argv[argv.index("--reason") + 1]
+                assert set(reason.strip("<>").split("|")) <= set(rules.CLOSED_REASONS), argv
+    assert ("follow-up", ("outreach", "record"), True) in seen
+    assert ("outreach", ("outreach", "record"), True) in seen
+    assert any(k == ("outreach", "target", "drop") for _, k, _ in seen) and any(k == ("outreach", "target", "approve") for _, k, _ in seen)
+
+
 def test_example_person_and_target_commands_run_on_an_invented_workspace(tmp_path: Path) -> None:
     root = tmp_path / "ws"
     make_workspace(root)
@@ -422,7 +474,38 @@ def test_the_doc_states_the_rules_and_the_limits(phrase: str) -> None:
     assert phrase in doc()
 
 
-def test_the_doc_makes_no_promise_the_feature_does_not_keep() -> None:
+def test_the_doc_states_the_clock_floor_honestly_and_the_exit_codes_and_range() -> None:
+    from careeros.core.approvals import cap
+    body = doc()
+    assert "all computations use one clock read" not in body
+    assert "`approval begin` applies the [ledger clock floor]" in body
+    assert "the read-only `outreach cap` and `outreach next` use the same count without it" in body
+    assert "a clock behind the ledger can only over-count, never under-count" in body
+    assert "**Exit codes:** 0 ok; 1 refused" in body and "2 usage, or no workspace" in body
+    assert f"from 0 to {cap.MAX_WEEKLY_CAP}" in body
+    assert "The id is a random id mapped to the canonical URL" in body
+    limits = body[body.index("## Limits"):]
+    assert "- This is not a security boundary." in limits
+
+
+HARD_CLAIMS = r"\b(hard limit|absolute(ly)?|impossible|cannot be (bypassed|circumvented|evaded)|guarantees?|tamper-?proof|enforces? the approval|prevents? the agent|boundary)\b"
+
+
+def test_no_doc_sentence_claims_a_hard_limit_or_boundary() -> None:
+    for sentence in sentences(doc()):
+        for m in re.finditer(HARD_CLAIMS, sentence, re.I):
+            assert m.group(0).lower() == "boundary" and re.search(r"\bnot a security boundary\b", sentence), sentence
+
+
+def test_no_docs_page_says_activity_md_drives_follow_up() -> None:
+    pages = [*(ROOT / "docs").glob("*.md"), *(ROOT / "docs" / "cowork").glob("*.md"), ROOT / "README.md", TEMPLATES / "workspace" / "CLAUDE.md"]
+    for path in pages:
+        for sentence in sentences(path.read_text(encoding="utf-8")):
+            if "activity.md" in sentence:
+                assert not re.search(r"drives? follow-up|source of truth for follow-up|follow-up cadence\)|Scans `activity.md` for overdue|relies on what's recorded in `activity.md`", sentence), (path.name, sentence)
+
+
+def test_no_doc_sentence_makes_no_promise_the_feature_does_not_keep() -> None:
     for sentence in sentences(doc()):
         if "security boundary" in sentence.lower():
             assert re.search(r"\bnot\b|\bno\b|\bnever\b", sentence, re.I), sentence

@@ -51,7 +51,7 @@ COMP_BROWSE_ADDITIONS = {
 OUTREACH_BROWSE_ADDITIONS = {
     "existing": ("\n**D0. Check the people you already have, before you search.** For each saved job, run "
                  "`careeros outreach person list --json` and keep the entries whose `company_slug` equals the job's company slug "
-                 "(the company name in lower case, hyphenated). If someone is already recorded there, reuse that person instead of "
+                 "(the company name lowercased and hyphenated, accents folded, apostrophes dropped, as `slugify` does). If someone is already recorded there, reuse that person instead of "
                  "searching again for the same role, and say so. Never offer a `closed` person as a contact to approach.\n"),
     "add": ("\n**D2. Record the people you found.** For each contact D found, run `careeros outreach person add --url <profile url> "
             "--name <name> --company <company> --role <recruiter|hiring_manager|peer|other> --found-in job:<REF>`, where `<REF>` is "
@@ -65,6 +65,30 @@ OUTREACH_BROWSE_ADDITIONS = {
               "saved job's company (someone who accepted or replied), the default for that job's route question is to "
               "reach out first via that warm contact: name them in the question. Jobs with no warm contact keep the default above.\n"),
 }
+
+# the exact original text around each addition: a paragraph moved anywhere else (mid-sentence included) no longer matches
+BROWSE_ANCHORS = {
+    "existing": ("[Company1 — Title1], ...\n```\n", "\n**D. Find hiring contacts"),
+    "add": ("Companies with several saved roles share one lookup.\n", "\n**E. Offer the route"),
+    "route": ("Never send a message or submit an application without the user's go-ahead.\n", "\n**F. Record the pay"),
+}
+COMP_STEP_ANCHOR = ("Never send a message or submit an application without the user's go-ahead.\n", "\n---\n\n## NOTES")
+
+
+def strip_anchored(text: str, addition: str, prev: str, nxt: str) -> str:
+    assert text.count(prev + addition + nxt) == 1, addition[:40]
+    return text.replace(prev + addition + nxt, prev + nxt)
+
+
+def strip_browse_additions(text: str) -> str:
+    """Remove the 0.8.0 outreach paragraphs, then the 0.6.0 comp step and hint, each only at its original position."""
+    for key, (prev, nxt) in BROWSE_ANCHORS.items():
+        text = strip_anchored(text, OUTREACH_BROWSE_ADDITIONS[key], prev, nxt)
+    text = strip_anchored(text, COMP_BROWSE_ADDITIONS["step"], *COMP_STEP_ANCHOR)
+    hint = COMP_BROWSE_ADDITIONS["hint"]
+    assert text.endswith(BROWSE_HINT + hint) and text.count(hint) == 1
+    return text[:-len(hint)]
+
 
 GPT_TREE = {
     ".gpt/skills/browse/SKILL.md": "e078ebb9e4428adbf3a0239ecd9fd7b6d301c9a62c9f6540f7cbd3195c805f71",
@@ -155,9 +179,7 @@ def test_prep_checks_for_a_fresh_evaluation_and_keeps_the_gate() -> None:
 
 def test_browse_gained_exactly_one_closing_hint_line() -> None:
     text = skill("browse")
-    for addition in (*COMP_BROWSE_ADDITIONS.values(), *OUTREACH_BROWSE_ADDITIONS.values()):   # the 0.6.0 and 0.8.0 additions
-        assert text.count(addition) == 1
-        text = text.replace(addition, "")
+    text = strip_browse_additions(text)                  # the 0.8.0 and 0.6.0 additions, each at its exact position
     assert text.endswith(BROWSE_HINT) and text.count(BROWSE_HINT) == 1
     assert sha(text[:-len(BROWSE_HINT)]) == BROWSE_BEFORE
 

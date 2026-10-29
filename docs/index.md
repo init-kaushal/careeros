@@ -54,7 +54,7 @@ CareerOS drives the whole job-search workflow — discovery, company/people rese
 - **Working abroad is supported through markets.** During onboarding you can list other countries; `profile.md` gets a `## Markets` table with a minimum base and sponsorship need for each, and onboarding offers regional boards from a built-in catalog (Singapore, Thailand, Vietnam, Australia and New Zealand, Europe, UK and Gulf). Visa and salary rules are deliberately *not* shipped — they change — so the `market` skill ("research Singapore market") looks up current routes from official sources, checks them against your profile, and saves a dated, cited file under `markets/`. `browse` then flags whether each listing offers sponsorship. It's research to support your decision, not legal advice.
 - **Browsing is scoped to boards in `boards.md`.** LinkedIn, Instahyre, Wellfound, and Naukri are set up by default; add any other board by giving its URL the first time you say "browse [board]".
 - **It doesn't run on a schedule by itself.** Every skill fires from a chat trigger. If you want "browse linkedin" to run automatically (say, daily), wire that up with your agent runtime's own scheduling feature — CareerOS doesn't ship one.
-- **Follow-up tracking is mostly log-based.** It checks your email for replies when an email tool is available in your session, but otherwise relies on what's recorded in `activity.md`.
+- **Follow-up tracking is partly recorded events and partly prose.** LinkedIn invites and applications come from recorded events (`careeros outreach queue`); email and interview follow-ups stay prose in `activity.md`. It checks your email for replies when an email tool is available in your session.
 
 ---
 

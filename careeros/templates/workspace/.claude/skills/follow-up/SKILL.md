@@ -161,7 +161,7 @@ After each action:
 [date] follow-up [type] → [Name / Company]: [brief description]
 ```
 
-For closed items (user says "close this cadence"):
+For closed items (user says "close this cadence"): append the line below to `activity.md`. For a LinkedIn contact, also, on the user's say-so only, run `careeros outreach record <per_id> --closed --reason no_response --source user` (use `declined`, `not_a_fit` or `other` as the reason if the user says so), so the invite leaves the queue and the person is closed. Email cadences are closed in `activity.md` only.
 ```
 [date] closed follow-up cadence → [Name / Company]: [reason]
 ```
