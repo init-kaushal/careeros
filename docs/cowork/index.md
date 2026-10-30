@@ -65,7 +65,7 @@ jobs/
       prep.md           — tailoring brief: keywords, bullets to emphasise
       interview-prep.md — question bank, STAR stories, company refresher
       offer.md          — offer details + negotiation notes
-activity.md             — append-only action log (drives follow-up cadence)
+activity.md             — append-only readable log (the follow-up queue and weekly invite cap come from recorded events)
 ```
 
 ---

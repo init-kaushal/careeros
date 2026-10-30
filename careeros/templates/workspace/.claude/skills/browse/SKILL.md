@@ -146,12 +146,24 @@ For each selected job:
 [date] browse [board] → saved [N] jobs: [Company1 — Title1], ...
 ```
 
+**D0. Check the people you already have, before you search.** For each saved job, run `careeros outreach person list --json` and keep the entries whose `company_slug` equals the job's company slug (the company name lowercased and hyphenated, accents folded, apostrophes dropped, as `slugify` does). If someone is already recorded there, reuse that person instead of searching again for the same role, and say so. Never offer a `closed` person as a contact to approach.
+
 **D. Find hiring contacts for every saved job — always, not on request.** Run the `research` skill's contact discovery (Mode B1b: the company's LinkedIn People tab, single-keyword queries) for each saved job and write `jobs/discovered/[slug]/people.md`: recruiters / talent partners whose headline says they are hiring, the engineering manager the role would report to, and one peer engineer. Founders and C-level are a fallback only. Mention contacts as public profile URLs and roles only. If LinkedIn can't be read, still save the job and tell the user the contact search is pending. Companies with several saved roles share one lookup.
+
+**D2. Record the people you found.** For each contact D found, run `careeros outreach person add --url <profile url> --name <name> --company <company> --role <recruiter|hiring_manager|peer|other> --found-in job:<REF>`, where `<REF>` is the saved job's slug or id. For example:
+
+```bash
+careeros outreach person add --url https://www.linkedin.com/in/sam-example --name "Sam Example" --company "Example Corp" --role hiring_manager --found-in job:example-corp-platform
+```
+
+A `duplicate` refusal means the person is already recorded: do not retry, and attach this job with `careeros outreach person link <per_id> --found-in job:<REF>` instead. Any other refusal ends this step for that person; tell the user what it said.
 
 **E. Offer the route, per job.** After saving, ask once for the whole batch (default if they don't answer: both):
 > "For each saved job: **reach out first** (I draft a short note to the recruiter/manager; you send it), **apply directly**, or **both** (apply, then message a contact with the application in hand)?"
 
 Record the choice as `- **Route:** reach-out-first | apply-direct | both` in `job.md`. Reach-out-first drafts go through the `outreach` skill; direct applications through `apply`. Never send a message or submit an application without the user's go-ahead.
+
+**E2. A warm contact changes the default.** After saving, run `careeros outreach warm`. If it lists a person at a saved job's company (someone who accepted or replied), the default for that job's route question is to reach out first via that warm contact: name them in the question. Jobs with no warm contact keep the default above.
 
 **F. Record the pay, per job.** Run `careeros comp [job-slug] --init`. It writes `jobs/discovered/[job-slug]/compensation.md` and refuses if the file exists (then edit that file). Set `market` to the exact label of the job's `## Markets` row; `null` is valid only with `observations: []`. Add one observation for each figure the comp check found: `kind` (`posted` for the employer's own listing, `recruiter` for a recruiter's statement, `estimate` for a third-party guess such as Levels.fyi or Glassdoor), `low` and `high` as whole numbers (`null` for a side the source does not give), `currency`, `basis` (`base` or `total`), `period` (`year` or `month`), `source`, `as_of` (the date you saw it, YYYY-MM-DD) and `confidence` (`high`, `medium` or `low`; the record has no `unknown`, so record `low` for a weak source or omit the figure, and never choose a confidence just to clear a `CMP` error). Record `posted` ONLY when you read the full description on the job page, saved it verbatim to `jd.md` (as the `evaluate` skill's STEP 1 does), and the `quote` is a line copied verbatim from it. Never write `jd.md` from a listing snippet, and never paste a band into it to satisfy `CMP004`; otherwise record the figure as `estimate` with the board or page as its `source`, or leave `observations: []` and say so. If you found no figure, leave `observations: []`. Add a `conversions` entry only for a rate you actually looked up, with its source and date. Never invent a figure, a source or a date. Then run `careeros comp [job-slug]` and fix any `CMP` error it reports.
 

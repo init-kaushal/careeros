@@ -101,7 +101,7 @@ For email: produces a draft you send from your own client.
 "check follow-ups"
 "who needs a follow-up?"
 ```
-Scans `activity.md` for overdue invites (7 days), email outreach (5 days), applications (10 days), and post-interview (3 days). Drafts per-item, confirms before each send.
+LinkedIn invites (7 days) and applications (10 days) come from recorded events via `careeros outreach queue`; warm contacts from `careeros outreach warm`. Email outreach (5 days) and post-interview (3 days) follow-ups stay prose and come from `activity.md`. Drafts per-item, confirms before each send.
 
 ### Interview prep
 ```

@@ -508,7 +508,8 @@ def test_constants():
     assert set(rules.REFUSAL_CODES) == {
         "not_found", "wrong_state", "expired", "clock_skew", "content_missing", "hash_mismatch", "manifest_invalid",
         "manifest_changed", "invite_conflict", "already_submitted", "in_flight_conflict", "submission_unresolved",
-        "submission_not_consumed", "not_interactive", "ledger_corrupt", "job_not_awaiting_approval"}
+        "submission_not_consumed", "not_interactive", "ledger_corrupt", "job_not_awaiting_approval", "identity_conflict",
+        "person_closed", "cap_reached", "cap_config_invalid"}
     assert rules.APPLICATION_SUBMIT == "application_submit" and rules.TTL_SECONDS == 24 * 3600
     assert len(set(rules.OPERATIONS)) == len(OPS) and set(rules.OPERATIONS) == set(OPS)
 
@@ -1356,3 +1357,23 @@ def test_rendering_is_injective_over_the_spoof_contents():
         assert out not in seen or seen[out] == content
         seen[out] = content
     assert len(seen) == len(set(SPOOF_CONTENTS + ["a\r\nb", "a\nb", "a\\nb", "a\\x0ab", "| a", "a"]))
+
+
+# --- consumed_at -------------------------------------------------------------------------------------------------
+
+def test_consumed_at_is_the_consumed_event_ts_and_none_for_every_other_state():
+    for label, steps in SUBMIT_STEPS.items():
+        events, (item_id,) = submit_events([label])
+        st = fold.fold_item(events, item_id, NOW)
+        if label == "consumed":
+            assert st.consumed_at == ts(62) and st.consumed_at != st.started_at and st.consumed_at == st.last_ts
+        else:
+            assert st.consumed_at is None, label
+    assert fold.fold_item([], APR, NOW).consumed_at is None
+
+
+def test_consumed_at_ignores_later_audit_events_and_the_started_ts():
+    events = make_events([(APR, "linkedin_invite", PER, [("approval.approved", 5), ("approval.started", 6), ("approval.consumed", 90)])])
+    events.append(ev(99, "approval.rejected", APR, ts(500), reason="late"))
+    st = fold.fold_item(events, APR, NOW)
+    assert (st.started_at, st.consumed_at, st.last_ts) == (ts(6), ts(90), ts(90))

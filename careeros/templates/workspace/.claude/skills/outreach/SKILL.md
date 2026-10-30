@@ -1,8 +1,12 @@
 # CareerOS Outreach Skill
 
-**Trigger:** "connect with [person]" / "send LinkedIn invite to [person]" / "draft outreach to [person]" / "send email to [person]"
+**Trigger:** "connect with [person]" / "send LinkedIn invite to [person]" / "draft outreach to [person]" / "send email to [person]" / "reach out to my targets" / "pre-opening outreach" / "introduce myself at [company]"
 
-Supports two outreach modes.
+Supports three outreach modes.
+
+- **Mode A:** a LinkedIn connection request for a saved job.
+- **Mode B:** an email draft.
+- **Mode C:** a pre-opening introduction to a target company.
 
 ---
 
@@ -40,6 +44,16 @@ Re-run the check after every edit. Never skip it and never ignore a failure.
 
 ---
 
+## OUTREACH STATE (mandatory)
+
+People, outcomes and the weekly invite cap are recorded by `careeros outreach`: read them from there, never from `activity.md`. Nothing in `careeros outreach` sends anything. It records and reports.
+
+- **Refusals.** A refusal ends the action for that person and is relayed to the user: if a `careeros outreach` or `careeros approval` command refuses (exit 1), for example `person_closed`, `cap_reached`, `cap_config_invalid` or `identity_conflict`, stop, tell the user the code and what it said, and do not continue with that person. Do not retry it, work around it or edit a record or `profile.md` to get past it. Only the user can change the cap, in `profile.md`.
+- **Outcomes.** When the user tells you a person accepted your invite, take the person id from `careeros outreach person list --json`, or, for a person invited through `careeros approval` before a record existed, from `careeros outreach queue --json` (`entity_id`); if the person has no record, add one with `careeros outreach person add --url <profile url> --name <name> --company <company> --role <recruiter|hiring_manager|peer|other>` (the existing id is reused). Then run `careeros outreach record <per_id> --accepted --source user`. When the user tells you a person replied, run `careeros outreach record <per_id> --replied --source user`. If the user tells you to stop contacting someone, run `careeros outreach record <per_id> --closed --reason <no_response|declined|not_a_fit|other> --source user`. Record only what the user tells you; a refusal such as `wrong_state` is relayed, not retried.
+- **Log.** `activity.md` is still appended to as a readable log, but nothing parses it for state.
+
+---
+
 ## MODE A — LINKEDIN CONNECTION REQUEST
 
 ### A1 — Find the person
@@ -49,9 +63,17 @@ Read `jobs/discovered/[job-slug]/people.md` to get the person's LinkedIn URL.
 If no URL is on file, ask:
 > "I don't have a LinkedIn URL for [name]. Can you paste it?"
 
+Then run `careeros outreach person list --json` and find the person by profile URL. If there is no record, add one:
+
+```bash
+careeros outreach person add --url https://www.linkedin.com/in/alex-example --name "Alex Example" --company "Example Corp" --role hiring_manager --found-in job:example-corp-platform
+```
+
+`--found-in` takes `job:<REF>` (the saved job's slug or id) or `target:<slug>`. A `duplicate` refusal means the person is already recorded.
+
 ### A2 — Check for duplicate
 
-Read `activity.md`. If there's an existing entry `sent LinkedIn invite → [name]`, say:
+Look at the person's label in `careeros outreach person list` (or `careeros outreach person show <per_id>`). If it is `closed`, stop and tell the user. If it is `invited`, `connected`, `messaged` or `replied`, an invite was already recorded as sent; say:
 > "A LinkedIn connection request was already sent to [name] on [date]. Sending another risks being flagged as spam. Are you sure?"
 
 Stop unless user explicitly confirms.
@@ -85,7 +107,7 @@ On "regenerate": redraft with different angle. Repeat until the user picks a not
 careeros approval propose --kind linkedin_invite --person-url https://www.linkedin.com/in/alex-example --label "Alex Example, Example Corp" --content-file /tmp/invite-alex-example.txt
 ```
 
-2. It prints the item id (`apr_...`). A refusal (`invite_conflict`: an invite to this person was already sent; `in_flight_conflict`: an earlier invite is still unresolved) means stop and tell the user.
+2. It prints the item id (`apr_...`). A refusal (`invite_conflict`: an invite to this person was already sent; `in_flight_conflict`: an earlier invite is still unresolved; `person_closed`: the person is closed) means stop and tell the user.
 3. Tell the user:
 > "I proposed this invite: [note]. Please run `! careeros approve` to review and approve it, then tell me."
 
@@ -94,7 +116,7 @@ careeros approval propose --kind linkedin_invite --person-url https://www.linked
 ### A5 — Send the invitation
 
 1. Run `careeros approval show <id>`. Continue only if the state is `approved`; otherwise stop.
-2. Run `careeros approval begin <id> --json`. It claims the approval; if it exits non-zero, stop. Its output is the only source for the text to send: read the `content` field (the text checked under the lock at claim time).
+2. Run `careeros approval begin <id> --json`. It claims the approval; if it exits non-zero, stop. Its output is the only source for the text to send: read the `content` field (the text checked under the lock at claim time). A refusal here such as `cap_reached` or `person_closed` ends the action (see OUTREACH STATE).
 3. `tabs_create_mcp` — new tab.
 4. `navigate` to the person's LinkedIn URL.
 5. Wait 3–4 seconds.
@@ -166,9 +188,62 @@ If the user confirms they sent it, also log:
 
 ---
 
+## MODE C — PRE-OPENING INTRODUCTION
+
+**Applies to:** "reach out to my targets" / "pre-opening outreach" / "introduce myself at [company]". An introduction to a contact at an approved target company, before any role is posted. Targets and their contacts are recorded by the `targets` skill.
+
+### C1 — Check the cap
+
+Run `careeros outreach cap`. It counts every invite, role-based and pre-opening, because LinkedIn's limits apply to the account: each invite still in flight whatever its age, plus the invites sent in the last 7 days. It prints the cap, the count, `remaining` and the date the oldest counted invite leaves the window. The cap is the `Weekly invite cap: N` line under `## Outreach` in `profile.md` (default 15 when there is no such line).
+
+If `careeros outreach cap` reports the default (the text says `(default)`, the JSON has `configured: false`) but the user says they set a cap, tell them the line was not found and quote the exact required form: a `## Outreach` heading, then one line `Weekly invite cap: N`.
+
+If `careeros outreach cap` or `careeros outreach next` refuses with `cap_config_invalid`, stop and tell the user what it said (the line in `profile.md` is invalid; only the user fixes it). If `remaining` is 0, say so with the date, and stop.
+
+### C2 — Pick contacts
+
+Run `careeros outreach next --json`. It lists the contacts to approach, ranked, each with its reason and a `stale` flag, limited to `remaining`. Never draft more than `remaining` notes. Do not pick anyone `careeros outreach next` did not list.
+
+Each listed contact has a `source`. A contact with `source: job` has a posted opening: use Mode A for them, not Mode C. Only contacts with `source: target` use Mode C.
+
+If a listed contact's target is flagged `stale`, do the `targets` skill's refresh before you draft (re-read the evidence and update its `read_on` date), then continue.
+
+### C3 — Draft
+
+One note per contact. Each note:
+
+- is **300 characters at most**;
+- says who the user is in one clause (role, years, one real strength from `profile.md`);
+- mentions one concrete, real fact about the company or the person's work, taken from `company.md`, the person's public profile or the company's public pages;
+- says the user would like to stay connected or learn about the team;
+- never says or implies that an opening exists, never asks for a job or a referral, and never claims a relationship;
+- for a non-home market, follows the local norms in `markets/[country].md` (formality, dominant platform, language).
+
+Run the note through the `humanize` skill first, then the evidence check (`careeros check <file> --record`, as in the EVIDENCE GATE). Show each draft with its character count and the cap status, for example "[N]/300 · invites left this week: R".
+
+Ask, as in A3:
+> "Use this note, or regenerate?"
+
+On "regenerate": redraft with a different angle. Repeat until the user picks a note. Nothing is sent yet.
+
+### C4 — Propose and send
+
+For each draft the user has OK'd for sending, one contact at a time, propose it as in A4, then follow A4 and A5 unchanged: propose, tell the user to run `! careeros approve`, **stop and wait**, show, begin, send exactly the approved text, done. A refusal ends the action for that person (see OUTREACH STATE); `cap_reached` ends Mode C.
+
+### C5 — Log
+
+Append to `activity.md`:
+```
+[date] sent LinkedIn invite (pre-opening) → [Name] ([Title] at [Company]) · note: [first 60 chars of note]…
+```
+
+The target's status comes from the records (`careeros outreach target show <slug>`), not from `activity.md`. When the user later says a person accepted or replied, record it (see OUTREACH STATE).
+
+---
+
 ## NOTES
 
 - LinkedIn connection notes: 300 characters hard limit. Always show count.
-- One LinkedIn connection request per person, ever. Check activity.md before proposing; the CLI also refuses a second invite to a person whose invite is recorded as sent.
+- One LinkedIn connection request per person, ever. Check the person's label with `careeros outreach person list` before proposing; the CLI also refuses a second invite to a person whose invite is recorded as sent.
 - Never guess or fabricate an email address.
 - Email drafts are for the user to send — CareerOS does not send email autonomously.

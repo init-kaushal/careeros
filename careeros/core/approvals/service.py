@@ -27,19 +27,23 @@ recorded decision, not a security boundary.
 
 from __future__ import annotations
 
+import errno
+import os
 import stat
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
 from careeros.core import ids, ledger, models
-from careeros.core.approvals import fold, item as item_mod, manifest, render, rules
+from careeros.core.approvals import cap, fold, item as item_mod, manifest, people, render, rules
 from careeros.core.approvals.model import Item, ItemState, ManifestEntry, Target
 from careeros.core.memory.store import Transaction
 from careeros.core.models import Issue
 from careeros.core.workspace import WorkspaceError, WorkspaceLock, ensure_writable, job_files, read_job, resolve_job
 
 APPROVALS_DIR = "approvals"
+PROFILE_REL = "profile.md"
+MAX_PROFILE_BYTES = 1 << 20
 INVALID_INPUT = "invalid_input"
 LEDGER_CORRUPT = rules.LEDGER_CORRUPT
 MAX_ITEM_BYTES = 1 << 20
@@ -267,15 +271,20 @@ def propose(root: Path, *, kind: str, person_url: str | None, job_ref: str | Non
         states = fold.fold_all(events, now)
         files = _scan(root)
         parsed = [f.item for f in files.values() if f.item is not None]
-        # identity comes from the LEDGER (every proposal event, whatever the state or the file); files are a cross-check
-        by_url: dict[str, str] = {}
-        for st in states.values():
-            if st.url is not None and st.target_id is not None:
-                by_url.setdefault(st.url, st.target_id)
+        # identity comes from the LEDGER (every proposal event and every `outreach.person_added` event, whatever the state or
+        # the file); files are a cross-check. An inconsistent map fails closed: no winner is picked and nothing is written.
+        by_url, map_errors = people.person_urls(events)
+        conflicts = people.identity_problems(events) + map_errors if person else []
+        if conflicts:
+            raise Refused(rules.IDENTITY_CONFLICT, "the person identity map in the ledger is inconsistent: " + "; ".join(conflicts[:3])
+                          + ". Restore ledger.jsonl from .careeros/backups or version control; nothing was proposed")
         taken_people = {i.target.id for i in parsed if i.target.url is not None} | set(by_url.values())
         taken_people |= {st.target_id for st in states.values() if st.target_id and st.target_id.startswith("per_")}
         if person:
             target_id = by_url.get(url) or ids.new_id("person", taken_people)
+            if target_id in people.closed_people(events)[0]:
+                raise Refused(rules.PERSON_CLOSED, f"{target_id} is closed (an outreach.closed event is recorded): no invite or "
+                                                   "message is proposed to a closed person; nothing was proposed")
         else:
             target_id = job.id
 
@@ -514,6 +523,80 @@ def _job_problem(root: Path, job_id: str, events: list, *, require_approved: boo
     return None
 
 
+def profile_cap_setting(root: Path) -> cap.CapSetting:
+    """The weekly invite cap setting in `profile.md` (outreach spec 6.4), read from the file at the moment of the call. No
+    profile (ENOENT) is an absent setting (the default cap). Anything else that is not a plain readable UTF-8 file of at
+    most `MAX_PROFILE_BYTES` (a symlink, a FIFO or other non-regular file, a directory, an oversized or unreadable file) is
+    an invalid setting (fail closed). The open never follows a symlink and never blocks, and the read is bounded, so this
+    can run under the workspace lock. Never raises."""
+    def invalid(why: str) -> cap.CapSetting:
+        return cap.CapSetting(None, f"profile.md {why}, so its `Weekly invite cap` setting cannot be read")
+
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(Path(root) / PROFILE_REL, flags)
+    except FileNotFoundError:
+        return cap.CapSetting()
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return invalid("is a symlink (it must be a regular file)")
+        return invalid(f"cannot be read ({exc.strerror or exc})")
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return invalid("is not a regular file")
+        chunks, size = [], 0
+        while size <= MAX_PROFILE_BYTES:
+            chunk = os.read(fd, MAX_PROFILE_BYTES + 1 - size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+    except OSError as exc:
+        return invalid(f"cannot be read ({exc.strerror or exc})")
+    finally:
+        os.close(fd)
+    if size > MAX_PROFILE_BYTES:
+        return invalid(f"is larger than {MAX_PROFILE_BYTES} bytes")
+    try:
+        return cap.parse_cap_setting(b"".join(chunks).decode("utf-8"))
+    except UnicodeDecodeError:
+        return invalid("is not valid UTF-8")
+
+
+def cap_config_message(refusal: cap.CapRefusal) -> str:
+    """The `cap_config_invalid` message shared by `approval begin`, `outreach cap` and `outreach next`."""
+    return f"profile.md holds an invalid weekly invite cap setting: {refusal.message}"
+
+
+def _closed_problem(st: ItemState, events: list) -> tuple[str, str] | None:
+    """An invite or message to a person with an `outreach.closed` event (read from `events`, the ledger read under the
+    lock; a closed event with an unreadable ts still counts)."""
+    if st.kind not in _PERSON_KINDS:
+        return None
+    if st.target_id in people.closed_people(events)[0]:
+        return rules.PERSON_CLOSED, (f"{st.target_id} is closed (an outreach.closed event is recorded): no {st.kind} is sent "
+                                     "to a closed person; nothing was started")
+    return None
+
+
+def _cap_problem(root: Path, item_id: str, st: ItemState, states: dict[str, ItemState], now: str) -> tuple[str, str] | None:
+    """(invite) The weekly cap: `profile.md` is read HERE, under the caller's lock, and the count comes from `states`, folded
+    from the ledger read under the same lock. Every other in-flight invite plus every invite consumed in the last 7 days
+    counts (`cap.invite_count`, this item excluded); the claim is refused when that count already meets the cap."""
+    if st.kind != rules.LINKEDIN_INVITE:
+        return None
+    value = cap.effective_cap(profile_cap_setting(root))
+    if isinstance(value, cap.CapRefusal):
+        return rules.CAP_CONFIG_INVALID, cap_config_message(value)
+    count = cap.invite_count(states, now, exclude=item_id)
+    if count.total >= value:
+        leaves = f"; the oldest sent invite leaves the window at {count.oldest_leaves}" if count.oldest_leaves else ""
+        return rules.CAP_REACHED, (f"the weekly invite cap of {value} is reached: {count.in_flight} invite(s) in flight and "
+                                   f"{count.consumed_in_window} sent in the last {cap.CAP_WINDOW_DAYS} days{leaves}. Only "
+                                   "raising `Weekly invite cap` in profile.md overrides it; nothing was started")
+    return None
+
+
 def _first(*checks) -> tuple[str, str] | None:
     for check in checks:
         problem = check()
@@ -603,8 +686,11 @@ def begin(root: Path, item_id: str, *, actor: str, clock=None) -> Started:
     """The claim, immediately before acting. Under the lock, in the spec's order: state approved, unexpired, no clock
     skew; the file's action hash equals the proposal's; (submit) every manifest file re-validated and re-hashed; no
     other item of the same kind and target in flight; (invite) no other invite to the person consumed; (submit) no
-    other submit for the job consumed, and the job awaiting approval with its job-level approval recorded. Then
-    `approval.started`. A refusal of an existing item appends a deduped `approval.rejected`."""
+    other submit for the job consumed, and the job awaiting approval with its job-level approval recorded; then
+    (invite, message) the person is not closed, rechecked from the ledger read under this lock; then (invite) the
+    weekly cap, with `profile.md` and the folded states read under this lock. Then `approval.started`, appended before
+    the lock is released, so the closed check, the cap check and the claim are one critical section and two concurrent
+    begins can never both take the last free slot. A refusal of an existing item appends a deduped `approval.rejected`."""
     root = Path(root)
     with WorkspaceLock(root):
         now = (clock or models.utc_now)()       # the one clock read, under the lock
@@ -617,7 +703,9 @@ def begin(root: Path, item_id: str, *, actor: str, clock=None) -> Started:
                          lambda: _invite_problem(item_id, st, ctx.states),
                          lambda: _submitted_problem(item_id, st, ctx.states),
                          lambda: _job_problem(root, st.target_id, ctx.events, require_approved=True)
-                         if st.kind == rules.APPLICATION_SUBMIT else None)
+                         if st.kind == rules.APPLICATION_SUBMIT else None,
+                         lambda: _closed_problem(st, ctx.events),
+                         lambda: _cap_problem(root, item_id, st, ctx.states, now))
         if problem:
             _refuse(root, ctx, item_id, rules.OP_BEGIN, actor, "cli", *problem)
         rel = _expected_rel(item_id)

@@ -11,6 +11,7 @@ from careeros.cli.init_cmd import init_cmd
 from careeros.cli.ledger import ledger_app
 from careeros.cli.memory import memory_app
 from careeros.cli.migrate import migrate_cmd
+from careeros.cli.outreach import outreach_app
 from careeros.cli.status import status_cmd
 from careeros.cli.transition import transition_cmd
 from careeros.cli.upgrade import upgrade_cmd
@@ -40,6 +41,7 @@ app.command("check")(check_cmd)
 app.add_typer(approval_app, name="approval")
 app.add_typer(ledger_app, name="ledger")
 app.add_typer(memory_app, name="memory")
+app.add_typer(outreach_app, name="outreach")
 
 if __name__ == "__main__":
     app()

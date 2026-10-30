@@ -193,6 +193,8 @@ def _fold_one(events: list[dict], extra: list[SequenceError], now: str) -> ItemS
                 fields["approved_at"] = at
             elif etype == rules.EV_STARTED:
                 fields.update(started=True, started_at=at)
+            elif etype == rules.EV_CONSUMED:
+                fields["consumed_at"] = at
             elif etype == rules.EV_VOIDED:
                 fields["void_reason"] = event.get("reason")
         fields["last_ts"] = at

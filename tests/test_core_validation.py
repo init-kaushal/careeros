@@ -220,3 +220,19 @@ def test_job005_fix_names_the_display_spelling_and_the_transition_command(root: 
     issue = _find(validate_workspace(root), "JOB005")
     assert "source of truth" in issue.fix and "careeros transition" in issue.fix
     assert state_machine.display_for(State.DISCOVERED) in issue.fix
+
+
+def test_validate_reads_the_clock_once_and_the_output_is_unchanged(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from careeros.core import models
+    add_job(root, "one")
+    fixed = validate_workspace(root, "2026-10-02T00:00:00Z")
+    calls: list[int] = []
+
+    def counting() -> str:
+        calls.append(1)
+        return "2026-10-02T00:00:00Z"
+
+    monkeypatch.setattr(models, "utc_now", counting)
+    assert validate_workspace(root) == fixed
+    assert len(calls) == 1
+    assert validate_workspace(root, "2026-10-02T00:00:00Z") == fixed and len(calls) == 1      # an explicit now reads no clock

@@ -416,11 +416,11 @@ def test_the_doc_lifecycle_table_names_every_state() -> None:
 
 def test_version_changelog_readme_and_nav() -> None:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert pyproject["project"]["version"] == "0.7.0"
-    assert careeros.__version__ == "0.7.0"
+    assert pyproject["project"]["version"] == "0.8.0"
+    assert careeros.__version__ == "0.8.0"
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    head = changelog.split("\n## ", 2)[1]
-    assert head.startswith("0.7.0")
+    head = changelog[changelog.index("## 0.7.0"):changelog.index("## 0.6.0")]       # the 0.7.0 entry stays; the release moved on
+    assert head.startswith("## 0.7.0")
     assert "run `careeros upgrade` to receive the updated skills" in head
     assert "outreach, follow-up and apply now use recorded approvals" in head
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
