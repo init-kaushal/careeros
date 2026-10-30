@@ -6,7 +6,10 @@ such as `2026-10-19T09:00:00Z`). Inputs are plain data: events (dicts), records 
 
 * Events are applied in `seq` order. `outreach.rejected` is audit-only and ignored wherever it appears. An unknown
   `outreach.*` type, an event with no usable entity or timestamp, and a sequence the transition tables refuse are not
-  applied and are returned in `errors` (the source of `OUT005`); they are never dropped silently.
+  applied and are returned in `errors` (the source of `OUT005`); they are never dropped silently. The same holds for an
+  outcome event (`accepted`, `replied`, `closed`) whose `source` is unsupported or whose closed `reason` is invalid: it
+  is reported and changes no derived state (no flag, no `last_activity`), and it does not use up the person's single
+  outcome of that kind, so a later valid event still applies.
 * Person flags come from the ledger only: `invited_at` is the earliest consumed `linkedin_invite` (a second consumed
   invite is reported), `messaged_at` the latest consumed `linkedin_message`, and `accepted_at`, `replied_at` and
   `closed_at` from the single outcome event of each kind. The approval events are matched to the person through the
@@ -205,8 +208,8 @@ def _person_event(event: dict, etype: str, entity: str | None, flags: dict[str, 
     at = _event_ts(event, errors)
     if at is None:
         return
-    current = flags.setdefault(entity, PersonFlags())
     if etype == rules.EV_PERSON_ADDED:
+        current = flags.setdefault(entity, PersonFlags())
         _, _, problem = apeople.parse_person_added(event)
         if problem:
             errors.append(SequenceError(seq, entity, problem))
@@ -214,8 +217,11 @@ def _person_event(event: dict, etype: str, entity: str | None, flags: dict[str, 
                                 last_activity=_later(current.last_activity, at))
         return
     outcome = rules.OUTCOME_FOR_EVENT[etype]
-    for problem in _outcome_shape_problems(event, outcome):
-        errors.append(SequenceError(seq, entity, f"{etype}: {problem}"))
+    problems = _outcome_shape_problems(event, outcome)
+    if problems:                        # reported, never applied: a malformed outcome changes no derived state
+        errors.extend(SequenceError(seq, entity, f"{etype}: {problem}") for problem in problems)
+        return
+    current = flags.setdefault(entity, PersonFlags())
     result = apply_outcome(current, outcome, at, event.get("reason") if outcome == rules.CLOSED else None)
     if isinstance(result, Refusal):
         errors.append(SequenceError(seq, entity, f"{etype} is not legal for a {result.state} person"))

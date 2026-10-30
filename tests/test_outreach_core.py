@@ -16,6 +16,7 @@ import pytest
 
 from careeros.core import ids
 from careeros.core.approvals import people
+from careeros.core.outreach import derive
 from careeros.core.outreach import fold as ofold
 from careeros.core.outreach import person, rules, slug, target
 from careeros.core.outreach.model import Evidence, FoundIn, JobInfo, Person, PersonFlags, Target
@@ -755,13 +756,13 @@ def test_unknown_outreach_types_do_not_change_flags():
     assert result.flags == before and len(result.errors) == 1 and result.errors[0].entity == PER
 
 
-def test_closed_without_a_valid_reason_or_source_still_closes_and_is_reported():
+def test_closed_without_a_valid_reason_or_source_is_reported_and_closes_nobody():
     L = Ledger()
     L.add("outreach.closed", PER, reason="because", source="user")
     L.add("outreach.closed", PER2, reason="declined", source="carrier-pigeon")
     L.add("outreach.closed", "per_cdefghjkmn", reason=None, source="user")
     result = ofold.fold_people(L.events, NOW)
-    assert len(result.errors) == 3 and all(f.label == "closed" for f in result.flags.values()) and len(result.flags) == 3
+    assert len(result.errors) == 3 and result.flags == {}
 
 
 def test_target_events_do_not_create_people_or_errors_in_the_person_fold():
@@ -807,6 +808,8 @@ def simulate(ops):
         elif kind == "message":
             slots["msg"] = at if slots["msg"] is None else max(slots["msg"], at)
             last = at if last is None else max(last, at)
+        elif kind.startswith("bad_"):
+            refused += 1                    # a malformed outcome is reported (one error) and changes nothing at all
         else:
             needs, blocked = SIM_NEEDS_ANY[kind], SIM_BLOCKED_BY[kind]
             ok = (not needs or any(slots[s] is not None for s in needs)) and not any(slots[s] is not None for s in blocked)
@@ -838,6 +841,14 @@ def build_events(ops, rng, noise):
             at = tick()
             L.item("linkedin_invite" if kind == "invite" else "linkedin_message", PER, at, steps_ts=at)
             placed.append((kind, at))
+        elif kind.startswith("bad_"):
+            at = tick()
+            real = kind[4:]
+            if real == "closed" and rng.random() < 0.5:
+                L.outcome(real, PER, at, reason=rng.choice([None, "because", ""]))
+            else:
+                L.outcome(real, PER, at, source=rng.choice([None, "carrier-pigeon", "USER", 7]))
+            placed.append((kind, at))
         else:
             at = tick()
             L.outcome(kind, PER, at)
@@ -849,25 +860,102 @@ def build_events(ops, rng, noise):
 
 def test_fold_agrees_with_the_independent_simulator_over_20000_random_sequences_and_rejections_change_nothing():
     rng = random.Random(20261019)
-    kinds = ("invite", "message", "accepted", "replied", "closed")
+    kinds = ("invite", "message", "accepted", "replied", "closed", "bad_accepted", "bad_replied", "bad_closed")
     for n in range(20_000):
         ops = [(rng.choice(kinds), None) for _ in range(rng.randrange(1, 9))]
         events, placed = build_events(ops, rng, noise=False)
         noisy_events, _ = build_events(ops, random.Random(n), noise=True)
         slots, refused, last, label = simulate(placed)
         result = ofold.fold_people(events, NOW)
-        flags = result.flags[PER]
+        flags = result.flags.get(PER, PersonFlags())
         got = {"inv": flags.invited_at, "msg": flags.messaged_at, "acc": flags.accepted_at, "rep": flags.replied_at, "clo": flags.closed_at}
         assert got == slots, ops
         assert len(result.errors) == refused and flags.label == label and flags.last_activity == last, ops
         assert not flags.invite_in_flight
         noisy = ofold.fold_people(noisy_events, NOW)
         assert len(noisy.errors) == len(result.errors)
-        a, b = noisy.flags[PER], flags
+        a, b = noisy.flags.get(PER, PersonFlags()), flags
         # the noisy ledger has other timestamps, so compare which flags are set, the label and the activity presence
         assert [x is None for x in (a.invited_at, a.messaged_at, a.accepted_at, a.replied_at, a.closed_at, a.last_activity)] == \
                [x is None for x in (b.invited_at, b.messaged_at, b.accepted_at, b.replied_at, b.closed_at, b.last_activity)], ops
         assert a.label == b.label, ops
+
+
+# --- a malformed outcome event is reported (OUT005) and never applied -------------------------------------------------------
+
+BAD_SOURCES = (None, "carrier-pigeon", "USER", 7)
+MALFORMED = (
+    [("accepted", {"source": s}) for s in BAD_SOURCES]
+    + [("replied", {"source": s}) for s in BAD_SOURCES]
+    + [("closed", {"source": s}) for s in BAD_SOURCES]
+    + [("closed", {"reason": r}) for r in (None, "", "because", 3)]
+)
+MALFORMED_IDS = [f"{k}-{'-'.join(f'{a}={b!r}' for a, b in kw.items())}" for k, kw in MALFORMED]
+
+
+def invited_ledger():
+    L = Ledger()
+    L.item("linkedin_invite", PER, ts(100))
+    L.item("linkedin_message", PER, ts(150))
+    return L
+
+
+def due_in_queue(flags_by_person, now):
+    p = Person(PER, URL, "Alex", "h", "Acme Corp", "acme-corp", "recruiter", None, (FoundIn("job", JOB),), "2026-01-01")
+    return [i.entity_id for i in derive.build_queue({PER: p}, flags_by_person, {}, [], now).items]
+
+
+@pytest.mark.parametrize("kind,bad", MALFORMED, ids=MALFORMED_IDS)
+def test_a_malformed_outcome_event_is_reported_and_changes_no_derived_state(kind, bad):
+    base = invited_ledger()
+    expected = ofold.fold_people(base.events, NOW)
+    L = invited_ledger()
+    L.outcome(kind, PER, ts(200), **bad)
+    got = ofold.fold_people(L.events, NOW)
+    assert got.flags == expected.flags and got.flags[PER].label == expected.flags[PER].label == "messaged"
+    assert expected.errors == ()
+    (err,) = got.errors
+    assert err.entity == PER and err.message.startswith(f"outreach.{kind}: ")
+    assert ("source must be" if "source" in bad else "needs a reason") in err.message
+    due = "2026-03-01T00:00:00Z"
+    assert due_in_queue(got.flags, due) == due_in_queue(expected.flags, due)
+
+
+@pytest.mark.parametrize("kind,bad", MALFORMED, ids=MALFORMED_IDS)
+def test_a_later_valid_event_of_the_same_kind_applies_after_a_malformed_one(kind, bad):
+    L = invited_ledger()
+    L.outcome(kind, PER, ts(200), **bad)
+    L.outcome(kind, PER, ts(300))
+    got = ofold.fold_people(L.events, NOW)
+    clean = invited_ledger()
+    clean.outcome(kind, PER, ts(300))
+    assert got.flags == ofold.fold_people(clean.events, NOW).flags
+    assert getattr(got.flags[PER], f"{kind}_at") == ts(300) and len(got.errors) == 1
+
+
+def test_a_malformed_accepted_does_not_remove_an_invited_person_from_the_due_queue():
+    L = Ledger()
+    L.item("linkedin_invite", PER, ts(100))
+    L.outcome("accepted", PER, ts(200), source="carrier-pigeon")
+    flags = ofold.fold_people(L.events, NOW).flags
+    assert flags[PER].accepted_at is None and flags[PER].label == "invited" and flags[PER].last_activity == ts(100)
+    assert due_in_queue(flags, ts(timedelta(days=8))) == [PER]
+
+
+def test_a_malformed_closed_sets_neither_closed_at_nor_reason_nor_last_activity_and_queue_still_lists_the_person():
+    L = Ledger()
+    L.item("linkedin_invite", PER, ts(100))
+    L.outcome("closed", PER, ts(200), reason="because")
+    flags = ofold.fold_people(L.events, NOW).flags[PER]
+    assert (flags.closed_at, flags.closed_reason, flags.last_activity, flags.label) == (None, None, ts(100), "invited")
+    assert due_in_queue({PER: flags}, ts(timedelta(days=8))) == [PER]
+
+
+def test_a_malformed_outcome_for_an_unknown_person_creates_no_person():
+    L = Ledger()
+    L.outcome("accepted", PER, ts(5), source="nope")
+    result = ofold.fold_people(L.events, NOW)
+    assert result.flags == {} and len(result.errors) == 1
 
 
 def test_apply_outcome_every_flag_combination_against_an_explicit_rule():

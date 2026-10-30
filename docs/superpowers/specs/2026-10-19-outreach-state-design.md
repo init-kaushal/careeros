@@ -94,7 +94,7 @@ Notes.
 | `outreach.accepted` / `outreach.replied` / `outreach.closed` | `per_` | `record` | outcome; `source` is `user`, `observed` or `email`, plus an optional note; `closed` carries a reason (`no_response`, `declined`, `not_a_fit`, `other`) |
 | `outreach.rejected` | `per_` / `tgt_` | any refused command on an existing entity | audit only; needs a reason; deduped like `approval.rejected`; never changes any state |
 
-All outcome and decision events are **facts reported to CareerOS**, not verified against LinkedIn. Each outcome kind is recorded **at most once per person** (`accepted`, `replied`, `closed`); a repeat is refused `wrong_state`, so the derived `*_at` timestamps are unambiguous. Unknown `outreach.*` types are errors (`OUT005`).
+All outcome and decision events are **facts reported to CareerOS**, not verified against LinkedIn. Each outcome kind is recorded **at most once per person** (`accepted`, `replied`, `closed`); a repeat is refused `wrong_state`, so the derived `*_at` timestamps are unambiguous. Unknown `outreach.*` types are errors (`OUT005`). An outcome event with an unsupported or missing `source`, or a `closed` event with an invalid or missing `reason`, is also `OUT005` and is **not applied**: it changes no derived state and does not use up the person's once-only slot for that kind. The approvals-side `person_closed` gate deliberately still counts any `outreach.closed` event, so a malformed close never changes the displayed state but always blocks sending.
 
 ## 6. Derived state (pure fold; takes `now`; nothing stored)
 
@@ -185,7 +185,7 @@ State-changing commands take the workspace lock, verify the hash chain (`ledger_
 | `OUT002` | warning | orphan record file (no `person_added` / `target_added` event) |
 | `OUT003` | warning | a person with approval events but no record; or an event whose record file is missing for a person/target that still has live state |
 | `OUT004` | error | record `id`/`url` disagrees with its event, or one URL under two ids / one id under two URLs (events and files considered together with approval events) |
-| `OUT005` | error | illegal outcome sequence (`accepted` with no invite, an outcome after `closed`, …) or an unknown `outreach.*` event type |
+| `OUT005` | error | illegal outcome sequence (`accepted` with no invite, an outcome after `closed`, …), an unknown `outreach.*` event type, or a malformed outcome event (reported, not applied) |
 | `OUT006` | warning | `found_in` names a job or target that does not exist |
 | `OUT007` | error | `profile.md` holds an invalid weekly cap setting (§6.4) |
 | `OUT100` | info | a target is stale (60 days) |

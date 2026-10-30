@@ -81,7 +81,7 @@ The type prefix `outreach.` is reserved: `careeros ledger append` refuses it. Ea
 | `outreach.closed` | `per_` | `record --closed` | no further invite or message; carries a reason (`no_response`, `declined`, `not_a_fit`, `other`) |
 | `outreach.rejected` | `per_` / `tgt_` | any refused command on an existing entity | audit only; needs a reason; deduplicated; never changes any state |
 
-An outcome has a `source` of `user`, `observed` or `email` and an optional note. Each outcome kind is recorded at most once per person: a repeat is refused `wrong_state`, so the derived timestamps are unambiguous. An unknown `outreach.*` type is `OUT005`.
+An outcome has a `source` of `user`, `observed` or `email` and an optional note. Each outcome kind is recorded at most once per person: a repeat is refused `wrong_state`, so the derived timestamps are unambiguous. An unknown `outreach.*` type is `OUT005`. An outcome event with an unsupported or missing `source`, or a `closed` event with an invalid or missing `reason`, is also `OUT005` and is not applied: it changes no flag, label, timestamp or queue entry, and a later valid event of the same kind still counts. `outreach record` always writes a valid `source` and `reason`, so only a hand edit or a foreign writer can produce one.
 
 ## What each result is derived from
 
@@ -187,7 +187,7 @@ The last four are also approval refusal codes; see [approvals](approvals.md#refu
 | `OUT002` | warning | an orphan record file (no `person_added` or `target_added` event) |
 | `OUT003` | warning | a person with approval events but no record, or an event whose record file is missing for an entity that still has live state |
 | `OUT004` | error | a record's `id` or `url` disagrees with its event, or one URL under two ids or one id under two URLs |
-| `OUT005` | error | an illegal outcome sequence (such as `accepted` with no invite, or an outcome after `closed`), a second consumed invite for one person, or an unknown `outreach.*` event type |
+| `OUT005` | error | an illegal outcome sequence (such as `accepted` with no invite, or an outcome after `closed`), a second consumed invite for one person, an unknown `outreach.*` event type, or an outcome event with an unsupported `source` or an invalid `reason` (reported, never applied) |
 | `OUT006` | warning | `found_in` names a job or target that does not exist |
 | `OUT007` | error | `profile.md` holds an invalid weekly cap setting |
 | `OUT100` | info | a target is stale |
@@ -204,4 +204,5 @@ A missing record file for an entity with events is a warning, because state need
 - An invalid person record (`OUT001`) feeds nothing: that contact loses its pre-opening exclusion and is queued like any contact with approval events.
 - A company slug match is a heuristic (`slugify`).
 - Truncating the tail of `ledger.jsonl` cannot be detected by a hash chain.
+- A malformed `outreach.closed` event (invalid `reason` or `source`) is reported as `OUT005` and changes no displayed state, so `outreach queue` and `outreach next` may still list the person. It still blocks sending: the approvals gate counts any `outreach.closed` event whatever its shape, so `approval propose` and `approval begin` refuse `person_closed`, and `outreach record` refuses `wrong_state`. This is deliberate: a malformed close never changes what is shown but always stops a send.
 - This is not a security boundary.
