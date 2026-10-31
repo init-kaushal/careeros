@@ -61,7 +61,7 @@ Written only by the commands in §7, with `source` of `user` or `observed` where
 
 | Type | Entity | Notes |
 |---|---|---|
-| `interview.round_added` | `rnd_` id | `artifacts = [rel, "sha256:<hex>"]`; action names the stage, job id and date for humans |
+| `interview.round_added` | `rnd_` id | `artifacts = [rel, "sha256:<hex>", "job:<job id>"]` (the job element is what `INT004` compares the record against; written only through one writer function); action names the stage and date for humans |
 | `interview.held` | `rnd_` id | the round took place; `source` `user` or `observed` |
 | `interview.cancelled` | `rnd_` id | needs a reason; `source` `user` or `observed` |
 | `interview.rescheduled` | `rnd_` id | action names the new date; the record's `scheduled_for` is rewritten in the same operation |
