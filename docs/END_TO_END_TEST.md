@@ -215,3 +215,37 @@ Not covered: the `outreach`, `follow-up` and `apply` skills were not run live (t
 - Automated tests: Python 3.14: 3559 passed (90.2 s) on a fresh checkout of the committed state; the results on the committed checkout, and on a fresh Python 3.11 venv without click, are in the task report.
 
 Not covered: the `outreach`, `targets` and `follow-up` skills were not run live (their wording is pinned by tests only); no real LinkedIn was used and nothing was sent; the behaviour of an agent following the skills is untested; a real pty approval was not exercised (the interactive check was patched). The cap, the closed-person check and the queue are bookkeeping and refusals inside CareerOS, not a security boundary: anything outside CareerOS that can write the workspace can change them.
+
+## Interview rounds and debriefs (0.9.0)
+
+- Date: 2026-11-02
+- Commit under test: the commit that adds this record and `tests/test_interview_e2e.py` (a record cannot name its own hash; the release checks were run on a clean checkout of exactly that commit, and the hash is in the task report)
+- Method: `tests/test_interview_e2e.py` drives the real CLI (`careeros interview ...`, `check --record`, `transition`, `validate`) on brand-new invented workspaces in a temporary directory, with invented jobs, an invented career memory, invented interviewer names and placeholder prep and debrief text only. One settable clock supplies both the commands' `now` and the ledger stamps, and the walk moves it explicitly (day 0, then the start of day 4); the child processes killed in step 13 get the same value. The only exception is the race step (17), which runs real processes on the real clock. No real workspace was read, copied or touched.
+
+| # | Step | Exit | Result |
+|---|---|---|---|
+| 1 | `interview round add` twice on a job at `SCREEN` (a recruiter screen in 3 days, a technical in 10 days) | 0, 0 | both `scheduled` |
+| 2 | `interview upcoming`; write `interview-prep.md`, `upcoming`; `check --record --against` the job, `upcoming` | 0 each | 2 rounds, soonest first; prep `none`, then `drafted`, then `checked` |
+| 3 | clock to the start of the day after the screen: `upcoming`, `needs-debrief` | 0, 0 | the screen leaves `upcoming` (1 round) and is in `needs_update` |
+| 4 | `round held` on the screen, `needs-debrief` | 0, 0 | label `held`; it moves to `needs_debrief` (`needs_update` empty) |
+| 5 | `interview debrief` on the screen, `needs-debrief`, `debrief` twice more | 0, 0, 1, 1 | label `debriefed`; both groups empty; `wrong_state`, recorded once |
+| 6 | `round reschedule` the technical, `upcoming` | 0, 0 | the new date is listed |
+| 7 | add a third round, `round cancel`, then `round held`, `round reschedule`, `round cancel` on it | 0, 0, 1, 1, 1 | label `cancelled`; `wrong_state` three times; still `cancelled` |
+| 8 | `round add` with the same job, stage and date as the live technical | 1 | `duplicate`, one `interview.rejected` on the live round |
+| 9 | on a second job: `round add`, `transition --to REJECTED`, `round add`, `round held`, `debrief` | 0, 0, 1, 0, 0 | `wrong_state` for the add on the terminal job; `held` and `debriefed` allowed |
+| 10 | on a job at `APPLIED`: `round add` (a date already past), `validate`; `round held`, `validate` | 0, 0, 0, 0 | `INT007` and `INT100`; then `INT007` only (warnings: exit 0) |
+| 11 | hand-edit the technical's `scheduled_for`; `upcoming`, `round show`, `validate`; `round reschedule` to that date | 0 each | `upcoming` uses the new date (`date_unrecorded`); id, job, label and history unchanged; `INT008`, cleared by the re-run |
+| 12 | an orphan record (no event), then the technical's `job` edited (mismatched); `round list`, `upcoming`, `validate`; the file restored | 0, 0, 0 / 0, 0, 1 | the orphan feeds nothing (`INT002`); the mismatched round is `incomplete` (`record` `mismatched`), out of `upcoming` (`INT004`, exit 1); restored, it is back |
+| 13 | a malformed `interview.held` (no `source`) appended to the ledger by hand; `validate`, the views | 1, 0 | `INT005`; `round list`, `upcoming`, `needs-debrief` identical; the round stays `scheduled` |
+| 14 | a child process killed between the file write and the event append in `round reschedule`, and again in `debrief`; `validate`, `needs-debrief`, `upcoming`; both commands re-run | 137, 137, 1, 0, 0, 0, 0 | chain verifies, no new event; `INT008` and `INT009`; the crashed debrief stays in `needs_debrief`; `date_unrecorded` in `upcoming`; after the re-runs both warnings are gone |
+| 15 | a held round whose record is deleted: `round list`, `round show`, `needs-debrief`, `debrief`, `validate` | 0, 0, 0, 1, 1 | `incomplete` (`record` `missing`), label `held`, history from the ledger; still in `needs_debrief`; `record_unavailable`; the file is not recreated; `INT003` |
+| 16 | `upcoming` (default and `--days 30`), `needs-debrief`, `round list`, `round show` for six rounds, `validate` (text and `--json`) | 0 or 1 | workspace identical (see below) |
+| 17 | two real processes racing `round held` on one round | 0, 1 | exactly one succeeds; the other `wrong_state`; exactly 1 `interview.held` |
+| 18 | 25 rounds added and held on a separate invented workspace; `needs-debrief`, `round list` | 0, 0 | all 25 listed in both (oldest held first), nothing truncated |
+
+- Read-only commands: before and after each of the commands in step 16, the path list and the bytes and modification time of every path (including `ledger.jsonl` and `.careeros/`, the lock file included) were compared: identical, nothing created, changed or removed.
+- Events across the walk (raw ledger lines): 6 `interview.round_added`, 5 `interview.held` (one of them the malformed line of step 13, reported and never applied), 3 `interview.debriefed`, 3 `interview.rescheduled`, 1 `interview.cancelled`, 6 `interview.rejected` (`wrong_state` four times, `duplicate`, `record_unavailable`; no identical repeat). The ledger hash chain verifies.
+- Isolation: `career/`, the other job and its `jd.md`, and the interviewing job's `jd.md` are byte-identical after the walk; the other job has no event beyond its import.
+- Automated tests: Python 3.14: 4372 passed (129.9 s) before the commit; the results on a clean checkout of the committed state, and on a fresh Python 3.11 venv without click, are in the task report.
+
+Not covered: the `interview`, `prep` and related skills were not run live (their wording is pinned by tests only); no real interview data was used; the behaviour of an agent following the skills is untested; whether a round was held or cancelled, and the debrief rating, are what the user says and are not verified. Round state, the views and the `INT` checks are bookkeeping and refusals inside CareerOS, not a security boundary: anything outside CareerOS that can write the workspace can change them.
