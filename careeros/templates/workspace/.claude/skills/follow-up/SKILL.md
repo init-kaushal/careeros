@@ -76,6 +76,8 @@ Email and interview follow-ups are not covered by `careeros outreach queue`; the
 | `sent email outreach → [Name]` (no reply logged) | 5 days |
 | Interview scheduled / completed (no offer / rejection logged) | 3 days after interview date |
 
+A round that `careeros interview needs-debrief` lists (STEP 1.5) is not listed again here: do not show a recorded round twice.
+
 Skip items where a follow-up was already sent within the cooldown window and items marked closed, rejected or offer-accepted in `activity.md` or `pipeline.md`.
 
 ---

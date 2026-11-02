@@ -85,7 +85,7 @@ A hand edit of a record can change what the views display. It never changes a ro
 
 **Flags derived with the clock.** `needs_debrief` is the label `held`. `needs_update` is the label `scheduled` with the record's `scheduled_for` in the past: a date-only value is overdue once the clock is at or after the start of the next UTC day; a datetime is overdue once the clock is after it.
 
-**Prep status** of a round, by its job: `none` if the job has no `interview-prep.md`; `checked` if the file's current text hashes (the same way `careeros check` hashes a draft) to the `sha256` of a `draft.checked` event whose entity is the job and whose action records a pass; otherwise `drafted`. The prep file is read as a regular file, never through a symlink, and only up to 1 MiB; anything else is `none`. Editing the file after its check makes it `drafted` again. The interview skill's evidence gate (`careeros check <file> --against <job-id> --record`) is what records that pass.
+**Prep status** of a round, by its job: `none` if the job has no `interview-prep.md`; `checked` if the file's current text hashes (the same way `careeros check` hashes a draft) to the `sha256` of a `draft.checked` event whose entity is the job and whose action records a pass; otherwise `drafted`. The prep file is read as a regular file, never through a symlink, and only up to 1 MiB; anything else is `none`. Editing the file after its check makes it `drafted` again. Only a passing check of the saved file itself counts: `careeros check jobs/discovered/<job-slug>/interview-prep.md --against <job> --record`. The interview skill's evidence gate checks the STAR outlines and drafted answers before the file is written, not the saved file, so following the skill alone leaves the round `drafted`.
 
 **`careeros interview upcoming`** lists the rounds labelled `scheduled` that are not `needs_update` and whose `scheduled_for` is within the chosen number of days of now, inclusive (default 14 days; `--days` takes a whole number from 0 to 3650, a command-line bound and not a rule), soonest first, then by id. Each row carries the job, stage, format, date, interviewers and prep status.
 
@@ -135,7 +135,7 @@ State-changing commands take the workspace lock, verify the ledger's hash chain,
 | `not_found` | no such round or job |
 | `wrong_state` | the transition is not legal (a second `held`, `held` after `cancelled`, `debrief` before `held`), or `round add` on a job in a terminal status |
 | `duplicate` | a live round with the same job, stage and `scheduled_for` already exists |
-| `invalid_input` | a malformed or missing argument, a bad enum or date, too many interviewers or debrief items, a string too long or with control characters |
+| `invalid_input` | a malformed value: a bad enum or date, an empty `--reason`, too many interviewers or debrief items, a string too long or with control characters (a missing required option is a usage error, exit 2) |
 | `record_unavailable` | the round is incomplete (its record is missing, invalid or mismatched), so `round reschedule` and `debrief` have nothing to write into |
 | `clock_skew` | the clock is earlier than the latest event of any type |
 | `ledger_corrupt` | the ledger's hash chain does not verify |
@@ -197,3 +197,4 @@ The workspace lock is released when its process dies, so the next command does n
 - An interviewer name cannot contain a colon: `--interviewer "Name:Title"` splits at the first colon.
 - A malformed `interview.*` event is reported (`INT005`) and not applied, so the views may show a round as if that event had never been written.
 - No view or list is truncated, so a workspace with many rounds prints them all.
+- The interview skill's STEP 6 still edits the job file's `Status:` line and the pipeline icon by hand, as before, which may produce `JOB005` or `PIPE003` warnings. Rounds themselves never change a job's status.

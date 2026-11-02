@@ -1,6 +1,6 @@
 # CareerOS Interview Skill
 
-**Trigger:** "prep for [company] interview" / "interview prep for [job]" / "I have an interview at [company]" / "prepare me for [company]"
+**Trigger:** "prep for [company] interview" / "interview prep for [job]" / "I have an interview at [company]" / "prepare me for [company]" / "debrief my [company] interview" / "what interviews are coming up?"
 
 ---
 
@@ -21,6 +21,8 @@ Re-run the check after every edit. Never skip it and never ignore a failure.
 ---
 
 ## STEP 0 — LOAD CONTEXT
+
+**Shortcuts.** If the user only asks what is coming up, run `careeros interview upcoming`, tell them what it lists, and stop there. If the user only wants to debrief a round, take the round id from `careeros interview round list --job <job-slug> --json` and go straight to STEP 7.
 
 Read:
 1. `profile.md` — full file (you need skills and experience detail for STAR stories)
@@ -193,10 +195,10 @@ Take the round id from `careeros interview round list --job <job-slug> --json`. 
 
    `careeros interview debrief <rnd_id> --rating <strong|mixed|weak> --asked "<a question they were asked>" --improve "<something to do differently>" --next-step "<what happens next>" --next-date <YYYY-MM-DD>`
 
-   Repeat `--asked` and `--improve` once per item, at most 10 of each, and leave out any the user did not give. `--next-step` is required: if the user does not know it, record what they said (for example "waiting to hear back"). Leave out `--next-date` when there is no date. `debrief` is refused unless the round is `held`.
+   Repeat `--asked` and `--improve` once per item, at most 10 of each, and leave out any the user did not give. Each answer is at most 500 characters. If `debrief` is refused `invalid_input` because an answer is too long, ask the user once to shorten it, then run the command again with their shorter words. `--next-step` is required: if the user does not know it, record what they said (for example "waiting to hear back"). Leave out `--next-date` when there is no date. `debrief` is refused unless the round is `held`.
 3. If `careeros interview round show <rnd_id>` or `careeros validate` reports `INT008` or `INT009` (an update that was interrupted), re-run the same `round reschedule` or `debrief` command with the values the user gave; never edit the record by hand to fix it.
 
-A refusal ends that action and is relayed to the user, as in STEP 0.5.
+A refusal ends that action and is relayed to the user, as in STEP 0.5; the only exception is the one re-ask for an answer that is too long.
 
 ---
 

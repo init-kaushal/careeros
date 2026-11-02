@@ -78,6 +78,11 @@ INTERVIEW_PINS = (
     "never edit the record by hand to fix it",
     "`activity.md` is a readable log, not the record of the round",
     "After the interview: run STEP 7 to record what happened and the debrief.",
+    "**Shortcuts.** If the user only asks what is coming up, run `careeros interview upcoming`, tell them what it lists, and stop there.",
+    "If the user only wants to debrief a round, take the round id from `careeros interview round list --job <job-slug> --json` and go straight to STEP 7.",
+    "Each answer is at most 500 characters.",
+    "If `debrief` is refused `invalid_input` because an answer is too long, ask the user once to shorten it, then run the command again with their shorter words.",
+    "the only exception is the one re-ask for an answer that is too long",
 )
 
 FOLLOW_UP_PINS = (
@@ -86,6 +91,7 @@ FOLLOW_UP_PINS = (
     "This step sends nothing and drafts nothing.",
     "use the `interview` skill (STEP 7)",
     "CareerOS records no email events; recorded interview rounds are listed in STEP 1.5.",
+    "A round that `careeros interview needs-debrief` lists (STEP 1.5) is not listed again here: do not show a recorded round twice.",
 )
 
 
@@ -123,6 +129,36 @@ def test_the_debrief_asks_the_rating_and_each_field_on_its_own() -> None:
     assert "ask the user to choose one" in after
 
 
+def test_the_trigger_line_carries_every_claude_md_trigger_and_step_0_has_the_shortcuts() -> None:
+    body = text("interview")
+    trigger = body.splitlines()[2]
+    assert trigger.startswith("**Trigger:**")
+    row = next(line for line in claude().splitlines() if ".claude/skills/interview/SKILL.md" in line)
+    for phrase in re.findall(r'"([^"]+)"', row.split("|")[1]):
+        assert f'"{phrase}"' in trigger, phrase
+    step0 = body[body.index("## STEP 0 \u2014"):body.index("## STEP 0.5")]
+    assert step0.index("**Shortcuts.**") < step0.index("Read:")
+    assert "careeros interview upcoming" in step0 and "STEP 7" in step0
+
+
+RATING_LIST = ("`strong`, `mixed` or `weak`", "<strong|mixed|weak>")
+
+
+def test_no_rating_is_ever_defaulted_or_chosen_for_the_user() -> None:
+    body = text("interview")
+    part = body[body.index("## STEP 0.5"):body.index("## STEP 1 \u2014")] + body[body.index("## STEP 7"):]
+    for sentence in sentences(part):
+        stripped = sentence
+        for allowed in RATING_LIST:
+            stripped = stripped.replace(allowed, "")
+        assert not re.search(r"\b(strong|mixed|weak)\b", stripped), sentence
+        if any(a in sentence for a in RATING_LIST):
+            assert not re.search(r"\b(default|fall ?back|assume|pick|guess)\b", sentence, re.I), sentence
+    for argv in command_lines(body):
+        if "--rating" in argv:
+            assert argv[argv.index("--rating") + 1] == "<strong|mixed|weak>", argv
+
+
 def test_held_and_cancel_only_on_the_users_say_so() -> None:
     for name in SKILL_NAMES:
         for sentence in sentences(text(name)):
@@ -156,6 +192,9 @@ def test_the_follow_up_step_only_lists_and_sends_nothing() -> None:
     for command in re.findall(r"`(careeros [^`]*)`", step):
         assert command.startswith("careeros interview needs-debrief"), command
     assert "CareerOS records no email and no interview events" not in body
+    rest = step.replace("This step sends nothing and drafts nothing.", "")
+    assert not re.search(r"\b(writes?|drafts?|sends?|compose|thank[- ]you|notes?|messages?|emails?|invite)\b", rest, re.I), rest
+    assert not re.search(r"the `(?!interview`)[a-z-]+` skill", rest), rest
 
 
 @pytest.mark.parametrize("name", SKILL_NAMES)
@@ -188,7 +227,7 @@ def test_the_interview_skill_never_runs_approve_resolve_or_transition_for_rounds
 def test_the_skill_numbers_are_the_code_constants() -> None:
     body = text("interview")
     assert {int(n) for n in re.findall(r"(\d+) days", body)} == {rules.UPCOMING_DEFAULT_DAYS}
-    assert {int(n) for n in re.findall(r"at most (\d+)", body)} == {rules.MAX_INTERVIEWERS, rules.MAX_DEBRIEF_ITEMS}
+    assert {int(n) for n in re.findall(r"at most (\d+)", body)} == {rules.MAX_INTERVIEWERS, rules.MAX_DEBRIEF_ITEMS, rules.MAX_TEXT}
     assert not re.findall(r"(\d+) days", text("follow-up")[text("follow-up").index("## STEP 1.5"):text("follow-up").index("## STEP 2")])
 
 
@@ -334,6 +373,12 @@ def test_the_int_table_matches_the_code() -> None:
     assert dict(rows) == expected and len(rows) == len(expected)
 
 
+def test_the_doc_never_says_the_skill_gate_records_the_prep_pass() -> None:
+    for sentence in sentences(doc()):
+        if "evidence gate" in sentence:
+            assert not re.search(r"is what records|records that pass|makes? (it|the round|prep) `checked`", sentence), sentence
+
+
 def test_the_refusal_code_list_matches_the_code() -> None:
     section = doc().split("## Refusal codes", 1)[1].split("\n## ", 1)[0]
     found = re.findall(r"^\| `([a-z_]+)` \|", section, re.M)
@@ -351,6 +396,22 @@ def test_the_doc_names_every_event_value_and_exit_code() -> None:
         assert re.search(rf"`{flag}[`:]", body), flag
     assert "**Exit codes:** 0 ok; 1 refused" in body and "2 usage, or no workspace" in body
     assert "rnd_xxxxxxxxxx" in body and "job_xxxxxxxxxx" in body
+
+
+def cli_default(*path: str, param: str):
+    import typer.main
+    cmd = typer.main.get_command(app)
+    for name in path:
+        cmd = cmd.commands[name]
+    return next(p.default for p in cmd.params if p.name == param)
+
+
+def test_the_documented_source_default_is_the_cli_default() -> None:
+    defaults = re.findall(r"`--source` defaults to `(\w+)`", doc())
+    assert defaults, "the doc states the --source default"
+    for command in ("held", "cancel"):
+        assert set(defaults) == {cli_default("interview", "round", command, param="source")}, defaults
+    assert not re.search(r"default[^.|]*`observed`|`observed`[^.|]*default", doc()), "observed is never the default"
 
 
 DOC_PHRASES = (
@@ -375,6 +436,9 @@ DOC_PHRASES = (
     "`careeros transition` for a job before the interview stages, and `round cancel` or `round held` for a terminal job",
     "Nothing is ever run for you.",
     "`careeros validate` is read-only",
+    "Only a passing check of the saved file itself counts: `careeros check jobs/discovered/<job-slug>/interview-prep.md --against <job> --record`.",
+    "so following the skill alone leaves the round `drafted`",
+    "(a missing required option is a usage error, exit 2)",
 )
 
 LIMIT_PHRASES = (
@@ -395,6 +459,7 @@ LIMIT_PHRASES = (
     "No view or list is truncated",
     "importing existing `interview-prep.md` or `activity.md` history",
     "GPT workspace",
+    "The interview skill's STEP 6 still edits the job file's `Status:` line and the pipeline icon by hand, as before, which may produce `JOB005` or `PIPE003` warnings. Rounds themselves never change a job's status.",
 )
 
 
@@ -424,7 +489,9 @@ def test_no_doc_sentence_claims_a_hard_limit_or_boundary() -> None:
 
 
 ACTIVITY_DRIVES_ROUNDS = (r"(interview )?rounds? (are|is) (tracked|recorded|kept) in `activity\.md`|only record of the round"
-                          r"|drives? (interview|round)|source of truth for (interview|round)|tracks? (interview )?rounds")
+                          r"|drives? (interview|round)|source of truth for (interview|round)|tracks? (interview )?rounds"
+                          r"|activity\.md`?[^.;]*\b(rounds?|interviews?)\b[^.;]*\b(tracked|recorded|kept|logged)\b"
+                          r"|activity\.md`?[^.;]*\bis where\b|logs? (each |every |the )?(interview )?rounds?\b")
 
 
 def test_no_docs_page_says_activity_md_drives_round_tracking() -> None:
