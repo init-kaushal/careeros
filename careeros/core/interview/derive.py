@@ -20,7 +20,10 @@ Output order is a documented total order, so shuffling any input never changes t
 * findings: round id, then code.
 
 Nothing is capped or truncated. A date-only `scheduled_for` is overdue once `now` is at or after the start of the next UTC
-day; a datetime once `now` is after it. `upcoming` keeps a round whose instant is at most `days` days after `now`.
+day; a datetime once `now` is after it. `upcoming` keeps a round whose instant is at most `days` days after `now`, so
+`days=0` keeps a date-only round for today (its instant is today's UTC midnight and it is not yet overdue) but drops a
+datetime later today. A `days` too large to add to `now` (OverflowError) is refused with ValueError, like any other
+unusable `days`.
 """
 
 from __future__ import annotations
@@ -102,7 +105,10 @@ def build_upcoming(rounds: Mapping[str, Round | None], flags: Mapping[str, Round
     if not isinstance(days, int) or isinstance(days, bool) or days < 0:
         raise ValueError(f"days must be a whole number of days, at least 0, not {days!r}")
     current = _now(now)
-    limit = current + timedelta(days=days)
+    try:
+        limit = current + timedelta(days=days)
+    except OverflowError:
+        raise ValueError(f"days {days!r} is too large") from None
     out: list[tuple[tuple, UpcomingItem]] = []
     for rid, fl in flags.items():
         record = rounds.get(rid)
@@ -159,7 +165,7 @@ def status_issues(rounds: Mapping[str, Round | None], flags: Mapping[str, RoundF
         if job is not None and label in (rules.SCHEDULED, rules.HELD) and job.status in rules.PRE_INTERVIEW_STATUSES:
             out.append((rules.INT007, rid,
                         f"round {rid} is {label} but job {job_id} is still {job.status}; if the interview process has "
-                        f"started, you may want `careeros transition {job_id} --to SCREEN` (or the stage it reached)"))
+                        f"started, you may want to move the job through the pipeline with `careeros transition`"))
         elif job is not None and label == rules.SCHEDULED and job.terminal:
             out.append((rules.INT007, rid,
                         f"round {rid} is still scheduled but job {job_id} is {job.status}; you may want "

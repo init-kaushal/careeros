@@ -728,8 +728,18 @@ def test_upcoming_rows_order_labels_prep_and_date_unrecorded():
     assert RND2 not in [i.round_id for i in derive.build_upcoming(rounds, held, [], {}, now, 14)]
 
 
+def test_int007_advice_for_a_pre_interview_job_names_no_target_state():
+    # no single `--to` is legal from every status DISCOVERED..APPLIED (state_machine.is_legal), so none is suggested
+    targets = {s for s in models.State if all(state_machine.is_legal(models.State(p), s) for p in PRE)} - {models.State.WITHDRAWN}
+    assert targets == set()
+    for status in PRE:
+        issues = derive.status_issues({RND: rec(RND, "2026-12-20")}, {RND: fl(when="2026-12-20")}, jobs((JOB, status)),
+                                      "2026-12-01T00:00:00Z")
+        assert len(issues) == 1 and "careeros transition" in issues[0][2] and "--to" not in issues[0][2], status
+
+
 def test_upcoming_refuses_a_bad_days_or_now():
-    for days in (-1, True, 1.5, "3", None):
+    for days in (-1, True, 1.5, "3", None, 3_000_000, 10**9, 10**30):
         with pytest.raises(ValueError):
             derive.build_upcoming({}, {}, [], {}, NOW, days)
     with pytest.raises(ValueError):
@@ -763,13 +773,32 @@ def test_ties_break_by_id_and_nothing_is_truncated():
     rng = random.Random(5)
     alphabet = "0123456789abcdefghjkmnpqrstvwxyz"
     rids = sorted({"rnd_" + "".join(rng.choice(alphabet) for _ in range(10)) for _ in range(500)})
-    rounds = {r: rec(r, "2026-11-05") for r in rids}
-    flags = {r: fl(held=ts(7)) for r in rids}
+    shuffled = list(rids)
+    rng.shuffle(shuffled)                   # insertion order must not survive: a stable sort without the id would keep it
+    assert shuffled != rids
+    rounds = {r: rec(r, "2026-11-05") for r in shuffled}
+    flags = {r: fl(held=ts(7)) for r in shuffled}
     out = derive.build_needs_debrief(rounds, flags, [], now)
     assert [r.round_id for r in out.needs_debrief] == rids
-    up_rounds = {r: rec(r, "2026-12-05") for r in rids}
-    up = derive.build_upcoming(up_rounds, {r: fl(when="2026-12-05") for r in rids}, [], {}, now, 14)
+    late = derive.build_needs_debrief(rounds, {r: fl(when="2026-11-05") for r in shuffled}, [], now)
+    assert [r.round_id for r in late.needs_update] == rids and late.needs_debrief == ()
+    up_rounds = {r: rec(r, "2026-12-05") for r in shuffled}
+    up = derive.build_upcoming(up_rounds, {r: fl(when="2026-12-05") for r in shuffled}, [], {}, now, 14)
     assert [i.round_id for i in up] == rids
+
+
+def test_findings_are_ordered_by_round_id_then_code():
+    now = "2026-12-01T00:00:00Z"
+    d = Debrief("weak", (), (), "wait", None)
+    order = [RND3, RND, RND2]               # deliberately not sorted
+    rounds = {r: rec(r, "2026-11-01", debrief=d) for r in order}
+    flags = {r: fl(when="2026-10-30") for r in order}
+    status = derive.status_issues(rounds, flags, jobs((JOB, "APPLIED")), now)
+    assert [(c, r) for c, r, _ in status] == [("INT007", RND), ("INT100", RND), ("INT007", RND2), ("INT100", RND2),
+                                              ("INT007", RND3), ("INT100", RND3)]
+    found = derive.record_issues(rounds, flags)
+    assert [(c, r) for c, r, _ in found] == [("INT008", RND), ("INT009", RND), ("INT008", RND2), ("INT009", RND2),
+                                             ("INT008", RND3), ("INT009", RND3)]
 
 
 def test_incomplete_rounds_in_the_views():
@@ -827,7 +856,7 @@ def test_int007_messages_name_a_command_and_int100_for_needs_update():
                                   {RND: fl(when="2026-12-20"), RND2: fl(when="2026-11-01", job=JOB2)},
                                   jobs((JOB, "APPLIED"), (JOB2, "WITHDRAWN")), now)
     assert [(c, r) for c, r, _ in issues] == [("INT007", RND), ("INT007", RND2), ("INT100", RND2)]
-    assert "careeros transition" in issues[0][2] and JOB in issues[0][2]
+    assert "careeros transition" in issues[0][2] and JOB in issues[0][2] and "--to" not in issues[0][2]
     assert "WITHDRAWN" in issues[1][2] and "careeros interview round" in issues[1][2]
     assert derive.status_issues({RND: rec(RND, "2026-12-20")}, {RND: fl(when="2026-12-20")}, [], now) == []
 

@@ -72,8 +72,15 @@ def text_value(value: object, name: str, problems: list[str], *, allow_empty: bo
 
 
 def _yaml_scalar(value: object) -> object:
-    """A YAML date as `YYYY-MM-DD`; a YAML datetime as `YYYY-MM-DDTHH:MM:SSZ` only when it is UTC with whole seconds
-    (the strict loader cannot tell `Z` from `+00:00`; both mean the same instant). Anything else is returned as is."""
+    """A YAML date as `YYYY-MM-DD`; a YAML datetime as `YYYY-MM-DDTHH:MM:SSZ` only when its offset is zero and it has no
+    fraction of a second. Anything else is returned as is.
+
+    Documented limit: an UNQUOTED YAML timestamp is already a datetime when it gets here, so its source spelling is lost.
+    Every spelling YAML reads as a zero-offset, whole-second timestamp is therefore accepted and normalised to the one
+    canonical `...Z` string: `Z`, `+00:00`, `-00:00`, a space or lower-case `t` separator, a single-digit month or day
+    (`2026-1-5T15:00:00Z`) and a zero fraction (`.0`). The instant is the same, so INT008 and the views stay consistent.
+    A QUOTED string must be exactly `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SSZ`; naive, non-zero offset and non-zero fraction
+    datetimes are refused either way."""
     if isinstance(value, datetime):
         offset = value.utcoffset()
         if offset is None or offset != timedelta(0) or value.microsecond:
