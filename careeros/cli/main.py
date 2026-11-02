@@ -8,6 +8,7 @@ from careeros.cli.comp import comp_cmd
 from careeros.cli.doctor import doctor_cmd
 from careeros.cli.evaluate import evaluate_cmd
 from careeros.cli.init_cmd import init_cmd
+from careeros.cli.interview import interview_app
 from careeros.cli.ledger import ledger_app
 from careeros.cli.memory import memory_app
 from careeros.cli.migrate import migrate_cmd
@@ -42,6 +43,7 @@ app.add_typer(approval_app, name="approval")
 app.add_typer(ledger_app, name="ledger")
 app.add_typer(memory_app, name="memory")
 app.add_typer(outreach_app, name="outreach")
+app.add_typer(interview_app, name="interview")
 
 if __name__ == "__main__":
     app()
