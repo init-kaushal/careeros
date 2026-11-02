@@ -67,6 +67,7 @@ jobs/
 approvals/              — proposed outward messages and submissions, one file each (see Approvals)
 people/                 — one record per person you may contact (see Outreach and follow-up state)
 targets/                — one record per target company
+rounds/                 — one record per interview round (see Interview rounds and debriefs)
 activity.md             — append-only action log
 career/                 — your career memory: one file per fact, with its source and status
 CLAUDE.md / AGENTS.md   — agent entry point (framework-owned)
@@ -141,6 +142,17 @@ careeros outreach record <per_id> --accepted --source user   # an outcome you to
 ```
 
 The agent records the people it finds and the target companies it proposes as `people/` and `targets/` records, and your outcomes (accepted, replied, closed) and target decisions as `outreach.*` ledger events. Who is due a follow-up (an invite after 7 days, an application after 10), how many invites remain under the weekly cap (15 unless `profile.md` sets `Weekly invite cap: N` under `## Outreach`) and whom to approach next are derived from those events and the approval events, never read from `activity.md`. `careeros approval begin` refuses an invite beyond the cap (`cap_reached`) and any invite or message to a closed person (`person_closed`); an invalid cap setting is refused, not guessed (`cap_config_invalid`). The new `targets` skill builds and ranks companies to approach before they post a role; `outreach`, `follow-up` and `browse` use the records. Email and interview follow-ups stay prose, and history already in `activity.md` is not imported. Run `careeros upgrade` to receive the updated skills. This is not a security boundary. See `docs/outreach.md`.
+
+## Interview rounds and debriefs
+
+```bash
+careeros interview round add --job <job> --stage technical --format video --when 2026-11-12   # the agent, when you name a round
+careeros interview upcoming          # scheduled rounds in the next 14 days, with each job's prep status
+careeros interview needs-debrief     # held rounds still waiting for a debrief, and past rounds that need an update
+careeros interview debrief <rnd_id> --rating mixed --next-step "<what happens next>"   # what you said about a held round
+```
+
+Each interview round is a `rounds/<rnd_id>.md` record (stage, format, date, interviewers and, after it, your debrief), and whether it was held, cancelled, rescheduled or debriefed is an `interview.*` ledger event. The views are derived from those events and the records, never read from `activity.md`; they change nothing and are never truncated. A round's prep status is `checked` only when its job's `interview-prep.md` passed `careeros check` as it is now. The `interview` skill records the round and asks for the debrief one question at a time, writing only what you said; `follow-up` lists the rounds waiting on you. Rounds start empty: existing `interview-prep.md` and `activity.md` history is not imported. Run `careeros upgrade` to receive the updated skills. This is not a security boundary. See `docs/interviews.md`.
 
 ## Requirements
 

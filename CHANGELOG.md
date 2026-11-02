@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0 — Interview rounds and debriefs
+
+### Added
+
+- `careeros interview round` (`add`, `list`, `show`, `held`, `cancel`, `reschedule`) and `careeros interview debrief`: interview round records (`rounds/<rnd_id>.md`, with stage, format, date, interviewers and an optional debrief block) and their outcomes as `interview.*` ledger events (`interview.round_added`, `interview.held`, `interview.cancelled`, `interview.rescheduled`, `interview.debriefed` and the audit-only `interview.rejected`). The type prefix `interview.*` is reserved. Exit 0 ok, 1 refused, 2 usage or no workspace; the refusal codes include `record_unavailable` for a round whose record is missing, invalid or mismatched.
+- `careeros interview upcoming` (look further ahead with `--days N`) and `careeros interview needs-debrief`: read-only views of the scheduled rounds ahead (with each job's prep status: `none`, `drafted` or `checked`) and of the held rounds still waiting for a debrief and the past rounds that need an update. No view is truncated.
+- `careeros validate` reports `INT001`-`INT009` and `INT100`, including an interrupted reschedule (`INT008`) or debrief (`INT009`), which re-running the command completes.
+- `docs/interviews.md`.
+
+### Changed
+
+- The `interview` skill records each round with `careeros interview round add`, reads `careeros interview upcoming`, records held and cancelled rounds only on your say-so, and asks the debrief one question at a time, recording only what you said; the evidence gate and the prep file format are unchanged. The `follow-up` skill lists `careeros interview needs-debrief` and sends nothing.
+- Upgrading: run `careeros upgrade` to receive the updated skills. Rounds start empty: existing `interview-prep.md` and `activity.md` history is not imported. This is not a security boundary; see `docs/interviews.md` for the limits. Design: `docs/superpowers/specs/2026-10-31-interview-rounds-design.md`.
+
 ## 0.8.0 — Outreach and follow-up state
 
 ### Added
