@@ -1,5 +1,5 @@
-"""The interview service: round records, the `interview.*` events and the read-only `round list|show` (spec sections 4, 5,
-6.5, 7 and 7.1).
+"""The interview service: round records, the `interview.*` events, the read-only `round list|show`, the `upcoming` and
+`needs-debrief` views and the `INT` validation section (spec sections 4 to 8).
 
 State-changing operations (`round_add`, `round_held`, `round_cancel`, `round_reschedule`, `debrief`) validate the actor
 before anything else, take the workspace lock, verify the hash chain (`ledger_corrupt`, nothing written), read the clock
@@ -26,6 +26,7 @@ security boundary.
 from __future__ import annotations
 
 import hashlib
+import os
 import stat
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -37,6 +38,7 @@ from careeros.core.approvals import fold as afold
 from careeros.core.interview import _common as c
 from careeros.core.interview import derive
 from careeros.core.interview import fold as ifold
+from careeros.core.interview import prep as iprep
 from careeros.core.interview import round as rround
 from careeros.core.interview import rules
 from careeros.core.interview.model import Debrief, Interviewer, JobRef, Round, RoundFlags
@@ -300,6 +302,99 @@ def round_show(root: Path, rnd_id: str, now: str | None = None) -> RoundView:
     if rnd_id not in loaded.flags:
         raise Refused(rules.NOT_FOUND, f"no round {rnd_id!r} (a round exists once its interview.round_added event is recorded)")
     return _view(loaded, rnd_id)
+
+
+# --- the read-only views (spec 6.4) --------------------------------------------------------------------------------------
+
+def _prep(root: Path, events: list) -> dict[str, str]:
+    """job id -> prep status, for every readable saved job (the first file wins for a duplicated id)."""
+    out: dict[str, str] = {}
+    for path in job_files(root):
+        try:
+            job = read_job(path)
+        except Exception:       # noqa: BLE001 - a broken job file is not a job here
+            continue
+        if job.id not in out:
+            out[job.id] = iprep.prep_status(root, path.parent, job.id, events)
+    return out
+
+
+def upcoming(root: Path, days: int = rules.UPCOMING_DEFAULT_DAYS, now: str | None = None) -> list[derive.UpcomingItem]:
+    """`interview upcoming`: `derive.build_upcoming` over one load at `now`, with the prep status of each job. Refused
+    `invalid_input` for an unusable `days`. Creates no file, event or lock file."""
+    root = Path(root)
+    loaded = load(root, now)
+    try:
+        return derive.build_upcoming(loaded.rounds, loaded.flags, loaded.jobs, _prep(root, loaded.events), loaded.now, days)
+    except ValueError as exc:
+        raise Refused(rules.INVALID_INPUT, str(exc)) from None
+
+
+def needs_debrief(root: Path, now: str | None = None) -> derive.NeedsDebrief:
+    """`interview needs-debrief`: `derive.build_needs_debrief` over one load at `now`. Creates no file, event or lock
+    file."""
+    loaded = load(Path(root), now)
+    return derive.build_needs_debrief(loaded.rounds, loaded.flags, loaded.jobs, loaded.now)
+
+
+# --- validation (spec 8) -------------------------------------------------------------------------------------------------
+
+_LEDGER = "ledger.jsonl"
+_FIX_EVENTS = ("interview events are written only by the `careeros interview` commands; restore ledger.jsonl from "
+               ".careeros/backups or version control")
+_FIXES = {
+    rules.INT007: "nothing is run for you: move the job with `careeros transition`, or record the round's outcome with "
+                  "`careeros interview round held|cancel`, whichever is true",
+    rules.INT008: "re-run `careeros interview round reschedule <id> --when <date>` with the intended date",
+    rules.INT009: "re-run `careeros interview debrief <id>`; it replaces the unrecorded block",
+    rules.INT100: "record what happened with `careeros interview round held`, `round cancel` or `round reschedule`",
+}
+_SEVERITY = {rules.INT007: "warning", rules.INT008: "warning", rules.INT009: "warning", rules.INT100: "info"}
+
+
+def validate_workspace(root: Path, events: list, now: str | None = None) -> list[Issue]:
+    """INT001 to INT009 and INT100 (spec 8). `events` is the lenient ledger read `validate` already holds and `now` its
+    one clock read. Read-only; never raises. A workspace with no `rounds/` and no `interview.*` events gives nothing."""
+    root = Path(root)
+    events = list(events or ())
+    has_events = any(isinstance(e, dict) and isinstance(e.get("type"), str) and e["type"].startswith(rules.EVENT_PREFIX)
+                     for e in events)
+    try:
+        if not has_events and not os.path.lexists(root / ROUNDS_DIR):
+            return []
+        return _validate(root, events, now or models.utc_now())
+    except Exception as exc:    # noqa: BLE001 - validate reports, it never crashes
+        return [Issue("error", rules.INT001, ROUNDS_DIR, f"interview rounds could not be checked: {exc!r}", c.FIX)]
+
+
+def _validate(root: Path, events: list, now: str) -> list[Issue]:
+    loaded = load(root, now, events)
+    issues = loaded.record_issues()                                     # INT001 to INT004 by path
+    # INT004: one round id under two jobs (the fold applies the first round_added and reports the second as INT005)
+    jobs_of: dict[str, list[str]] = {}
+    for event in events:
+        if isinstance(event, dict) and event.get("type") == rules.EV_ROUND_ADDED and ids.is_valid_id("round", event.get("entity")):
+            job, _, problem, _ = ifold._round_added_shape(event)
+            if problem is None and job not in jobs_of.setdefault(event["entity"], []):
+                jobs_of[event["entity"]].append(job)
+    for rid, jobs in sorted(jobs_of.items()):
+        if len(jobs) > 1:
+            issues.append(Issue("error", rules.INT004, _LEDGER,
+                                f"round {rid} has interview.round_added events under {len(jobs)} jobs ({', '.join(jobs)}); "
+                                "only the first one counts", _FIX_EVENTS))
+    for error in loaded.fold.errors:                                    # INT005
+        issues.append(Issue("error", rules.INT005, _LEDGER, f"event {error.seq}: {error.message}", _FIX_EVENTS))
+    saved = {j.id for j in loaded.jobs}
+    for rid, fl in sorted(loaded.flags.items()):                        # INT006
+        if fl.job not in saved:
+            issues.append(Issue("warning", rules.INT006, rel_for(rid), f"round {rid} is for job {fl.job}, which is not saved",
+                                "restore the job's directory from .careeros/backups or version control; a round's job is "
+                                "immutable"))
+    found = [*derive.status_issues(loaded.rounds, loaded.flags, loaded.jobs, loaded.now),     # INT007, INT100
+             *derive.record_issues(loaded.rounds, loaded.flags)]                              # INT008, INT009
+    for code, rid, message in sorted(found, key=lambda t: (t[1], t[0])):
+        issues.append(Issue(_SEVERITY[code], code, rel_for(rid), message, _FIXES[code]))
+    return issues
 
 
 # --- state-changing operations ------------------------------------------------------------------------------------------

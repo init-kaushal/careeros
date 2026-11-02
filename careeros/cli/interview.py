@@ -4,6 +4,7 @@ held, cancelled or debriefed) is derived from the ledger and never stored in a r
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from typing import Optional
 
@@ -16,8 +17,8 @@ from careeros.core.ledger import LedgerError
 from careeros.core.workspace import LockTimeout, WorkspaceError
 
 interview_app = typer.Typer(help="Interview rounds and debriefs: add rounds, record held, cancelled and rescheduled "
-                                 "rounds, write debriefs, list and show rounds. Changes only rounds/ records and "
-                                 "interview.* ledger events.",
+                                 "rounds, write debriefs, list and show rounds, and the upcoming and needs-debrief views. "
+                                 "Changes only rounds/ records and interview.* ledger events.",
                             no_args_is_help=True)
 round_app = typer.Typer(help="Add, list, show, hold, cancel and reschedule interview rounds.", no_args_is_help=True)
 interview_app.add_typer(round_app, name="round")
@@ -211,3 +212,66 @@ def debrief_cmd(
     _changed(_guard(as_json, lambda: service.debrief(
         root, rnd_id, rating=rating, asked=list(asked or ()), improve=list(improve or ()), next_step=next_step,
         next_date=next_date, actor=actor or _util.default_actor(), clock=models.utc_now)), as_json)
+
+
+# --- the read-only views -------------------------------------------------------------------------------------------------
+
+MAX_DAYS = 3650                         # the CLI bound on --days (ten years); not a rule
+
+
+def _now() -> str:
+    return models.utc_now()             # the one clock read of a read-only command
+
+
+def _when_flag(date_unrecorded: bool) -> str:
+    return "  [date not recorded: re-run round reschedule]" if date_unrecorded else ""
+
+
+@interview_app.command("upcoming")
+def upcoming_cmd(
+    days: int = typer.Option(rules.UPCOMING_DEFAULT_DAYS, "--days", help=f"How many days ahead to look (0 to {MAX_DAYS})"),
+    as_json: bool = JsonOption,
+    workspace: Optional[Path] = _util.WorkspaceOption,
+) -> None:
+    """Scheduled rounds in the next N days, soonest first, with the job's prep status. Changes nothing."""
+    root = _util.resolve_root(workspace)
+    if not 0 <= days <= MAX_DAYS:
+        _fail(f"--days must be a whole number from 0 to {MAX_DAYS}, not {days}", _util.EXIT_USAGE, as_json)
+    now = _now()
+    items = _guard(as_json, lambda: service.upcoming(root, days=days, now=now))
+    if as_json:
+        _util.echo_json({"now": now, "days": days, "rounds": [dataclasses.asdict(i) for i in items]})
+        return
+    for i in items:
+        people = ", ".join(f"{p.name} ({p.title})" if p.title else p.name for p in i.interviewers)
+        typer.echo(f"{i.scheduled_for}  {i.round_id}  {i.job_id}  {i.stage} {i.format}  prep: {i.prep}"
+                   + (f"  with {people}" if people else "") + _when_flag(i.date_unrecorded))
+    typer.echo(f"{len(items)} upcoming round(s) in the next {days} day(s)")
+
+
+def _debrief_line(r) -> str:
+    what = "(record unavailable: incomplete round)" if r.incomplete else f"{r.stage} {r.format} {r.scheduled_for}"
+    held = f"  held {r.held_at}" if r.held_at else ""
+    return f"  {r.round_id}  {r.job_id}  {what}{held}{_when_flag(r.date_unrecorded)}"
+
+
+@interview_app.command("needs-debrief")
+def needs_debrief_cmd(
+    as_json: bool = JsonOption,
+    workspace: Optional[Path] = _util.WorkspaceOption,
+) -> None:
+    """Held rounds that still need a debrief (oldest first) and overdue scheduled rounds that need an update. Changes
+    nothing."""
+    root = _util.resolve_root(workspace)
+    now = _now()
+    got = _guard(as_json, lambda: service.needs_debrief(root, now=now))
+    if as_json:
+        _util.echo_json({"now": now, "needs_debrief": [dataclasses.asdict(r) for r in got.needs_debrief],
+                         "needs_update": [dataclasses.asdict(r) for r in got.needs_update]})
+        return
+    typer.echo(f"Needs debrief ({len(got.needs_debrief)}), oldest held first:")
+    for r in got.needs_debrief:
+        typer.echo(_debrief_line(r))
+    typer.echo(f"Needs update ({len(got.needs_update)}), oldest date first: record held, cancel or reschedule")
+    for r in got.needs_update:
+        typer.echo(_debrief_line(r))
