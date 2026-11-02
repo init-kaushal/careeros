@@ -343,13 +343,20 @@ _LEDGER = "ledger.jsonl"
 _FIX_EVENTS = ("interview events are written only by the `careeros interview` commands; restore ledger.jsonl from "
                ".careeros/backups or version control")
 _FIXES = {
-    rules.INT007: "nothing is run for you: move the job with `careeros transition`, or record the round's outcome with "
-                  "`careeros interview round held|cancel`, whichever is true",
     rules.INT008: "re-run `careeros interview round reschedule <id> --when <date>` with the intended date",
     rules.INT009: "re-run `careeros interview debrief <id>`; it replaces the unrecorded block",
     rules.INT100: "record what happened with `careeros interview round held`, `round cancel` or `round reschedule`",
 }
 _SEVERITY = {rules.INT007: "warning", rules.INT008: "warning", rules.INT009: "warning", rules.INT100: "info"}
+
+
+def _int007_fix(rid: str, job: JobRef) -> str:
+    """Case-specific: `careeros transition` refuses a job in a terminal status, so that case names the round commands."""
+    if job.terminal:
+        return (f"nothing is run for you: job {job.id} is {job.status}, which is terminal, so record the round's outcome "
+                f"with `careeros interview round cancel {rid} --reason ...` or `round held {rid}`")
+    return (f"nothing is run for you: if the interview process has started, move the job with "
+            f"`careeros transition {job.id} --to <STATE>`")
 
 
 def validate_workspace(root: Path, events: list, now: str | None = None) -> list[Issue]:
@@ -374,7 +381,7 @@ def _validate(root: Path, events: list, now: str) -> list[Issue]:
     jobs_of: dict[str, list[str]] = {}
     for event in events:
         if isinstance(event, dict) and event.get("type") == rules.EV_ROUND_ADDED and ids.is_valid_id("round", event.get("entity")):
-            job, _, problem, _ = ifold._round_added_shape(event)
+            job, _, problem, _ = ifold.round_added_shape(event)
             if problem is None and job not in jobs_of.setdefault(event["entity"], []):
                 jobs_of[event["entity"]].append(job)
     for rid, jobs in sorted(jobs_of.items()):
@@ -392,8 +399,10 @@ def _validate(root: Path, events: list, now: str) -> list[Issue]:
                                 "immutable"))
     found = [*derive.status_issues(loaded.rounds, loaded.flags, loaded.jobs, loaded.now),     # INT007, INT100
              *derive.record_issues(loaded.rounds, loaded.flags)]                              # INT008, INT009
+    jobs = {j.id: j for j in loaded.jobs}
     for code, rid, message in sorted(found, key=lambda t: (t[1], t[0])):
-        issues.append(Issue(_SEVERITY[code], code, rel_for(rid), message, _FIXES[code]))
+        fix = _FIXES[code] if code != rules.INT007 else _int007_fix(rid, jobs[loaded.flags[rid].job])
+        issues.append(Issue(_SEVERITY[code], code, rel_for(rid), message, fix))
     return issues
 
 

@@ -533,9 +533,27 @@ def test_int007_status_consistency_and_int100(w: W, status: State, act: str, lat
     assert [c for c, _, _ in got] == want
     severity = {"INT007": "warning", "INT100": "info"}
     assert got == [(c, severity[c], rel_of(rid)) for c in want]
-    if status.value in rules.PRE_INTERVIEW_STATUSES and want:
-        (msg,) = int_messages(w, "INT007")
-        assert "careeros transition" in msg
+    if "INT007" in want:
+        (issue,) = [i for i in validation.validate_workspace(w.root, w.now) if i.code == "INT007"]
+        if status.value in rules.PRE_INTERVIEW_STATUSES:
+            assert "careeros transition" in issue.message
+            assert issue.fix == ("nothing is run for you: if the interview process has started, move the job with "
+                                 f"`careeros transition {job} --to <STATE>`")
+        else:                                   # `careeros transition` refuses a terminal job, so it is never advised
+            assert "careeros transition" not in issue.message + issue.fix
+            assert issue.fix == (f"nothing is run for you: job {job} is {status.value}, which is terminal, so record the "
+                                 f"round's outcome with `careeros interview round cancel {rid} --reason ...` or "
+                                 f"`round held {rid}`")
+
+
+def test_interview_events_without_a_rounds_directory_are_still_validated(w: W) -> None:
+    job = w.job()
+    rid = w.add(job)["id"]
+    w.held(rid)
+    shutil.rmtree(w.root / "rounds")
+    assert int_issues(w) == [("INT003", "warning", rel_of(rid))]
+    (row,) = needs(w)["needs_debrief"]
+    assert row["round_id"] == rid and row["incomplete"] is True
 
 
 def test_int008_hand_edit_and_interrupted_reschedule_warn_the_same(w: W, tmp_path: Path) -> None:

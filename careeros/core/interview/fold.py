@@ -123,8 +123,9 @@ def _when_element(value: object) -> str | None:
     return None
 
 
-def _round_added_shape(event: dict) -> tuple[str | None, str | None, str | None, str | None]:
-    """(job, when, malformed problem, reported-only problem)."""
+def round_added_shape(event: dict) -> tuple[str | None, str | None, str | None, str | None]:
+    """(job, when, malformed problem, reported-only problem) of an `interview.round_added` event: `job` and `when` are
+    None when `malformed problem` is set. Public: the validation section (INT004, one id under two jobs) uses it."""
     arts = event.get("artifacts")
     if not isinstance(arts, list) or len(arts) != 4:
         return None, None, "artifacts must be [rel, sha256:<hex>, job:<job id>, when:<scheduled_for>]", None
@@ -188,7 +189,7 @@ def fold_rounds(events: Iterable[object], now: str) -> RoundsFold:
             report("has an unreadable ts")
             continue
         if etype == rules.EV_ROUND_ADDED:
-            job, when, problem, audit = _round_added_shape(event)
+            job, when, problem, audit = round_added_shape(event)
             if problem is not None:
                 report(problem)
             elif entity in flags:
