@@ -180,18 +180,21 @@ def status_issues(rounds: Mapping[str, Round | None], flags: Mapping[str, RoundF
 
 def record_issues(rounds: Mapping[str, Round | None], flags: Mapping[str, RoundFlags]) -> list[tuple[str, str, str]]:
     """`(code, round_id, message)` for `INT008` (the record's date differs from the date the ledger last recorded) and
-    `INT009` (a debrief block without a `debriefed` event), for complete rounds only (spec 7.1)."""
+    `INT009` (a debrief block without a `debriefed` event), for complete rounds only (spec 7.1), and only where the
+    remedy works: `INT008` for a `scheduled` round (`round reschedule` is legal only then) and `INT009` for a `held` round
+    (`debrief` is legal only then). On any other label the difference is history or a hand edit and is not warned; the
+    raw facts (`date_unrecorded`, `debrief_recorded`) still show in the views and `round show`."""
     out: list[tuple[str, str, str]] = []
     for rid, fl in flags.items():
         record = rounds.get(rid)
         if record is None:
             continue
-        if record.scheduled_for != fl.recorded_when:
+        if fl.label == rules.SCHEDULED and record.scheduled_for != fl.recorded_when:
             out.append((rules.INT008, rid,
                         f"round {rid}'s record says scheduled_for {record.scheduled_for} but the ledger last recorded "
                         f"{fl.recorded_when} (an interrupted reschedule or a hand edit); views use the record's date. "
                         f"Re-run `careeros interview round reschedule {rid} --when <date>` with the intended date"))
-        if record.debrief is not None and fl.debriefed_at is None:
+        if fl.label == rules.HELD and record.debrief is not None:
             out.append((rules.INT009, rid,
                         f"round {rid}'s record has a debrief block but the round has no debriefed event (an interrupted "
                         f"debrief or a hand edit); it is not counted as a debrief. Re-run `careeros interview debrief {rid}`"))

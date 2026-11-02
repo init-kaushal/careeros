@@ -858,13 +858,16 @@ def test_the_clock_floor_refuses_a_clock_behind_the_latest_event_of_any_type(w: 
     w.append({"type": "note.added", "actor": "user", "action": "a later unrelated note"})
     behind = shift(T0, seconds=-1)
     before = full_state(w.root)
+    unknown = ids.new_id("round")                                   # well-formed, but no such round
     for op in (lambda: service.round_held(w.root, rid, source="user", actor="user", clock=lambda: behind),
+               lambda: service.round_held(w.root, unknown, source="user", actor="user", clock=lambda: behind),
                lambda: service.round_add(w.root, job=job, stage="final", format="video", when="2026-10-23",
                                          interviewers=(), actor="user", clock=lambda: behind)):
         with pytest.raises(service.Refused) as exc:
             op()
         assert exc.value.code == "clock_skew"
-    assert [e["entity"] for e in w.rejected()] == [rid]           # the known round gets the audit; a new add names none
+    assert [e["entity"] for e in w.rejected()] == [rid]           # the known round gets the audit; an unknown id and a
+                                                                    # new add name none
     w.now = T0
     assert {k: v for k, v in full_state(w.root).items() if k != "ledger.jsonl"} == {
         k: v for k, v in before.items() if k != "ledger.jsonl"}

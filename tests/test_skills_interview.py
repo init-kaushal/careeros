@@ -76,6 +76,9 @@ INTERVIEW_PINS = (
     "Record only what the user said, in their words",
     "`debrief` is refused unless the round is `held`.",
     "never edit the record by hand to fix it",
+    "3. If `careeros validate` reports `INT008` or `INT009` (an update that was interrupted)",
+    "`careeros interview round show <rnd_id>` does not print these codes: it shows the same facts as `date_unrecorded` (\"date not recorded\") and `unrecorded_debrief`.",
+    "`INT008` is reported only for a scheduled round and `INT009` only for a held round",
     "`activity.md` is a readable log, not the record of the round",
     "After the interview: run STEP 7 to record what happened and the debrief.",
     "**Shortcuts.** If the user only asks what is coming up, run `careeros interview upcoming`, tell them what it lists, and stop there.",
@@ -98,6 +101,12 @@ FOLLOW_UP_PINS = (
 @pytest.mark.parametrize("phrase", INTERVIEW_PINS)
 def test_interview_pins(phrase: str) -> None:
     assert phrase in text("interview")
+
+
+def test_the_skill_never_says_round_show_reports_the_int_codes() -> None:
+    body = text("interview")
+    assert not re.search(r"round show[^.\n]*reports? `INT00[89]`", body)
+    assert "round show <rnd_id>` or `careeros validate` reports" not in body
 
 
 @pytest.mark.parametrize("phrase", FOLLOW_UP_PINS)

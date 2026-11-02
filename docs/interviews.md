@@ -91,7 +91,7 @@ A hand edit of a record can change what the views display. It never changes a ro
 
 **`careeros interview needs-debrief`** has two groups. `needs_debrief` holds the held rounds, oldest `held_at` first. `needs_update` holds the overdue scheduled rounds, oldest `scheduled_for` first; rounds on a job in a terminal status (`ACCEPTED`, `REJECTED`, `WITHDRAWN`) are left out of this group, since they are stale by definition. A held round on a terminal job still appears in `needs_debrief`: the lessons are still worth capturing.
 
-Orderings are total and do not depend on the order of the input. No output is capped or truncated: `upcoming`, `needs-debrief` and `round list` return every matching round, however many, so an old held interview never drops out of the debrief queue; the only window is the `--days` value you choose. Rows carry `incomplete` and `date_unrecorded` where they apply. `upcoming` and `needs-debrief` only read. They create no file, event or lock file.
+Orderings are total and do not depend on the order of the input. No output is capped or truncated: `upcoming`, `needs-debrief` and `round list` return every matching round, however many, so an old held interview never drops out of the debrief queue; the only window is the `--days` value you choose. Rows carry `incomplete` and `date_unrecorded` where they apply. `round add`, `round list` and `round show` name a round `id` and its job `job`; the rows of `upcoming` and `needs-debrief` name them `round_id` and `job_id`. `upcoming` and `needs-debrief` only read. They create no file, event or lock file.
 
 ## Incomplete rounds
 
@@ -155,8 +155,8 @@ A versioned rules module holds the numbers. Changing any of them is a rules vers
 
 Rollback covers an operation that raises; it does not cover a process that is killed. The file is replaced atomically and the event is appended atomically, and the file is written first, so a death between them leaves the new file and no event.
 
-- **`round reschedule`:** the record holds the new date and the ledger last recorded the old one. The views use the record's date, `INT008` reports the difference, and `round show` and view rows carry `date_unrecorded: true`. To finish it, re-run `careeros interview round reschedule <rnd_id> --when <date>` with the intended date: it is allowed even though the record already holds that date, rewrites identical bytes and appends the event. A hand edit of `scheduled_for` looks the same and has the same warning and remedy.
-- **`debrief`:** the record holds a debrief block but there is no `debriefed` event. The round stays `held`, so it stays in `needs-debrief`. No view and no `round show` treats the unrecorded block as a debrief (`debrief_recorded: false`), and `INT009` reports it. To finish it, re-run `careeros interview debrief <rnd_id>` with the same answers; it replaces the unrecorded block.
+- **`round reschedule`:** the record holds the new date and the ledger last recorded the old one. The views use the record's date, `INT008` reports the difference, and `round show` and view rows carry `date_unrecorded: true`. To finish it, re-run `careeros interview round reschedule <rnd_id> --when <date>` with the intended date: it is allowed even though the record already holds that date, rewrites identical bytes and appends the event. A hand edit of `scheduled_for` looks the same and has the same warning and remedy. `INT008` is reported only while the round is `scheduled`, the only label where `round reschedule` is legal. Once the round is held, debriefed or cancelled, a date that differs from the ledger is kept as history: `date_unrecorded` still shows it, and nothing warns.
+- **`debrief`:** the record holds a debrief block but there is no `debriefed` event. The round stays `held`, so it stays in `needs-debrief`. No view and no `round show` treats the unrecorded block as a debrief (`debrief_recorded: false`), and `INT009` reports it. To finish it, re-run `careeros interview debrief <rnd_id>` with the same answers; it replaces the unrecorded block. `INT009` is reported only while the round is `held`, the only label where `debrief` is legal. A block on a scheduled or cancelled round (a hand edit) is kept as data: `round show` still shows it as `unrecorded_debrief`, and nothing warns.
 - **`round add`:** an orphan record (`INT002`), which feeds nothing; a retry creates a new round.
 - **`round held`, `round cancel`:** one event and no file; nothing to interrupt.
 
@@ -175,11 +175,11 @@ The workspace lock is released when its process dies, so the next command does n
 | `INT005` | error | an illegal sequence (a second `held`, `held` after `cancelled`, `debriefed` before `held`), an unknown `interview.*` type, or a malformed event (reported, never applied) |
 | `INT006` | warning | the round's `job` names no saved job |
 | `INT007` | warning | status consistency: a round is `held` or `scheduled` while its job is still before the interview stages (`DISCOVERED` through `APPLIED`, including `APPROVAL_REQUIRED`), or a round is still `scheduled` or `needs_update` after its job reached a terminal status |
-| `INT008` | warning | a complete round's record `scheduled_for` differs from the date its latest `round_added` or `rescheduled` event recorded (an interrupted reschedule or a hand edit); re-run `round reschedule` with the intended date |
-| `INT009` | warning | a complete round's record has a `debrief` block but the round has no `debriefed` event (an interrupted debrief or a hand edit); re-run `debrief` |
+| `INT008` | warning | a complete `scheduled` round's record `scheduled_for` differs from the date its latest `round_added` or `rescheduled` event recorded (an interrupted reschedule or a hand edit); re-run `round reschedule` with the intended date |
+| `INT009` | warning | a complete `held` round's record has a `debrief` block but the round has no `debriefed` event (an interrupted debrief or a hand edit); re-run `debrief` |
 | `INT100` | info | a round is `needs_update` |
 
-`INT007` names the command you may want: `careeros transition` for a job before the interview stages, and `round cancel` or `round held` for a terminal job (`careeros transition` refuses a terminal job). Nothing is ever run for you. The stage is deliberately not compared with the job's exact status: interviews do not always follow the pipeline's order.
+`INT007` names the command you may want: `careeros transition` for a job before the interview stages, and `round cancel` or `round held` for a terminal job (`careeros transition` refuses a terminal job). Nothing is ever run for you. `INT008` and `INT009` are limited to `scheduled` and `held` rounds because those are the only labels where their remedy (`round reschedule`, `debrief`) is legal; a warning the commands could not clear would never go away. The stage is deliberately not compared with the job's exact status: interviews do not always follow the pipeline's order.
 
 ## Limits
 

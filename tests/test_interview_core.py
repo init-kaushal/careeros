@@ -796,9 +796,11 @@ def test_findings_are_ordered_by_round_id_then_code():
     status = derive.status_issues(rounds, flags, jobs((JOB, "APPLIED")), now)
     assert [(c, r) for c, r, _ in status] == [("INT007", RND), ("INT100", RND), ("INT007", RND2), ("INT100", RND2),
                                               ("INT007", RND3), ("INT100", RND3)]
-    found = derive.record_issues(rounds, flags)
-    assert [(c, r) for c, r, _ in found] == [("INT008", RND), ("INT009", RND), ("INT008", RND2), ("INT009", RND2),
-                                             ("INT008", RND3), ("INT009", RND3)]
+    found = derive.record_issues(rounds, flags)                     # scheduled: INT008 only (INT009 needs held)
+    assert [(c, r) for c, r, _ in found] == [("INT008", RND), ("INT008", RND2), ("INT008", RND3)]
+    held = {r: fl(when="2026-10-30", held=ts(2)) for r in order}    # held: INT009 only (INT008 needs scheduled)
+    assert [(c, r) for c, r, _ in derive.record_issues(rounds, held)] == [("INT009", RND), ("INT009", RND2),
+                                                                         ("INT009", RND3)]
 
 
 def test_incomplete_rounds_in_the_views():
@@ -874,9 +876,14 @@ def test_record_issues_int008_and_int009():
     assert [(c, r) for c, r, _ in derive.record_issues(rounds, flags)] == [("INT009", RND2), ("INT008", RND3)]
     flags[RND2] = fl(when="2026-11-05", held=ts(2), debriefed=ts(3))
     assert [(c, r) for c, r, _ in derive.record_issues(rounds, flags)] == [("INT008", RND3)]
-    msgs = derive.record_issues({RND: rec(RND, "2026-11-09", debrief=d)}, {RND: fl(when="2026-11-05", held=ts(2))})
-    assert [c for c, _, _ in msgs] == ["INT008", "INT009"]
-    assert "round reschedule" in msgs[0][2] and "debrief" in msgs[1][2]
+    both = {RND: rec(RND, "2026-11-09", debrief=d)}
+    (int008,) = derive.record_issues(both, {RND: fl(when="2026-11-05")})
+    (int009,) = derive.record_issues(both, {RND: fl(when="2026-11-05", held=ts(2))})
+    assert int008[0] == "INT008" and "round reschedule" in int008[2]
+    assert int009[0] == "INT009" and "debrief" in int009[2]
+    # past the label where the remedy is legal, a differing date or an unrecorded block is not warned
+    for past in (fl(when="2026-11-05", held=ts(2), debriefed=ts(3)), fl(when="2026-11-05", cancelled=ts(2))):
+        assert derive.record_issues(both, {RND: past}) == []
     assert derive.record_issues({RND: None}, {RND: fl(when="2026-11-09")}) == []        # incomplete
     assert derive.record_issues({}, {RND: fl(when="2026-11-09")}) == []
     assert derive.record_issues({RND: rec(RND, "2026-11-09", debrief=d)}, {}) == []     # orphan

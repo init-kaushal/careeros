@@ -608,15 +608,84 @@ def test_int009_hand_edit_and_interrupted_debrief_warn_the_same(w: W, tmp_path: 
 def test_int008_and_int009_say_nothing_for_incomplete_or_orphan_rounds(w: W) -> None:
     job = w.job()
     rid = w.add(job, when="2026-10-08")["id"]
+    hand_edit(w.root, rid, scheduled_for="2026-10-10")
+    assert [c for c, _, _ in int_issues(w)] == ["INT008"]
     w.held(rid)
-    hand_edit(w.root, rid, scheduled_for="2026-10-10", debrief=Debrief("weak", (), (), "wait", None))
-    assert [c for c, _, _ in int_issues(w)] == ["INT008", "INT009"]
+    hand_edit(w.root, rid, debrief=Debrief("weak", (), (), "wait", None))
+    assert [c for c, _, _ in int_issues(w)] == ["INT009"]
     hand_edit(w.root, rid, job=w.job("beta-sre"))                   # mismatched: incomplete
     assert int_issues(w) == [("INT004", "error", rel_of(rid))]
     orphan = ids.new_id("round")
     (w.root / rel_of(orphan)).write_bytes(rround.to_bytes(
         Round(orphan, job, "final", "video", "2026-10-08", debrief=Debrief("weak", (), (), "wait", None))))
     assert int_issues(w) == sorted([("INT004", "error", rel_of(rid)), ("INT002", "warning", rel_of(orphan))])
+
+
+@pytest.mark.parametrize("label", ["scheduled", "held", "debriefed", "cancelled"])
+def test_int008_and_int009_only_where_their_remedy_is_legal(w: W, label: str) -> None:
+    """INT008 only for a scheduled round (reschedule is legal only then), INT009 only for a held one (debrief is legal
+    only then); the raw facts still show in `round show` for every label."""
+    job = w.job()
+    rid = w.add(job, when="2026-10-20")["id"]
+    if label in ("held", "debriefed"):
+        w.held(rid)
+    if label == "debriefed":
+        w.debrief(rid)
+    if label == "cancelled":
+        w.cancel(rid)
+    hand_edit(w.root, rid, scheduled_for="2026-10-22")
+    assert int_issues(w) == ([("INT008", "warning", rel_of(rid))] if label == "scheduled" else [])
+    assert w.show(rid)["date_unrecorded"] is True
+    hand_edit(w.root, rid, scheduled_for="2026-10-20")
+    if label != "debriefed":                                        # a debriefed round's block is recorded
+        hand_edit(w.root, rid, debrief=Debrief("weak", ("q",), (), "wait", None))
+        assert int_issues(w) == ([("INT009", "warning", rel_of(rid))] if label == "held" else [])
+        show = w.show(rid)
+        assert show["debrief_recorded"] is False and show["unrecorded_debrief"]["rating"] == "weak"
+
+
+def test_a_killed_reschedule_then_held_gives_no_int008(w: W, tmp_path: Path) -> None:
+    job = w.job()
+    rid = w.add(job, when="2026-10-20")["id"]
+    w.now = shift(T0, minutes=1)
+    argv = ("interview", "round", "reschedule", rid, "--when", "2026-10-22")
+    assert run_crashing(tmp_path, w.root, "before", w.now, *argv) == 137
+    assert int_issues(w) == [("INT008", "warning", rel_of(rid))]
+    w.held(rid)                                                     # reschedule is no longer legal, so no warning
+    assert int_issues(w) == []
+    show = w.show(rid)
+    assert show["date_unrecorded"] is True and show["scheduled_for"] == "2026-10-22" and show["recorded_when"] == "2026-10-20"
+
+
+def test_a_hand_added_debrief_block_on_a_cancelled_round_gives_no_int009(w: W) -> None:
+    job = w.job()
+    rid = w.add(job)["id"]
+    w.cancel(rid)
+    hand_edit(w.root, rid, debrief=Debrief("mixed", (), ("ask earlier",), "none", None))
+    assert int_issues(w) == []
+    assert w.show(rid)["debrief_recorded"] is False and w.show(rid)["unrecorded_debrief"]["rating"] == "mixed"
+
+
+def test_round_rows_and_view_rows_use_different_key_names(w: W) -> None:
+    """Documented in docs/interviews.md: `round list|show` use `id`/`job`; `upcoming`/`needs-debrief` rows use
+    `round_id`/`job_id`."""
+    job = w.job()
+    a = w.add(job, when="2026-10-08")["id"]
+    b = w.add(job, stage="final", when="2026-10-02")["id"]
+    w.held(b)
+    (row,) = [r for r in w.rows() if r["id"] == a]
+    assert row["job"] == job and "round_id" not in row and "job_id" not in row
+    show = w.show(a)
+    assert (show["id"], show["job"]) == (a, job) and "round_id" not in show
+    for view_row in (upcoming(w)[0], needs(w)["needs_debrief"][0]):
+        assert view_row["job_id"] == job and "id" not in view_row and "job" not in view_row
+    assert upcoming(w)[0]["round_id"] == a and needs(w)["needs_debrief"][0]["round_id"] == b
+    doc = (Path(__file__).resolve().parent.parent / "docs" / "interviews.md").read_text(encoding="utf-8")
+    assert ROW_KEYS_DOC in doc
+
+
+ROW_KEYS_DOC = ("`round add`, `round list` and `round show` name a round `id` and its job `job`; the rows of `upcoming` "
+                "and `needs-debrief` name them `round_id` and `job_id`.")
 
 
 def test_orphan_and_mismatched_records_feed_no_view_but_are_reported(w: W) -> None:
