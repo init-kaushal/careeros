@@ -197,4 +197,3 @@ The workspace lock is released when its process dies, so the next command does n
 - An interviewer name cannot contain a colon: `--interviewer "Name:Title"` splits at the first colon.
 - A malformed `interview.*` event is reported (`INT005`) and not applied, so the views may show a round as if that event had never been written.
 - No view or list is truncated, so a workspace with many rounds prints them all.
-- The interview skill's STEP 6 still edits the job file's `Status:` line and the pipeline icon by hand, as before, which may produce `JOB005` or `PIPE003` warnings. Rounds themselves never change a job's status.

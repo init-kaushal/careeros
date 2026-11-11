@@ -127,6 +127,21 @@ def test_the_interview_steps_are_ordered() -> None:
     assert after.index("**Debrief, one question at a time.**") < after.index("careeros interview debrief")
 
 
+def test_step_6_moves_the_job_only_through_transition() -> None:
+    body = text("interview")
+    log = body[body.index("## STEP 6"):body.index("## STEP 7")]
+    assert "careeros transition <job-slug> --to <STATE>" in log
+    assert "Only if the user says yes" in log
+    assert "refuses" in log and "stop" in log and "do not use `--force`" in log
+    # no instruction to edit the job file's Status line or the pipeline by hand
+    assert "Status: applied" not in log and "Status: interview" not in log
+    assert "`[~]`" not in log and "`[?]`" not in log
+    assert "never edit the job file's Status line or `jobs/pipeline.md` by hand" in log
+    assert log.count("careeros transition") == 1
+    for state in ("RECRUITER_REPLIED", "SCREEN", "TECHNICAL", "HM", "FINAL"):
+        assert state in log
+
+
 def test_the_debrief_asks_the_rating_and_each_field_on_its_own() -> None:
     body = text("interview")
     after = body[body.index("**Debrief, one question at a time.**"):body.index("## NOTES")]
@@ -468,7 +483,6 @@ LIMIT_PHRASES = (
     "No view or list is truncated",
     "importing existing `interview-prep.md` or `activity.md` history",
     "GPT workspace",
-    "The interview skill's STEP 6 still edits the job file's `Status:` line and the pipeline icon by hand, as before, which may produce `JOB005` or `PIPE003` warnings. Rounds themselves never change a job's status.",
 )
 
 

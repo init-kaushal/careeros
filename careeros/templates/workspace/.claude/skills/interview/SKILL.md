@@ -174,9 +174,7 @@ The round itself is recorded with `careeros interview` (STEP 0.5 and STEP 7); `a
 [date] interview prep [Company — Title] · stage: [type] · interviewers: [names if known]
 ```
 
-Update the job file status to `interview` if not already:
-- Change `Status: applied` → `Status: interview` in the job file
-- Update `jobs/pipeline.md`: `[~]` → `[?]`
+The job's status changes only through the transition command; never edit the job file's Status line or `jobs/pipeline.md` by hand. Find the job's current state with `careeros status`. If it is `APPLIED`, or an interview state earlier than the round the user described, ask the user whether to move it, naming the state (`RECRUITER_REPLIED`, `SCREEN`, `TECHNICAL`, `HM` or `FINAL`) that matches the round. Only if the user says yes, run `careeros transition <job-slug> --to <STATE>` (states only move forward). If the job is already at or past that state, do nothing. If the transition refuses, tell the user the code and what it said and stop; do not use `--force` and do not edit the job file or the pipeline instead.
 
 ---
 
