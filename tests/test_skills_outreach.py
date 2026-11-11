@@ -526,11 +526,11 @@ def test_approvals_doc_lists_the_new_codes_and_the_cap_rules() -> None:
 
 def test_version_changelog_readme_and_nav() -> None:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert pyproject["project"]["version"] == "0.8.0"
-    assert careeros.__version__ == "0.8.0"
+    assert pyproject["project"]["version"] == "0.9.0"
+    assert careeros.__version__ == "0.9.0"
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    head = changelog.split("\n## ", 2)[1]
-    assert head.startswith("0.8.0")
+    head = changelog[changelog.index("## 0.8.0"):changelog.index("## 0.7.0")]       # the 0.8.0 entry stays; the release moved on
+    assert head.startswith("## 0.8.0")
     for phrase in ("run `careeros upgrade` to receive the updated skills",
                    "follow-up queue and the weekly invite cap now come from recorded events",
                    "logged only in `activity.md` are not imported", "`targets` skill", "OUT001", "OUT007", "OUT100",

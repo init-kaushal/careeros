@@ -311,7 +311,7 @@ def test_nav_readme_changelog_and_version() -> None:
     head = changelog[changelog.index("## 0.6.0"):changelog.index("## 0.5.0")]
     for phrase in ("careeros upgrade", "read as stale once", "explicit re-evaluation", "version 2"):
         assert phrase in head, phrase
-    assert tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"] == "0.8.0"  # the 0.6.0 entry stays; the release moved on
+    assert tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"] == "0.9.0"  # the 0.6.0 entry stays; the release moved on
 
 
 def test_every_window_number_in_the_doc_is_a_code_constant() -> None:

@@ -1,6 +1,6 @@
 # CareerOS Interview Skill
 
-**Trigger:** "prep for [company] interview" / "interview prep for [job]" / "I have an interview at [company]" / "prepare me for [company]"
+**Trigger:** "prep for [company] interview" / "interview prep for [job]" / "I have an interview at [company]" / "prepare me for [company]" / "debrief my [company] interview" / "what interviews are coming up?"
 
 ---
 
@@ -22,6 +22,8 @@ Re-run the check after every edit. Never skip it and never ignore a failure.
 
 ## STEP 0 — LOAD CONTEXT
 
+**Shortcuts.** If the user only asks what is coming up, run `careeros interview upcoming`, tell them what it lists, and stop there. If the user only wants to debrief a round, take the round id from `careeros interview round list --job <job-slug> --json` and go straight to STEP 7.
+
 Read:
 1. `profile.md` — full file (you need skills and experience detail for STAR stories)
 2. Job file from `jobs/discovered/`
@@ -31,6 +33,24 @@ Read:
 
 Ask the user:
 > "What stage is this interview? (e.g. recruiter screen, hiring manager, technical, system design, final loop, panel) — and do you know who you're interviewing with?"
+
+---
+
+## STEP 0.5 — RECORD THE ROUND
+
+Rounds are recorded with `careeros interview`, not in `activity.md`. Do this as soon as the user has told you the stage and the date.
+
+1. Run `careeros interview round list --job <job-slug> --json`. If a listed round has the same stage and date as the one the user describes, it is already recorded: do not add it. If the user says the round is already recorded, do not add it again: use that round's id. Never add a round twice for the same job, stage and date.
+2. Otherwise record it with the stage and interviewers exactly as the user gave them. For example:
+
+```bash
+careeros interview round add --job example-corp-platform --stage hiring_manager --format video --when 2026-11-12 --interviewer "Sam Example:Engineering Manager"
+```
+
+   `--stage` is one of `recruiter_screen`, `hiring_manager`, `technical`, `system_design`, `panel`, `final` or `other`; `--format` is `phone`, `video`, `onsite`, `take_home` or `other`; `--when` is the date (`YYYY-MM-DD`) or a UTC time (`YYYY-MM-DDTHH:MM:SSZ`). If the stage the user gave does not clearly match one of them, ask which it is. Add one `--interviewer "Name:Title"` for each person the user named, at most 10; a name cannot contain a colon, and the title may be left empty when it is not known. If the date is not known yet, ask for it; never guess one.
+3. Run `careeros interview upcoming` and tell the user what is due in the next 14 days, with each round's prep status (`none`, `drafted` or `checked`).
+
+A refusal ends that action and is relayed to the user: if a `careeros interview` command refuses (exit 1), for example `duplicate`, `wrong_state`, `not_found`, `invalid_input` or `record_unavailable`, stop that action, tell the user the code and what it said, and do not retry it or work around it.
 
 ---
 
@@ -149,14 +169,34 @@ Write `jobs/discovered/[job-slug]/interview-prep.md`:
 
 ## STEP 6 — LOG
 
-Append to `activity.md`:
+The round itself is recorded with `careeros interview` (STEP 0.5 and STEP 7); `activity.md` is a readable log, not the record of the round. Append to `activity.md`:
 ```
 [date] interview prep [Company — Title] · stage: [type] · interviewers: [names if known]
 ```
 
-Update the job file status to `interview` if not already:
-- Change `Status: applied` → `Status: interview` in the job file
-- Update `jobs/pipeline.md`: `[~]` → `[?]`
+The job's status changes only through the transition command; never edit the job file's Status line or `jobs/pipeline.md` by hand. Find the job's current state with `careeros status`. If it is `APPLIED`, or an interview state earlier than the round the user described, ask the user whether to move it, naming the state (`RECRUITER_REPLIED`, `SCREEN`, `TECHNICAL`, `HM` or `FINAL`) that matches the round. Only if the user says yes, run `careeros transition <job-slug> --to <STATE>` (states only move forward). If the job is already at or past that state, do nothing. If the transition refuses, tell the user the code and what it said and stop; do not use `--force` and do not edit the job file or the pipeline instead.
+
+---
+
+## STEP 7 — AFTER THE ROUND
+
+Take the round id from `careeros interview round list --job <job-slug> --json`. `careeros interview needs-debrief` lists the held rounds still waiting for a debrief and the scheduled rounds whose date has passed.
+
+1. **Held, cancelled or moved, on the user's say-so only.** Ask whether the round took place. Only if the user says it took place, run `careeros interview round held <rnd_id> --source user`. Only if the user says it was cancelled, run `careeros interview round cancel <rnd_id> --reason "<the user's reason>" --source user`. If the user says it moved, run `careeros interview round reschedule <rnd_id> --when <new date>` with the date they give. Never record any of these from a guess, a calendar or the date alone.
+2. **Debrief, one question at a time.** For a held round, ask each of these on its own and wait for the answer before the next:
+   - "How did it go, in your own words?"
+   - "What questions were you asked?"
+   - "What would you do differently next time?"
+   - "What is the next step, and is there a date for it?"
+
+   Map the first answer to `strong`, `mixed` or `weak` only when the user's words clearly say which; otherwise ask the user to choose one. Never write a rating the user did not give. Record only what the user said, in their words:
+
+   `careeros interview debrief <rnd_id> --rating <strong|mixed|weak> --asked "<a question they were asked>" --improve "<something to do differently>" --next-step "<what happens next>" --next-date <YYYY-MM-DD>`
+
+   Repeat `--asked` and `--improve` once per item, at most 10 of each, and leave out any the user did not give. Each answer is at most 500 characters. If `debrief` is refused `invalid_input` because an answer is too long, ask the user once to shorten it, then run the command again with their shorter words. `--next-step` is required: if the user does not know it, record what they said (for example "waiting to hear back"). Leave out `--next-date` when there is no date. `debrief` is refused unless the round is `held`.
+3. If `careeros validate` reports `INT008` or `INT009` (an update that was interrupted), re-run the same `round reschedule` or `debrief` command with the values the user gave; never edit the record by hand to fix it. `careeros interview round show <rnd_id>` does not print these codes: it shows the same facts as `date_unrecorded` ("date not recorded") and `unrecorded_debrief`. `INT008` is reported only for a scheduled round and `INT009` only for a held round, the only labels where the command can be re-run; on any other round the difference is kept as history and needs nothing.
+
+A refusal ends that action and is relayed to the user, as in STEP 0.5; the only exception is the one re-ask for an answer that is too long.
 
 ---
 
@@ -165,4 +205,4 @@ Update the job file status to `interview` if not already:
 - STAR stories must use real experience from profile.md — never invent.
 - "Why [company]?" requires specific research — don't answer it generically.
 - If the user has already done prep, ask what stage they're at and skip to the relevant section.
-- After the interview: ask for a brief debrief ("How did it go?") and log it to activity.md.
+- After the interview: run STEP 7 to record what happened and the debrief.

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import sys
 from pathlib import Path
 from typing import Optional
@@ -10,7 +9,7 @@ from typing import Optional
 import typer
 
 from careeros.cli import _util
-from careeros.core import ledger
+from careeros.core import draft_check, ledger
 from careeros.core.memory import check as core_check
 from careeros.core.memory import store
 from careeros.core.workspace import WorkspaceError, ensure_writable, resolve_job
@@ -93,11 +92,11 @@ def check_cmd(
         try:
             ensure_writable(root)
             ledger.append_event(
-                root, type="draft.checked", actor=actor or _util.default_actor(),
+                root, type=draft_check.EVENT_TYPE, actor=actor or _util.default_actor(),
                 entity=job.id if against else None, source="cli",
-                action=(f"checked draft: {'passed' if result.ok else 'failed'} ({len(result.supported)} supported, "
+                action=(f"{draft_check.PASSED if result.ok else draft_check.FAILED} ({len(result.supported)} supported, "
                         f"{len(result.review_required)} need review, {len(result.not_evaluated)} not evaluated)"),
-                artifacts=[f"sha256:{hashlib.sha256(text.encode('utf-8')).hexdigest()}"],
+                artifacts=[f"sha256:{draft_check.draft_sha256(text)}"],
             )
         except WorkspaceError as exc:
             _util.fail(f"the check ran but could not be recorded: {exc}")

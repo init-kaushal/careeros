@@ -51,7 +51,7 @@ Every text you write for the user (resume, cover letter, outreach note, follow-u
 ### Interview & Offer
 | Trigger | Skill |
 |---------|-------|
-| "prep for [company] interview" / "I have an interview at [company]" | `.claude/skills/interview/SKILL.md` |
+| "prep for [company] interview" / "I have an interview at [company]" / "debrief my [company] interview" / "what interviews are coming up?" | `.claude/skills/interview/SKILL.md` |
 | "I got an offer from [company]" / "evaluate offer" / "help me negotiate" | `.claude/skills/offer/SKILL.md` |
 
 ## Workspace layout
@@ -79,6 +79,7 @@ jobs/
 approvals/              — proposed outward messages and submissions, one file each (decided by the user with `careeros approve`)
 people/                 — one record per person you may contact, written by `careeros outreach person add`; what happened with them is derived from the ledger
 targets/                — one record per target company, written by `careeros outreach target add` (see the targets skill)
+rounds/                 — one record per interview round, written by `careeros interview round add`; whether it was held, cancelled or debriefed is derived from the ledger
 activity.md             — append-only readable log; nothing parses it for state (the follow-up queue and the weekly invite cap come from recorded events)
 career/                 — your career memory: one file per fact, each with its source and status (claimed, confirmed, verified)
 ```

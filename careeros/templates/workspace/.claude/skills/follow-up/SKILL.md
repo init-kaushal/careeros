@@ -69,14 +69,22 @@ Warm contacts come from `careeros outreach warm`. They are people who accepted o
 
 ### Email and interview follow-ups (prose only)
 
-Email and interview follow-ups are not covered by `careeros outreach queue`; they stay prose and come from `activity.md`. CareerOS records no email and no interview events. Scan `activity.md` for these two rows and compute the days since each (today's date is available via the environment):
+Email and interview follow-ups are not covered by `careeros outreach queue`; they stay prose and come from `activity.md`. CareerOS records no email events; recorded interview rounds are listed in STEP 1.5. Scan `activity.md` for these two rows and compute the days since each (today's date is available via the environment):
 
 | Event | Follow-up due after |
 |-------|---------------------|
 | `sent email outreach → [Name]` (no reply logged) | 5 days |
 | Interview scheduled / completed (no offer / rejection logged) | 3 days after interview date |
 
+A round that `careeros interview needs-debrief` lists (STEP 1.5) is not listed again here: do not show a recorded round twice.
+
 Skip items where a follow-up was already sent within the cooldown window and items marked closed, rejected or offer-accepted in `activity.md` or `pipeline.md`.
+
+---
+
+## STEP 1.5 — INTERVIEW ROUNDS WAITING ON YOU
+
+Run `careeros interview needs-debrief` (add `--json` to read it) and list its rounds under "Interview rounds waiting on you": held rounds that still need a debrief, oldest first, and scheduled rounds whose date has passed and need an update. This step sends nothing and drafts nothing. To record a debrief, or whether a round was held, cancelled or moved, use the `interview` skill (STEP 7). If the command is missing or refuses, tell the user what it said and go on with the queue.
 
 ---
 
