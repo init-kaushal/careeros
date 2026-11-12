@@ -263,7 +263,18 @@ class _Parser:
 
 
 def parse_resume(text: str, lexicon: Lexicon) -> ParseResult:
-    """Turn resume.md into candidate facts. Anything the grammar cannot place is an error or is reported."""
+    """Turn resume.md into candidate facts. Anything the grammar cannot place is an error or is reported.
+
+    Two passes: the technologies the resume itself names (its Skills section and `Tech:` lines) become known on the
+    second, so a bullet that mentions one of them records it, as `careeros check` will later read it from memory."""
+    first = _parse_resume(text, lexicon)
+    names = [str(c.fields.get("name") or "") for c in first.candidates if c.kind == "skill"]
+    names += [t for c in first.candidates for t in (c.fields.get("technologies") or ()) if isinstance(t, str)]
+    wider = lexicon.with_extra_techs(names)
+    return first if wider is lexicon else _parse_resume(text, wider)
+
+
+def _parse_resume(text: str, lexicon: Lexicon) -> ParseResult:
     text = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"), text, flags=re.S)
     parser = _Parser(lexicon)
     section: str | None = None

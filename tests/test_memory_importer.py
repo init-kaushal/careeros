@@ -393,3 +393,36 @@ def test_an_invalid_month_in_an_education_date_is_the_needs_a_date_error(tail: s
 def test_valid_education_dates_still_normalise(tail: str, expected: str) -> None:
     edu = next(c for c in parse(f"## Education\n\n**Some School** - {tail}\nB.Sc.\n").candidates if c.kind == "education")
     assert edu.fields["end"] == expected
+
+
+# --- a bullet that names a technology only the resume's own lists name -------------------------------------------
+
+INVENTED = """# Pat Sample
+
+## Experience
+### Initech | Platform Engineer
+Remote - January 2021 - Present
+- Cut queue costs by 30% by replacing Quasarmq with Kafka.
+- Built dashboards in Zenboard, reducing alert noise by 25%.
+- Tech: Go, Zenboard
+
+## Skills
+**Messaging:** Kafka, Quasarmq
+"""
+
+
+def test_a_bullet_records_a_technology_that_only_the_resumes_own_lists_name() -> None:
+    result = parse(INVENTED)
+    techs = {c.fields["text"][:12]: c.fields.get("technologies") for c in result.candidates if c.kind == "achievement"}
+    assert "Quasarmq" in techs["Cut queue co"] and "Kafka" in techs["Cut queue co"]
+    assert "Zenboard" in techs["Built dashbo"]
+
+
+def test_a_resume_bullet_passes_the_check_verbatim_after_import(tmp_path: Path, clock) -> None:
+    root = make_workspace(tmp_path / "ws")
+    (root / "resume.md").write_text(INVENTED, encoding="utf-8")
+    importer.apply_import(root)
+    for bullet in ("Cut queue costs by 30% by replacing Quasarmq with Kafka.",
+                   "Built dashboards in Zenboard, reducing alert noise by 25%."):
+        result = check.run_check(root, bullet)
+        assert result.ok and result.supported, (bullet, result)

@@ -9,6 +9,8 @@
 - The workspace `CLAUDE.md` states the state rules (status only through `careeros transition`, stop when `careeros` is missing or refuses, only the user runs `approve` and `memory confirm`) and lists `job.md` in the layout instead of a file name the tools never wrote.
 - `docs/cowork/claude-code.md` describes the current workflow: evaluation, the commands only you run, workspace health and recovery, and `careeros upgrade`. `docs/cowork/index.md` has the current layout, and `docs/IMPLEMENTATION_AUDIT.md` is marked as the v0.2.0 baseline.
 
+- `careeros memory import` now knows the technologies a resume names in its own Skills section and `Tech:` lines when it reads the bullets. Before, a bullet that mentioned one of them did not record it, so `careeros check` could flag a faithful restatement of that bullet (`CHK010`). A first import is unchanged otherwise; facts already imported are not rewritten.
+
 Run `careeros upgrade` to receive the updated skills and entry file.
 
 ## 0.9.0 — Interview rounds and debriefs
