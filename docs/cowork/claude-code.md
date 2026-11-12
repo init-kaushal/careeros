@@ -6,7 +6,7 @@ Step-by-step guide for setting up and using CareerOS Cowork with Claude Code.
 
 ## Prerequisites
 
-- CareerOS installed (`pip install -e .` from the repo)
+- CareerOS installed in a virtual environment (`pip install -e .` from the repo). Claude Code must be able to run `careeros` in that workspace, so start it from a shell where `careeros doctor` runs
 - Claude Code CLI or Claude.ai with Projects
 - Chrome with the **Claude-in-Chrome** extension
 
@@ -23,18 +23,7 @@ Step-by-step guide for setting up and using CareerOS Cowork with Claude Code.
 careeros init ~/my-job-search
 ```
 
-Creates:
-
-```
-~/my-job-search/
-├── CLAUDE.md
-└── .claude/skills/
-    ├── onboard/   browse/   track/
-    ├── research/  prep/     apply/
-    ├── market/
-    ├── outreach/  follow-up/
-    ├── interview/ offer/
-```
+Creates `CLAUDE.md`, the skills under `.claude/skills/` (onboard, browse, track, research, market, evaluate, prep, apply, outreach, follow-up, interview, offer, memory, humanize, targets), `ledger.jsonl` and `.careeros/`. Until onboarding writes `profile.md`, `careeros doctor` and `careeros validate` report the missing `profile.md`, `jobs/`, `activity.md` and `jobs/pipeline.md`; that is expected on a new workspace.
 
 ---
 
@@ -56,10 +45,17 @@ Claude detects that `profile.md` is missing and runs the onboarding interview au
 - `boards.md` — boards with search URLs
 - `jobs/pipeline.md` — empty pipeline
 - `activity.md` — initial log entry
+- `career/` — if you give it your resume, it runs `careeros memory import` so that every draft can be checked against facts you confirmed
 
 ---
 
 ## Step 4 — Full workflow
+
+### Evaluate
+```
+"evaluate Stripe"
+```
+Scores a saved job against your career memory (`careeros evaluate`) and shows the fit, the gaps and the pay cap. See [Job evaluation](../evaluation.md).
 
 ### Find jobs
 ```
@@ -108,7 +104,7 @@ LinkedIn invites (7 days) and applications (10 days) come from recorded events v
 "I have an interview at Stripe on Friday"
 "prep for my Stripe hiring manager round"
 ```
-Looks up interviewers on LinkedIn, generates a question bank for the stage, drafts STAR stories from your profile, and writes `interview-prep.md`. After the interview, log how it went and Claude updates the pipeline.
+Records the round (`careeros interview round add`), looks up interviewers, generates a question bank for the stage, drafts STAR stories from your profile, and writes `interview-prep.md`. After the round, tell Claude whether it took place and how it went; it records `held`, `cancelled` or a new date, and your debrief, only from what you say. `careeros interview upcoming` and `careeros interview needs-debrief` list what is due. See [Interview rounds](../interviews.md).
 
 ### Offer evaluation and negotiation
 ```
@@ -134,13 +130,43 @@ Records the full offer (base, equity, bonus, benefits), calculates Year 1 and st
 
 ---
 
+## Commands only you run
+
+Some commands record your own decision, so they need an interactive terminal and the agent cannot run them. In Claude Code, type them after `! `:
+
+| Command | When |
+|---|---|
+| `careeros approve <job>` or `<apr_id>` | before an application is submitted or an outward message is sent |
+| `careeros memory confirm <id>` / `verify` | to affirm a fact in your career memory |
+| `careeros approval resolve <item>` | to settle a submission that was interrupted |
+
+The agent moves jobs between states only with `careeros transition`, and asks you before each move.
+
+## Keeping the workspace healthy
+
+```bash
+careeros status      # versions, jobs by state, recent events
+careeros validate    # problems in the workspace, with a fix for each
+careeros doctor      # environment and workspace checks
+careeros ledger verify
+```
+
+Every change is recorded in `ledger.jsonl`, a hash chain. `careeros validate` reports problems; the usual fixes:
+
+- **A new job has no id (`JOB001`):** run `careeros migrate`. The `browse` skill does this after saving.
+- **A command was interrupted:** run the same command again; `validate` names the record that needs it.
+- **`ledger verify` fails:** restore `ledger.jsonl` from `.careeros/backups/` or version control, then run `careeros validate`. Do not edit the ledger.
+- **Something was changed by hand:** `validate` reports it; do not repair files by hand, ask the agent to re-run the step, or restore from a backup.
+
+Backups are made before `migrate`, `upgrade` and `memory import --apply`. Keeping the workspace in git as well is a good idea.
+
 ## Keeping skills up to date
 
 ```bash
-careeros init ~/my-job-search --refresh
+careeros upgrade
 ```
 
-Updates all `.claude/skills/` files. Your profile, boards, jobs, and activity log are never touched.
+Shows what changes, backs up the changed files first, and asks before applying. Your profile, boards, jobs, memory and ledger are never touched. (`careeros init ~/my-job-search --refresh` refreshes the same files without showing a plan.)
 
 ---
 

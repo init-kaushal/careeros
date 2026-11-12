@@ -1,5 +1,7 @@
 # Implementation audit
 
+> **Historical.** This is the baseline taken at v0.2.0, before the architecture work. It does not describe the current release; see [Workspace health and audit](foundation.md) and the changelog.
+
 **Date:** 2026-10-05
 **Repository state:** `main` at `8712758` (v0.2.0)
 **Purpose:** a factual baseline before the architecture work described in the Career OS brief. Everything below was counted or grepped from the repository and from the one real workspace (`~/Projects/job-search`) that exists; where something is inferred, it says so.
