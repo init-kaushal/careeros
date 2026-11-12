@@ -75,6 +75,16 @@ BROWSE_ANCHORS = {
 COMP_STEP_ANCHOR = ("Never send a message or submit an application without the user's go-ahead.\n", "\n---\n\n## NOTES")
 
 
+# the register-the-job paragraph of the hardening release: between step C and the outreach paragraphs
+REGISTER_BROWSE_ADDITION = (
+    "\n**C2. Register the saved jobs.** A job file without an id cannot be moved through the pipeline, evaluated or "
+    "linked to a person or a round. After A to C, run `careeros migrate --dry-run`. If the plan lists only the job files you just "
+    "saved, run `careeros migrate --yes`. If it lists other files too, show the plan to the user and run `careeros migrate --yes` "
+    "only if they say yes. If it names a missing or malformed `URL`, `Discovered` (it must start with YYYY-MM-DD) or `Status` line in a "
+    "file you just saved, correct that line and run it again once. If `careeros` is not found or the command still refuses, tell the "
+    "user what it said and stop; do not add frontmatter or ids by hand.\n")
+
+
 def strip_anchored(text: str, addition: str, prev: str, nxt: str) -> str:
     assert text.count(prev + addition + nxt) == 1, addition[:40]
     return text.replace(prev + addition + nxt, prev + nxt)
@@ -82,6 +92,7 @@ def strip_anchored(text: str, addition: str, prev: str, nxt: str) -> str:
 
 def strip_browse_additions(text: str) -> str:
     """Remove the 0.8.0 outreach paragraphs, then the 0.6.0 comp step and hint, each only at its original position."""
+    text = strip_anchored(text, REGISTER_BROWSE_ADDITION, "[Company1 \u2014 Title1], ...\n```\n", "\n**D0.")
     for key, (prev, nxt) in BROWSE_ANCHORS.items():
         text = strip_anchored(text, OUTREACH_BROWSE_ADDITIONS[key], prev, nxt)
     text = strip_anchored(text, COMP_BROWSE_ADDITIONS["step"], *COMP_STEP_ANCHOR)

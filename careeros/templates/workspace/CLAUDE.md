@@ -65,8 +65,8 @@ markets/
 jobs/
   pipeline.md           — active pipeline (fold file)
   discovered/
-    YYYY-MM-DD-co-title.md     — job listing (one file per job)
     [job-slug]/
+      job.md            — the job record (frontmatter id and status are written by `careeros migrate` and `careeros transition`)
       company.md        — company info + comp research
       people.md         — hiring manager, recruiter, peers, interviewers
       jd.md             — the posting, saved verbatim (from evaluate or browse)
@@ -93,3 +93,10 @@ career/                 — your career memory: one file per fact, each with its
 | `[?]` | Interview |
 | `[✓]` | Offer / Accepted |
 | `[x]` | Closed / Declined |
+
+## State rules
+
+- A job's status changes only through `careeros transition`, which updates the job file, `jobs/pipeline.md` and the ledger together. Never edit a job's `Status:` line, the pipeline icons, `ledger.jsonl` or the `.careeros/` folder by hand.
+- A new job file needs an id before it can move: the `browse` skill runs `careeros migrate` after saving.
+- If `careeros` is not found, or a command refuses, tell the user what it said and stop. Do not work around it by editing files. `careeros doctor` shows what is wrong; `careeros validate` lists problems in the workspace.
+- Only the user runs `careeros approve` and `careeros memory confirm`; ask them to type it after `! `.

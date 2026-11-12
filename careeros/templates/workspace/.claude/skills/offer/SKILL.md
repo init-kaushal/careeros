@@ -164,7 +164,7 @@ Write `jobs/discovered/[job-slug]/offer.md`:
 [any important terms, conditions, or flags]
 ```
 
-Update pipeline.md: `[?]` → `[✓]` (offer received)
+Ask the user whether to record the offer in the pipeline. Only if the user says yes, run `careeros transition <job-slug> --to OFFER` (never edit `jobs/pipeline.md` or the job file's Status line by hand). If it refuses, tell the user the code and what it said and stop; do not use `--force`.
 
 Append to `activity.md`:
 ```
@@ -176,7 +176,7 @@ When the user makes a decision, log:
 [date] offer [accepted / declined] [Company — Title]
 ```
 
-And update the pipeline status to `[✓]` (accepted) or `[x]` (declined).
+Ask the user to confirm the decision. Only if the user says yes, run `careeros transition <job-slug> --to ACCEPTED` for an accepted offer or `careeros transition <job-slug> --to WITHDRAWN` for a declined one. If it refuses, tell the user the code and what it said and stop; do not use `--force` and do not edit the pipeline instead.
 
 ---
 

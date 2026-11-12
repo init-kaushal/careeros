@@ -58,13 +58,16 @@ boards.md               — board URLs and search queries
 jobs/
   pipeline.md           — active pipeline
   discovered/
-    YYYY-MM-DD-co-title.md    — job listing
     [job-slug]/
+      job.md            — the job record
+      evaluation.md     — fit evaluation against your career memory
+      compensation.md   — pay observations
       company.md        — company info + comp research
       people.md         — hiring manager, recruiter, peers, interviewers
       prep.md           — tailoring brief: keywords, bullets to emphasise
       interview-prep.md — question bank, STAR stories, company refresher
       offer.md          — offer details + negotiation notes
+approvals/  people/  targets/  rounds/  career/  ledger.jsonl   — records written by the `careeros` commands
 activity.md             — append-only readable log (the follow-up queue and weekly invite cap come from recorded events)
 ```
 

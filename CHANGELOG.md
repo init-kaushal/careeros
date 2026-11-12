@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — Hardening for daily use
+
+### Changed
+
+- The `browse` skill registers the jobs it saves (`careeros migrate`), so a new job has an id and can be moved, evaluated and linked. Before this, every new job needed a manual `careeros migrate`.
+- The `track` and `offer` skills change a job's status only with `careeros transition` (asking first, never `--force`), instead of editing the job file's `Status:` line and `jobs/pipeline.md` by hand. The `interview` skill did the same in the previous release.
+- The workspace `CLAUDE.md` states the state rules (status only through `careeros transition`, stop when `careeros` is missing or refuses, only the user runs `approve` and `memory confirm`) and lists `job.md` in the layout instead of a file name the tools never wrote.
+- `docs/cowork/claude-code.md` describes the current workflow: evaluation, the commands only you run, workspace health and recovery, and `careeros upgrade`. `docs/cowork/index.md` has the current layout, and `docs/IMPLEMENTATION_AUDIT.md` is marked as the v0.2.0 baseline.
+
+Run `careeros upgrade` to receive the updated skills and entry file.
+
 ## 0.9.0 — Interview rounds and debriefs
 
 ### Added

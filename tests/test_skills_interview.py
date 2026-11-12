@@ -548,7 +548,7 @@ def test_version_changelog_readme_and_nav() -> None:
     assert pyproject["project"]["version"] == "0.9.0"
     assert careeros.__version__ == "0.9.0"
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert changelog.split("\n## ", 2)[1].startswith("0.9.0")
+    assert changelog.split("\n## ", 3)[2].startswith("0.9.0")
     head = changelog_head()
     for phrase in ("run `careeros upgrade` to receive the updated skills", "Rounds start empty",
                    "existing `interview-prep.md` and `activity.md` history is not imported", "INT001", "INT009", "INT100",
